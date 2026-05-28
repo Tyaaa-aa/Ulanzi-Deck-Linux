@@ -109,3 +109,38 @@ buttons:
 
   # Button 12 - Empty button (null)
   - null
+
+# Dial/Rotary Encoder definitions (Ulanzi D200X only, indexed 17-19)
+dials:
+  # Dial 17 (Leftmost dial) - Click toggles mute, turn changes volume
+  17:
+    click:
+      action: command
+      params:
+        cmd: "amixer set Master toggle"
+    left:
+      action: command
+      params:
+        cmd: "amixer set Master 5%-"
+    right:
+      action: command
+      params:
+        cmd: "amixer set Master 5%+"
+
+  # Dial 18 (Middle dial) - Turn changes screen brightness
+  18:
+    left:
+      action: command
+      params:
+        cmd: "brightnessctl set 10%-"
+    right:
+      action: command
+      params:
+        cmd: "brightnessctl set +10%"
+
+  # Dial 19 (Rightmost dial) - Click launches browser, turn zooms (dummy command)
+  19:
+    click:
+      action: app
+      params:
+        name: firefox

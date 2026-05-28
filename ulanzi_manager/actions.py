@@ -188,6 +188,138 @@ class OBSAction(ActionHandler):
             logger.error(f"Failed to toggle streaming: {e}")
 
 
+class VolumeAction(ActionHandler):
+    """Control audio volume, devices, and applications on Linux"""
+
+    def execute(self, params: Dict[str, Any]):
+        target = params.get('target', 'default') # 'default', 'device', 'app'
+        name = params.get('name', '') # device name or app name
+        op = params.get('operation', 'up') # 'up', 'down', 'mute'
+        step = params.get('step', 5)
+        limit_100 = params.get('limit_100', True)
+
+        import subprocess
+        import re
+
+        try:
+            if target == 'default':
+                if op == 'up':
+                    if limit_100:
+                        curr_vol = 0.0
+                        res = subprocess.run(['wpctl', 'get-volume', '@DEFAULT_AUDIO_SINK@'], capture_output=True, text=True)
+                        if res.returncode == 0:
+                            match = re.search(r'Volume:\s*([0-9.]+)', res.stdout)
+                            if match:
+                                curr_vol = float(match.group(1))
+                        if curr_vol >= 1.0:
+                            return
+                    subprocess.run(['wpctl', 'set-volume', '@DEFAULT_AUDIO_SINK@', f'{step}%+'])
+                elif op == 'down':
+                    subprocess.run(['wpctl', 'set-volume', '@DEFAULT_AUDIO_SINK@', f'{step}%-'])
+                elif op == 'mute':
+                    subprocess.run(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle'])
+                    
+            elif target == 'device':
+                if not name:
+                    logger.error("Device volume action requires 'name' parameter")
+                    return
+                if op == 'up':
+                    if limit_100:
+                        curr_vol = 0.0
+                        res = subprocess.run(['wpctl', 'get-volume', name], capture_output=True, text=True)
+                        if res.returncode == 0:
+                            match = re.search(r'Volume:\s*([0-9.]+)', res.stdout)
+                            if match:
+                                curr_vol = float(match.group(1))
+                        if curr_vol >= 1.0:
+                            return
+                    subprocess.run(['wpctl', 'set-volume', name, f'{step}%+'])
+                elif op == 'down':
+                    subprocess.run(['wpctl', 'set-volume', name, f'{step}%-'])
+                elif op == 'mute':
+                    subprocess.run(['wpctl', 'set-mute', name, 'toggle'])
+                    
+            elif target == 'app':
+                if not name:
+                    logger.error("App volume action requires 'name' parameter")
+                    return
+                # Get sink inputs from pactl
+                res = subprocess.run(['pactl', 'list', 'sink-inputs'], capture_output=True, text=True)
+                output = res.stdout
+                
+                inputs = re.split(r'Sink Input #', output)
+                found = False
+                for block in inputs[1:]:
+                    lines = block.split('\n')
+                    input_id = lines[0].strip()
+                    if any(name.lower() in line.lower() for line in lines if 'application.name' in line or 'media.name' in line or 'process.binary' in line):
+                        found = True
+                        if op == 'up':
+                            if limit_100:
+                                curr_vol = 0
+                                for line in lines:
+                                    if 'Volume:' in line:
+                                        match = re.search(r'(\d+)%', line)
+                                        if match:
+                                            curr_vol = int(match.group(1))
+                                            break
+                                if curr_vol >= 100:
+                                    continue
+                            subprocess.run(['pactl', 'set-sink-input-volume', input_id, f'+{step}%'])
+                        elif op == 'down':
+                            subprocess.run(['pactl', 'set-sink-input-volume', input_id, f'-{step}%'])
+                        elif op == 'mute':
+                            subprocess.run(['pactl', 'set-sink-input-mute', input_id, 'toggle'])
+                if not found:
+                    logger.warning(f"No running audio stream found for app: {name}")
+        except Exception as e:
+            logger.error(f"Failed to execute volume action: {e}")
+
+
+class MediaAction(ActionHandler):
+    """Control media playback (play/pause, next, prev, stop)"""
+
+    def execute(self, params: Dict[str, Any]):
+        cmd = params.get('control', 'play_pause')
+        
+        playerctl_map = {
+            'play_pause': 'play-pause',
+            'next': 'next',
+            'previous': 'previous',
+            'stop': 'stop'
+        }
+        
+        xdotool_map = {
+            'play_pause': 'XF86AudioPlay',
+            'next': 'XF86AudioNext',
+            'previous': 'XF86AudioPrev',
+            'stop': 'XF86AudioStop'
+        }
+        
+        # Try playerctl first
+        try:
+            player = params.get('player', '')
+            cmd_args = ['playerctl']
+            if player:
+                cmd_args.extend(['--player', player])
+            cmd_args.append(playerctl_map.get(cmd, 'play-pause'))
+            
+            res = subprocess.run(cmd_args, capture_output=True)
+            if res.returncode == 0:
+                logger.info(f"Executed media control via playerctl: {cmd}")
+                return
+        except FileNotFoundError:
+            pass
+            
+        # Fallback to xdotool simulating media keys
+        try:
+            key = xdotool_map.get(cmd, 'XF86AudioPlay')
+            subprocess.run(['xdotool', 'key', key], check=True, capture_output=True)
+            logger.info(f"Simulated media key fallback: {key}")
+        except Exception as e:
+            logger.error(f"Failed to execute media control fallback: {e}")
+
+
 class ActionExecutor:
     """Execute button actions"""
 
@@ -198,6 +330,8 @@ class ActionExecutor:
             'app': AppAction(),
             'key': KeyAction(),
             'obs': OBSAction(obs_client),
+            'volume': VolumeAction(),
+            'media': MediaAction(),
         }
 
     def execute(self, action_type: str, params: Dict[str, Any]):

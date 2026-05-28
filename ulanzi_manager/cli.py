@@ -249,8 +249,41 @@ buttons:
   - null
   - null
   - null
+
+# Dial/Rotary Encoder definitions (Ulanzi D200X only, indexed 17-19)
+# dials:
+#   17:
+#     click:
+#       action: command
+#       params:
+#         cmd: "amixer set Master toggle"
+#     left:
+#       action: command
+#       params:
+#         cmd: "amixer set Master 5%-"
+#     right:
+#       action: command
+#       params:
+#         cmd: "amixer set Master 5%+"
+#
+#   18:
+#     left:
+#       action: command
+#       params:
+#         cmd: "brightnessctl set 10%-"
+#     right:
+#       action: command
+#       params:
+#         cmd: "brightnessctl set +10%"
+#
+#   19:
+#     click:
+#       action: app
+#       params:
+#         name: firefox
 """
         output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(example_config)
         logger.info(f"Example configuration written to {output_path}")
 
@@ -284,7 +317,7 @@ Examples:
 
     # Configure command
     configure_parser = subparsers.add_parser('configure', help='Configure device from file')
-    configure_parser.add_argument('config', help='Path to configuration file')
+    configure_parser.add_argument('config', nargs='?', default=str(Path.home() / '.config' / 'ulanzi' / 'config.yaml'), help='Path to configuration file')
 
     # Test image command
     test_parser = subparsers.add_parser('test-image', help='Test image on button')
@@ -294,7 +327,7 @@ Examples:
 
     # Validate command
     validate_parser = subparsers.add_parser('validate', help='Validate configuration')
-    validate_parser.add_argument('config', help='Path to configuration file')
+    validate_parser.add_argument('config', nargs='?', default=str(Path.home() / '.config' / 'ulanzi' / 'config.yaml'), help='Path to configuration file')
 
     # Generate config command
     generate_parser = subparsers.add_parser('generate-config', help='Generate example configuration')
@@ -302,7 +335,7 @@ Examples:
 
     # Daemon command
     daemon_parser = subparsers.add_parser('daemon', help='Start background daemon')
-    daemon_parser.add_argument('config', help='Path to configuration file')
+    daemon_parser.add_argument('config', nargs='?', default=str(Path.home() / '.config' / 'ulanzi' / 'config.yaml'), help='Path to configuration file')
 
     # Debug command
     debug_parser = subparsers.add_parser('debug', help='Debug mode - show button presses')

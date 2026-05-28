@@ -29,12 +29,17 @@ class Config:
     obs_host: str = "localhost"
     obs_port: int = 4444
     obs_password: Optional[str] = None
+    dials: Dict[int, Dict[str, Any]] = None
+    sleep_timeout: int = 10
+    sleep_brightness: int = 0
 
     def __post_init__(self):
         if self.label_style is None:
             self.label_style = {}
         if self.buttons is None:
             self.buttons = []
+        if self.dials is None:
+            self.dials = {}
 
 
 class ConfigParser:
@@ -61,6 +66,12 @@ class ConfigParser:
         if 'brightness' in data:
             config.brightness = int(data['brightness'])
 
+        if 'sleep_timeout' in data:
+            config.sleep_timeout = int(data['sleep_timeout'])
+
+        if 'sleep_brightness' in data:
+            config.sleep_brightness = int(data['sleep_brightness'])
+
         if 'label_style' in data:
             config.label_style = data['label_style']
 
@@ -81,8 +92,20 @@ class ConfigParser:
                 button = ConfigParser._parse_button(idx, button_data, base_path)
                 buttons.append(button)
 
+        # Parse dials
+        dials = {}
+        if 'dials' in data and isinstance(data['dials'], dict):
+            for dial_idx_str, dial_data in data['dials'].items():
+                try:
+                    dial_idx = int(dial_idx_str)
+                    if dial_data:
+                        dials[dial_idx] = dial_data
+                except ValueError:
+                    logger.warning(f"Invalid dial index: {dial_idx_str}")
+
         config.buttons = buttons
-        logger.info(f"Loaded config with {len(buttons)} button(s)")
+        config.dials = dials
+        logger.info(f"Loaded config with {len(buttons)} button(s) and {len(dials)} dial(s)")
         return config
 
     @staticmethod
@@ -111,6 +134,53 @@ class ConfigParser:
         )
 
     @staticmethod
+    def _validate_action(action_type: str, action_params: Dict[str, Any], context: str) -> List[str]:
+        """Validate action configuration properties"""
+        errors = []
+        if action_type not in ['command', 'obs', 'app', 'key', 'volume', 'media']:
+            errors.append(f"{context}: invalid action type: {action_type}")
+            return errors
+
+        # We treat missing or empty parameters as "unset" or "no-op" actions, 
+        # allowing the daemon to run on a best-effort basis without halting.
+        
+        if action_type == 'command':
+            pass
+
+        elif action_type == 'obs':
+            action = action_params.get('action')
+            if action:
+                if action == 'toggle_scene':
+                    if not action_params.get('scene1') or not action_params.get('scene2'):
+                        errors.append(f"{context}: 'toggle_scene' action requires 'scene1' and 'scene2' parameters")
+                elif action == 'set_scene':
+                    if not action_params.get('scene'):
+                        errors.append(f"{context}: 'set_scene' action requires 'scene' parameter")
+                elif action == 'toggle_source':
+                    if not action_params.get('scene') or not action_params.get('source'):
+                        errors.append(f"{context}: 'toggle_source' action requires 'scene' and 'source' parameters")
+
+        elif action_type == 'app':
+            pass
+
+        elif action_type == 'key':
+            pass
+
+        elif action_type == 'volume':
+            operation = action_params.get('operation')
+            if operation:
+                if operation not in ['up', 'down', 'mute']:
+                    errors.append(f"{context}: 'volume' action requires 'operation' parameter ('up', 'down', 'mute')")
+
+        elif action_type == 'media':
+            control = action_params.get('control')
+            if control:
+                if control not in ['play_pause', 'next', 'previous', 'stop']:
+                    errors.append(f"{context}: 'media' action requires 'control' parameter ('play_pause', 'next', 'previous', 'stop')")
+
+        return errors
+
+    @staticmethod
     def validate(config: Config) -> List[str]:
         """Validate configuration and return list of errors"""
         errors = []
@@ -125,25 +195,40 @@ class ConfigParser:
             if button.image and not Path(button.image).exists():
                 errors.append(f"Button {button.index}: image file not found: {button.image}")
 
-            if button.action_type not in ['command', 'obs', 'app', 'key']:
-                errors.append(f"Button {button.index}: invalid action type: {button.action_type}")
+            errors.extend(
+                ConfigParser._validate_action(
+                    button.action_type,
+                    button.action_params,
+                    f"Button {button.index}"
+                )
+            )
 
-            if button.action_type == 'command' and 'cmd' not in button.action_params:
-                errors.append(f"Button {button.index}: 'command' action requires 'cmd' parameter")
+        if config.dials:
+            for dial_idx, dial_config in config.dials.items():
+                if dial_idx not in (17, 18, 19):
+                    errors.append(f"Dial {dial_idx}: invalid dial index. Expected 17, 18, or 19.")
+                    continue
 
-            if button.action_type == 'obs':
-                action = button.action_params.get('action', 'toggle_scene')
-                if action == 'toggle_scene' and ('scene1' not in button.action_params or 'scene2' not in button.action_params):
-                    errors.append(f"Button {button.index}: 'toggle_scene' action requires 'scene1' and 'scene2' parameters")
-                elif action == 'set_scene' and 'scene' not in button.action_params:
-                    errors.append(f"Button {button.index}: 'set_scene' action requires 'scene' parameter")
-                elif action == 'toggle_source' and ('scene' not in button.action_params or 'source' not in button.action_params):
-                    errors.append(f"Button {button.index}: 'toggle_source' action requires 'scene' and 'source' parameters")
+                for event_name in ('click', 'left', 'right'):
+                    if event_name in dial_config:
+                        event_action = dial_config[event_name]
+                        if not isinstance(event_action, dict):
+                            errors.append(f"Dial {dial_idx} event '{event_name}' must be an action configuration dictionary")
+                            continue
 
-            if button.action_type == 'app' and 'name' not in button.action_params:
-                errors.append(f"Button {button.index}: 'app' action requires 'name' parameter")
+                        action_type = event_action.get('action')
+                        action_params = event_action.get('params', {})
 
-            if button.action_type == 'key' and 'keys' not in button.action_params:
-                errors.append(f"Button {button.index}: 'key' action requires 'keys' parameter")
+                        if not action_type:
+                            errors.append(f"Dial {dial_idx} event '{event_name}' requires 'action' field")
+                            continue
+
+                        errors.extend(
+                            ConfigParser._validate_action(
+                                action_type,
+                                action_params,
+                                f"Dial {dial_idx} event '{event_name}'"
+                            )
+                        )
 
         return errors

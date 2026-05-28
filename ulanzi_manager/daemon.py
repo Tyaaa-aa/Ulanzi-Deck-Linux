@@ -4,6 +4,7 @@ import sys
 import time
 import logging
 import signal
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -13,15 +14,21 @@ from ulanzi_manager.actions import ActionExecutor
 
 # Setup logging
 log_dir = Path.home() / '.local/share/ulanzi'
-log_dir.mkdir(parents=True, exist_ok=True)
+try:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handlers = [
+        logging.FileHandler(log_dir / 'daemon.log'),
+        logging.StreamHandler()
+    ]
+except Exception:
+    handlers = [
+        logging.StreamHandler()
+    ]
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_dir / 'daemon.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
 
@@ -37,6 +44,8 @@ class UlanziDaemon:
         self.executor: Optional[ActionExecutor] = None
         self.running = False
         self.obs_client = None
+        self.last_interaction_time = time.time()
+        self.is_sleeping = False
 
     def start(self):
         """Start the daemon"""
@@ -69,6 +78,15 @@ class UlanziDaemon:
 
             self.running = True
             logger.info("Daemon started successfully")
+            
+            # Track PID
+            pid_file = Path.home() / '.local/share/ulanzi/daemon.pid'
+            try:
+                pid_file.parent.mkdir(parents=True, exist_ok=True)
+                pid_file.write_text(str(os.getpid()))
+            except Exception as e:
+                logger.warning(f"Could not write PID file: {e}")
+                
             return True
 
         except Exception as e:
@@ -89,6 +107,14 @@ class UlanziDaemon:
             except:
                 pass
 
+        # Remove PID file
+        pid_file = Path.home() / '.local/share/ulanzi/daemon.pid'
+        if pid_file.exists():
+            try:
+                pid_file.unlink()
+            except Exception:
+                pass
+
         logger.info("Daemon stopped")
 
     def run(self):
@@ -99,11 +125,54 @@ class UlanziDaemon:
         # Setup signal handlers
         signal.signal(signal.SIGTERM, lambda s, f: self.stop())
         signal.signal(signal.SIGINT, lambda s, f: self.stop())
+        try:
+            signal.signal(signal.SIGHUP, lambda s, f: self.reload_config())
+        except AttributeError:
+            pass
 
         try:
+            last_keepalive = time.time()
+            self.last_interaction_time = time.time()
+            self.is_sleeping = False
+            
             while self.running:
                 # Read button presses (non-blocking)
                 self.device.read_button_press()
+
+                now = time.time()
+                inactive_time = now - self.last_interaction_time
+                
+                # Check sleep timeout
+                sleep_timeout = getattr(self.config, 'sleep_timeout', 10)
+                sleep_brightness = getattr(self.config, 'sleep_brightness', 0)
+                
+                if sleep_timeout > 0 and inactive_time > sleep_timeout * 60:
+                    if not self.is_sleeping:
+                        self.is_sleeping = True
+                        logger.info("Device entering sleep mode due to inactivity.")
+                        try:
+                            self.device.set_brightness(sleep_brightness)
+                        except Exception as e:
+                            logger.error(f"Failed to set sleep brightness: {e}")
+                else:
+                    # Device should be awake
+                    if self.is_sleeping:
+                        self.is_sleeping = False
+                        logger.info("Device waking up from sleep mode.")
+                        try:
+                            self.device.set_brightness(self.config.brightness)
+                        except Exception as e:
+                            logger.error(f"Failed to restore brightness: {e}")
+                            
+                    # Keepalive: if sleep_timeout is 0 (Never sleep), send periodic brightness commands
+                    # every 60 seconds of inactivity to keep USB/screen alive.
+                    if sleep_timeout == 0 and now - last_keepalive > 60:
+                        last_keepalive = now
+                        logger.debug("Sending periodic keepalive brightness command")
+                        try:
+                            self.device.set_brightness(self.config.brightness)
+                        except Exception:
+                            pass
 
                 # Keep-alive
                 self.device.set_small_window_data({})
@@ -116,6 +185,44 @@ class UlanziDaemon:
             logger.error(f"Daemon error: {e}")
         finally:
             self.stop()
+
+    def reload_config(self):
+        """Reload configuration from file without stopping"""
+        logger.info("Reloading configuration...")
+        try:
+            # Load new configuration
+            new_config = ConfigParser.load(self.config_path)
+            
+            # Validate
+            errors = ConfigParser.validate(new_config)
+            if errors:
+                logger.error("Failed to reload configuration. Validation errors:")
+                for error in errors:
+                    logger.error(f"  - {error}")
+                return False
+                
+            self.config = new_config
+            
+            # Reconfigure device settings
+            self._configure_device()
+            
+            # Reinitialize OBS client if config changed
+            if self.obs_client:
+                try:
+                    self.obs_client.disconnect()
+                except:
+                    pass
+                self.obs_client = None
+            self._init_obs_client()
+            
+            # Reinitialize executor with new OBS client
+            self.executor = ActionExecutor(self.obs_client)
+            
+            logger.info("Configuration reloaded successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reload configuration: {e}")
+            return False
 
     def _init_obs_client(self):
         """Initialize OBS WebSocket client"""
@@ -164,6 +271,50 @@ class UlanziDaemon:
 
     def _on_button_press(self, button: ButtonPress):
         """Handle button press event"""
+        self.last_interaction_time = time.time()
+        
+        # If we were sleeping, wake up!
+        if self.is_sleeping:
+            self.is_sleeping = False
+            logger.info("Waking up device from sleep mode on user interaction")
+            try:
+                self.device.set_brightness(self.config.brightness)
+            except Exception as e:
+                logger.error(f"Failed to restore brightness on wake-up: {e}")
+                
+        # If it is a dial event, handle it separately
+        if button.dial_event is not None:
+            dial_config = self.config.dials.get(button.index)
+            if not dial_config:
+                logger.warning(f"No config for dial {button.index}")
+                return
+
+            action = None
+            event_name = ""
+            if button.dial_event == 0:  # click release
+                action = dial_config.get('click')
+                event_name = "click"
+            elif button.dial_event == 1:  # click press
+                logger.info(f"Dial {button.index} clicked (pressed)")
+                return
+            elif button.dial_event == 2:  # turn left
+                action = dial_config.get('left')
+                event_name = "left"
+            elif button.dial_event == 3:  # turn right
+                action = dial_config.get('right')
+                event_name = "right"
+
+            if action:
+                action_type = action.get('action')
+                action_params = action.get('params', {})
+                logger.info(f"Executing dial {button.index} action on '{event_name}': {action_type}")
+                if self.executor:
+                    self.executor.execute(action_type, action_params)
+            else:
+                logger.debug(f"Dial {button.index} event '{event_name}' has no configured action")
+            return
+
+        # Handle regular buttons
         logger.info(f"Button {button.index} pressed (state={button.state})")
 
         # Find button config
@@ -189,7 +340,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Ulanzi D200 daemon')
-    parser.add_argument('config', help='Path to configuration file')
+    parser.add_argument('config', nargs='?', default=str(Path.home() / '.config' / 'ulanzi' / 'config.yaml'), help='Path to configuration file')
     parser.add_argument('--log-level', default='INFO', help='Logging level')
     args = parser.parse_args()
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, Callable
 from dataclasses import dataclass
 from enum import IntEnum
-from deepdiff import DeepDiff
+# from deepdiff import DeepDiff
 
 try:
     import hid
@@ -40,6 +40,8 @@ class ButtonPress:
     index: int
     pressed: bool
     state: int
+    dial_event: Optional[int] = None
+
 
 
 class UlanziDevice:
@@ -113,9 +115,18 @@ class UlanziDevice:
             button_data = bytes(data[8:12])
             state = button_data[0]
             index = button_data[1]
-            pressed = button_data[3] == 0x01
+            
+            # Check if it is a dial (index 17, 18, 19) or dial indicator byte (button_data[2] == 2)
+            is_dial_input = index in (17, 18, 19) or button_data[2] == 2
+            
+            if is_dial_input:
+                dial_event = button_data[3]
+                pressed = (dial_event == 1)
+            else:
+                dial_event = None
+                pressed = (button_data[3] == 0x01)
 
-            button_press = ButtonPress(index=index, pressed=pressed, state=state)
+            button_press = ButtonPress(index=index, pressed=pressed, state=state, dial_event=dial_event)
             if self._button_callback:
                 self._button_callback(button_press)
             return button_press
@@ -189,10 +200,10 @@ class UlanziDevice:
                         if 'label' in config:
                             button_data['ViewParam'][0]['Text'] = config['label']
 
-                        if 'image' in config:
+                        if 'image' in config and config['image']:
                             image_path = config['image']
                             image_path_obj = Path(image_path)
-                            if image_path_obj.exists():
+                            if image_path_obj.exists() and image_path_obj.is_file():
                                 icon_name = image_path_obj.name
                                 with open(image_path, 'rb') as f:
                                     zf.writestr(f'icons/{icon_name}', f.read())
@@ -200,7 +211,7 @@ class UlanziDevice:
                                 images_added += 1
                                 logger.debug(f"Added image for button {idx}: {image_path}")
                             else:
-                                logger.warning(f"Image not found for button {idx}: {image_path}")
+                                logger.warning(f"Image not found or invalid for button {idx}: {image_path}")
 
                     manifest[key] = button_data
 
