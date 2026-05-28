@@ -65,7 +65,7 @@ You can run the GUI directly from the cloned repository or via a compiled portab
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/mariovalney/ulanzi-d200-linux.git
+   git clone https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux.git
    cd ulanzi-d200-linux
    ```
 
