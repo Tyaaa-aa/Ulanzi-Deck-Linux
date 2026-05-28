@@ -7,8 +7,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QTabWidget, QFormLayout, QFrame, 
                              QMessageBox, QScrollArea, QStyle, QDialog,
                              QApplication, QProgressDialog, QSplitter, QSpinBox,
-                             QStyleOptionButton)
-from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter, QDrag, QPen
+                             QStyleOptionButton, QSystemTrayIcon, QMenu)
+from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter, QDrag, QPen, QAction
 from PyQt6.QtCore import Qt, QSize, QTimer, QRect, QThread, pyqtSignal, QMimeData
 
 from ulanzi_manager.config import ConfigParser, Config, ButtonConfig
@@ -17,6 +17,7 @@ from ulanzi_gui.icon_picker import IconPicker
 from ulanzi_gui.volume_picker import VolumePicker
 from ulanzi_gui.soundboard import SoundboardPicker
 from ulanzi_gui.key_recorder import KeyShortcutBuilder
+from ulanzi_manager.device import UlanziDevice, hid, VENDOR_ID, PRODUCT_ID
 
 # Layout dimensions
 GRID_COLS = 5
@@ -380,6 +381,7 @@ class MainWindow(QMainWindow):
         self.selected_type = None  # 'button' or 'dial'
         self.selected_index = None # 0-12, 13 (clock), or 17-19 (dials)
         self.selected_dial_tab = "click" # 'click', 'left', 'right'
+        self.is_applying = False
         
         self.setWindowTitle("Ulanzi D200X Manager")
         self.setMinimumSize(980, 640)
@@ -663,8 +665,11 @@ class MainWindow(QMainWindow):
         
         # Periodic daemon status check
         self.status_timer = QTimer(self)
-        self.status_timer.timeout.connect(self.update_daemon_status)
+        self.status_timer.timeout.connect(self.update_status_indicators)
         self.status_timer.start(2000) # Check every 2s
+        
+        # Setup System Tray Icon
+        self.setup_system_tray()
 
     def load_configuration(self):
         """Load configuration from config.yaml, create default if missing"""
@@ -794,6 +799,70 @@ class MainWindow(QMainWindow):
         title_label = QLabel("<h2>Ulanzi D200X Console</h2>")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         device_section.addWidget(title_label)
+
+        # Create Status Card (Connection & Daemon status upfront)
+        self.status_card = QFrame()
+        self.status_card.setObjectName("status_card")
+        self.status_card.setStyleSheet("""
+            QFrame#status_card {
+                background-color: #121217;
+                border: 1px solid #22222e;
+                border-radius: 10px;
+            }
+            QLabel {
+                font-size: 12px;
+            }
+        """)
+        status_card_layout = QHBoxLayout(self.status_card)
+        status_card_layout.setContentsMargins(15, 8, 15, 8)
+        status_card_layout.setSpacing(15)
+        
+        # 1. Connection Status Section
+        conn_layout = QHBoxLayout()
+        self.conn_dot = QLabel("●")
+        self.conn_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+        self.conn_text = QLabel("Device: Disconnected")
+        self.conn_text.setStyleSheet("font-weight: bold; color: #ffffff;")
+        
+        self.conn_retry_btn = QPushButton("Retry")
+        self.conn_retry_btn.setToolTip("Retry connection to device")
+        self.conn_retry_btn.clicked.connect(self.manual_retry_connection)
+        self.conn_retry_btn.setStyleSheet("padding: 3px 8px; font-size: 11px; font-weight: normal;")
+        
+        self.conn_fix_btn = QPushButton("Fix Rules")
+        self.conn_fix_btn.setToolTip("Fix USB permission rules (requires sudo)")
+        self.conn_fix_btn.clicked.connect(self.fix_permissions_gui)
+        self.conn_fix_btn.setVisible(False)
+        self.conn_fix_btn.setStyleSheet("""
+            QPushButton { padding: 3px 8px; font-size: 11px; font-weight: normal; background-color: #3a86f0; color: white; border: none; }
+            QPushButton:hover { background-color: #2a76e0; }
+        """)
+        
+        conn_layout.addWidget(self.conn_dot)
+        conn_layout.addWidget(self.conn_text)
+        conn_layout.addWidget(self.conn_retry_btn)
+        conn_layout.addWidget(self.conn_fix_btn)
+        
+        # 2. Daemon Status Section
+        daemon_layout_row = QHBoxLayout()
+        self.daemon_dot = QLabel("●")
+        self.daemon_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+        self.daemon_status_lbl = QLabel("Daemon: Inactive")
+        self.daemon_status_lbl.setStyleSheet("font-weight: bold; color: #ffffff;")
+        
+        self.daemon_control_btn = QPushButton("Start Daemon")
+        self.daemon_control_btn.clicked.connect(self.toggle_daemon)
+        self.daemon_control_btn.setStyleSheet("padding: 3px 8px; font-size: 11px; font-weight: normal;")
+        
+        daemon_layout_row.addWidget(self.daemon_dot)
+        daemon_layout_row.addWidget(self.daemon_status_lbl)
+        daemon_layout_row.addWidget(self.daemon_control_btn)
+        
+        status_card_layout.addLayout(conn_layout)
+        status_card_layout.addStretch(1)
+        status_card_layout.addLayout(daemon_layout_row)
+        
+        device_section.addWidget(self.status_card)
         
         # Device Shell Frame
         self.device_frame = QFrame()
@@ -1972,15 +2041,255 @@ class MainWindow(QMainWindow):
         return 0
 
     def update_daemon_status(self):
+        """Delegates to the unified status indicator update method"""
+        self.update_status_indicators()
+
+    def update_status_indicators(self):
+        """Update both connection and daemon status widgets"""
+        if getattr(self, 'is_applying', False):
+            return
+            
+        # 1. Update Daemon Status
         pid = self.check_daemon_running()
         if pid > 0:
-            self.daemon_status_dot.setStyleSheet("color: #10b981; font-size: 16px;")
-            self.daemon_status_text.setText(f"Active (PID {pid})")
-            self.daemon_toggle_btn.setText("Stop Daemon")
+            self.daemon_dot.setStyleSheet("color: #10b981; font-size: 16px;")
+            self.daemon_status_lbl.setText(f"Daemon: Active (PID {pid})")
+            self.daemon_control_btn.setText("Stop Daemon")
+            if hasattr(self, 'daemon_status_dot'):
+                self.daemon_status_dot.setStyleSheet("color: #10b981; font-size: 16px;")
+                self.daemon_status_text.setText(f"Active (PID {pid})")
+                self.daemon_toggle_btn.setText("Stop Daemon")
+            if hasattr(self, 'tray_daemon_action'):
+                self.tray_daemon_action.setText("Stop Daemon")
         else:
-            self.daemon_status_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
-            self.daemon_status_text.setText("Inactive")
-            self.daemon_toggle_btn.setText("Start Daemon")
+            self.daemon_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+            self.daemon_status_lbl.setText("Daemon: Inactive")
+            self.daemon_control_btn.setText("Start Daemon")
+            if hasattr(self, 'daemon_status_dot'):
+                self.daemon_status_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+                self.daemon_status_text.setText("Inactive")
+                self.daemon_toggle_btn.setText("Start Daemon")
+            if hasattr(self, 'tray_daemon_action'):
+                self.tray_daemon_action.setText("Start Daemon")
+
+        # 2. Update Connection Status
+        status, reason = self.check_device_connection(pid)
+        if status == 'connected':
+            self.conn_dot.setStyleSheet("color: #10b981; font-size: 16px;")
+            if pid > 0:
+                self.conn_text.setText("Device: Connected (In use)")
+            else:
+                self.conn_text.setText("Device: Connected")
+            self.conn_retry_btn.setVisible(False)
+            self.conn_fix_btn.setVisible(False)
+            self.apply_btn.setEnabled(True)
+            self.apply_btn.setToolTip("Apply current configuration to the hardware device")
+            self.footer_status_text.setText("Console Connected")
+        elif status == 'permission_denied':
+            self.conn_dot.setStyleSheet("color: #f59e0b; font-size: 16px;")
+            self.conn_text.setText("Device: Permission Denied")
+            self.conn_retry_btn.setVisible(True)
+            self.conn_fix_btn.setVisible(True)
+            self.apply_btn.setEnabled(False)
+            self.apply_btn.setToolTip("Cannot apply: permission denied to write to USB device. Click 'Fix Rules' above.")
+            self.footer_status_text.setText(f"Permission Denied: {reason}")
+        else:
+            self.conn_dot.setStyleSheet("color: #e74c3c; font-size: 16px;")
+            self.conn_text.setText("Device: Disconnected")
+            self.conn_retry_btn.setVisible(True)
+            self.conn_fix_btn.setVisible(False)
+            self.apply_btn.setEnabled(False)
+            self.apply_btn.setToolTip("Cannot apply: device is not connected via USB.")
+            self.footer_status_text.setText(f"Not Connected: {reason}")
+
+    def check_device_connection(self, daemon_pid: int = 0) -> tuple[str, str]:
+        """
+        Returns (status, error_reason)
+        status: 'connected', 'permission_denied', 'not_found'
+        """
+        if hid is None:
+            return 'not_found', "python-hidapi bindings are missing."
+            
+        # 1. If daemon is running, the device is connected and in use.
+        if daemon_pid > 0:
+            return 'connected', "In use by daemon"
+            
+        # 2. Check if enumerated
+        devices = hid.enumerate(VENDOR_ID, PRODUCT_ID)
+        if not devices:
+            return 'not_found', "Device not found via USB."
+            
+        # 3. Check device path access (Linux specific, completely passive)
+        try:
+            device_info = devices[0]
+            path = device_info.get('path')
+            if path:
+                path_str = path.decode('utf-8') if isinstance(path, bytes) else str(path)
+                if os.path.exists(path_str):
+                    if os.access(path_str, os.R_OK | os.W_OK):
+                        return 'connected', ""
+                    else:
+                        return 'permission_denied', "USB permission denied. Udev rules need to be installed."
+        except Exception:
+            pass # Fallback to open check
+            
+        # 4. Fallback (try to open/close device node)
+        try:
+            device = UlanziDevice()
+            device.close()
+            return 'connected', ""
+        except Exception as e:
+            err_msg = str(e)
+            if "open failed" in err_msg.lower() or "permission denied" in err_msg.lower() or "operation not permitted" in err_msg.lower():
+                return 'permission_denied', "USB permission denied. Udev rules need to be installed."
+            return 'permission_denied', f"Connection failed: {err_msg}"
+
+    def manual_retry_connection(self):
+        """Manually trigger connection check and report result if failing"""
+        pid = self.check_daemon_running()
+        status, reason = self.check_device_connection(pid)
+        self.update_status_indicators()
+        
+        if status == 'connected':
+            QMessageBox.information(
+                self, "Connected",
+                "Successfully connected to the Ulanzi StreamDeck device!"
+            )
+        elif status == 'permission_denied':
+            QMessageBox.warning(
+                self, "Permission Denied",
+                f"The device was found, but permission was denied:\n{reason}\n\nPlease click 'Fix Rules' to resolve this."
+            )
+        else:
+            QMessageBox.warning(
+                self, "Not Connected",
+                f"Could not find the device:\n{reason}\n\nMake sure the USB cable is securely connected and the device is powered on."
+            )
+
+    def fix_permissions_gui(self):
+        """Run pkexec to install udev rules and check connection"""
+        import sys
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            rules_path = Path(sys._MEIPASS) / '99-ulanzi.rules'
+        else:
+            rules_path = Path(__file__).parent.parent / '99-ulanzi.rules'
+
+        if not rules_path.exists():
+            QMessageBox.critical(
+                self, "Error",
+                f"Could not find udev rule file at:\n{rules_path}"
+            )
+            return
+
+        cmd = (
+            f"pkexec bash -c \"cp '{rules_path}' /etc/udev/rules.d/ "
+            "&& udevadm control --reload-rules && udevadm trigger\""
+        )
+
+        try:
+            self._show_notification("Running authentication helper...")
+            res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if res.returncode == 0:
+                self._show_notification("Udev rules installed successfully!")
+                QTimer.singleShot(1500, self.update_status_indicators)
+            else:
+                QMessageBox.warning(
+                    self, "Failed",
+                    f"Failed to install rules:\n{res.stderr or res.stdout}"
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error executing authentication helper: {e}")
+
+    def setup_system_tray(self):
+        """Initialize the system tray icon and menu options"""
+        self.tray_icon = QSystemTrayIcon(self)
+        
+        icon_path = Path(__file__).parent.parent / 'icons' / 'logo.png'
+        if not icon_path.exists():
+            icon_path = Path(__file__).parent.parent / 'terminal.png'
+            
+        if icon_path.exists():
+            self.tray_icon.setIcon(QIcon(str(icon_path)))
+        else:
+            self.tray_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+            
+        # Create tray context menu
+        self.tray_menu = QMenu(self)
+        
+        # Add actions
+        show_action = QAction("Show Manager", self)
+        show_action.triggered.connect(self.show_normal)
+        self.tray_menu.addAction(show_action)
+        
+        self.tray_menu.addSeparator()
+        
+        # Daemon status display/toggle action in tray
+        self.tray_daemon_action = QAction("Start Daemon", self)
+        self.tray_daemon_action.triggered.connect(self.toggle_daemon)
+        self.tray_menu.addAction(self.tray_daemon_action)
+        
+        self.tray_menu.addSeparator()
+        
+        quit_action = QAction("Quit Ulanzi Manager", self)
+        quit_action.triggered.connect(self.clean_quit)
+        self.tray_menu.addAction(quit_action)
+        
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
+        self.tray_icon.show()
+        
+    def show_normal(self):
+        self.show()
+        self.activateWindow()
+        self.raise_()
+        
+    def on_tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick or reason == QSystemTrayIcon.ActivationReason.Trigger:
+            if self.isVisible():
+                self.hide()
+            else:
+                self.show_normal()
+
+    def closeEvent(self, event):
+        """Intercept window close to minimize/hide to system tray instead of exiting"""
+        if QSystemTrayIcon.isSystemTrayAvailable() and self.tray_icon.isVisible():
+            self.hide()
+            self._show_notification("Minimized to system tray.")
+            event.ignore()
+        else:
+            self.clean_quit()
+
+    def clean_quit(self):
+        """Cleanly disconnect, stop the daemon, and exit application"""
+        # Stop daemon
+        try:
+            pid = self.check_daemon_running()
+            if pid > 0:
+                # Try systemd stop first
+                try:
+                    subprocess.run(['systemctl', '--user', 'stop', 'ulanzi-daemon'], timeout=5)
+                except Exception:
+                    pass
+                # Direct kill
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+            
+        # Cleanly disconnect device if open and run cleanup
+        try:
+            ApplyWorker._kill_all_daemons()
+        except Exception:
+            pass
+            
+        # Hide tray icon
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
+            
+        # Quit Qt Application
+        QApplication.quit()
 
     def _show_notification(self, msg: str, error: bool = False):
         """Show an inline notification that auto-dismisses after 3 seconds"""
@@ -2048,6 +2357,8 @@ class MainWindow(QMainWindow):
         if not self.save_configuration_to_file():
             return
 
+        self.is_applying = True
+
         # Snapshot daemon state on the main thread (fast, no I/O)
         pid = self.check_daemon_running()
         was_running = (pid > 0)
@@ -2082,6 +2393,7 @@ class MainWindow(QMainWindow):
         """Called on the main thread when ApplyWorker completes."""
         self._apply_progress.close()
         self.apply_btn.setEnabled(True)
+        self.is_applying = False
         self.update_daemon_status()
 
         if success:

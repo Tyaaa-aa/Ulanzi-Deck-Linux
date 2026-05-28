@@ -229,13 +229,21 @@ class UlanziDaemon:
         try:
             import obsws_python as obs
 
-            self.obs_client = obs.ReqClient(
-                host=self.config.obs_host,
-                port=self.config.obs_port,
-                password=self.config.obs_password,
-                timeout=3
-            )
-            logger.info(f"Connected to OBS at {self.config.obs_host}:{self.config.obs_port}")
+            # Silence obsws_python's internal logger to suppress stack traces on connection refusal
+            obs_logger = logging.getLogger('obsws_python')
+            old_level = obs_logger.level
+            obs_logger.setLevel(logging.CRITICAL)
+
+            try:
+                self.obs_client = obs.ReqClient(
+                    host=self.config.obs_host,
+                    port=self.config.obs_port,
+                    password=self.config.obs_password,
+                    timeout=3
+                )
+                logger.info(f"Connected to OBS at {self.config.obs_host}:{self.config.obs_port}")
+            finally:
+                obs_logger.setLevel(old_level)
         except ImportError:
             logger.warning("obsws-python not installed, OBS features disabled")
         except ConnectionRefusedError:

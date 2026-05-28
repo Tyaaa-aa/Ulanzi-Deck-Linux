@@ -21,11 +21,9 @@ if len(sys.argv) > 1:
 
 # Import PyQt modules afterwards to avoid unnecessarily loading them if running in cli/daemon mode
 import argparse
-from PyQt6.QtWidgets import QApplication, QDialog
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import Qt, QLockFile
 from ulanzi_gui.main_window import MainWindow
-from ulanzi_gui.onboarding import OnboardingDialog
-from ulanzi_manager.device import UlanziDevice
 
 def main():
     parser = argparse.ArgumentParser(description='Ulanzi D200X Graphical Manager')
@@ -39,26 +37,25 @@ def main():
     # Enable High DPI scaling
     app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps) if hasattr(Qt.ApplicationAttribute, "AA_UseHighDpiPixmaps") else None
     
-    # Try connecting to the device
-    device_available = False
-    try:
-        device = UlanziDevice()
-        device.close()
-        device_available = True
-    except Exception as e:
-        # If not connected or permission error, show onboarding setup
-        print(f"Initial connection check failed: {e}. Opening onboarding setup...")
-        
-    if not device_available:
-        onboarding = OnboardingDialog()
-        if onboarding.exec() != QDialog.DialogCode.Accepted:
-            # User canceled/closed onboarding without success
-            print("Onboarding setup was not completed. Exiting.")
-            sys.exit(0)
+    # Prevent multiple instances using QLockFile
+    lock_dir = Path.home() / '.local/share/ulanzi'
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_file = QLockFile(str(lock_dir / 'gui.lock'))
+    if not lock_file.tryLock(100):
+        QMessageBox.warning(
+            None,
+            "Already Running",
+            "Ulanzi Manager is already running.\nPlease check your system tray icon."
+        )
+        sys.exit(0)
             
     # Launch main configuration window
     window = MainWindow(args.config)
     window.show()
+    
+    # Store lock_file reference to keep it alive during event loop execution
+    window._lock_file = lock_file
+    
     sys.exit(app.exec())
 
 if __name__ == '__main__':

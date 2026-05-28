@@ -184,6 +184,13 @@ class UlanziDevice:
             # Create ZIP with button data
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                # Add dummy file FIRST to avoid protocol bug and shift subsequent file offsets on retry
+                if dummy_retries > 0:
+                    dummy_str = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=8 + dummy_retries % 32))
+                else:
+                    dummy_str = 'init'
+                zf.writestr('dummy.txt', dummy_str)
+
                 manifest = {}
 
                 for idx, config in buttons.items():
@@ -218,12 +225,6 @@ class UlanziDevice:
                 # Add manifest
                 zf.writestr('manifest.json', json.dumps(manifest, sort_keys=True, separators=(',', ':'), indent=2))
                 logger.debug(f"Manifest: {json.dumps(manifest, indent=2)}")
-
-                # Add dummy file to avoid protocol bug
-                if dummy_retries > 0:
-                    dummy_str += ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=8*dummy_retries))
-
-                zf.writestr('dummy.txt', dummy_str)
 
             # Get ZIP data and validate for problematic bytes
             zip_data = zip_buffer.getvalue()
