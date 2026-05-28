@@ -1,4 +1,4 @@
-# Ulanzi D200 Manager
+# Ulanzi Deck Linux
 
 A Linux application for managing the Ulanzi D200/D200X StreamDeck device. Configure button images, labels, and actions to control OBS Studio, launch applications, execute commands, manage system audio volume, and simulate keyboard shortcuts.
 
