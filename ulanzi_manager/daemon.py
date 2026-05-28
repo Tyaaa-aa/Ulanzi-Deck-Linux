@@ -258,8 +258,13 @@ class UlanziDaemon:
             self.device.set_brightness(self.config.brightness)
 
             # Set label style
-            if self.config.label_style:
-                self.device.set_label_style(self.config.label_style)
+            if self.config.label_style is not None:
+                style = dict(self.config.label_style)
+                if getattr(self.config, 'hide_labels', False):
+                    style['ShowTitle'] = False
+                else:
+                    style.setdefault('ShowTitle', True)
+                self.device.set_label_style(style)
 
             # Set button images
             button_dict = {}

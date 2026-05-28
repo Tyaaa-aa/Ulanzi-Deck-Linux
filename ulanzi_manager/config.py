@@ -18,6 +18,7 @@ class ButtonConfig:
     action_type: str  # 'command', 'obs', 'app', 'key'
     action_params: Dict[str, Any]
     state: int = 0
+    icon_spec: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -32,6 +33,7 @@ class Config:
     dials: Dict[int, Dict[str, Any]] = None
     sleep_timeout: int = 10
     sleep_brightness: int = 0
+    hide_labels: bool = False
 
     def __post_init__(self):
         if self.label_style is None:
@@ -55,7 +57,9 @@ class ConfigParser:
         with open(config_file, 'r') as f:
             data = yaml.safe_load(f) or {}
 
-        return ConfigParser._parse_config(data, config_file.parent)
+        config = ConfigParser._parse_config(data, config_file.parent)
+        ConfigParser._generate_icons(config, config_file.parent)
+        return config
 
     @staticmethod
     def _parse_config(data: Dict, base_path: Path) -> Config:
@@ -71,6 +75,9 @@ class ConfigParser:
 
         if 'sleep_brightness' in data:
             config.sleep_brightness = int(data['sleep_brightness'])
+
+        if 'hide_labels' in data:
+            config.hide_labels = bool(data['hide_labels'])
 
         if 'label_style' in data:
             config.label_style = data['label_style']
@@ -123,6 +130,7 @@ class ConfigParser:
         action_type = data.get('action', 'command')
         action_params = data.get('params', {})
         state = data.get('state', 0)
+        icon_spec = data.get('icon_spec')
 
         return ButtonConfig(
             index=index,
@@ -130,7 +138,8 @@ class ConfigParser:
             label=label,
             action_type=action_type,
             action_params=action_params,
-            state=state
+            state=state,
+            icon_spec=icon_spec
         )
 
     @staticmethod
@@ -181,6 +190,29 @@ class ConfigParser:
         return errors
 
     @staticmethod
+    def _generate_icons(config: Config, base_path: Path) -> None:
+        """Generate icons from specs and update image paths"""
+        try:
+            from .icon_generator import IconGenerator
+        except ImportError:
+            logger.warning("Pillow not installed, skipping icon generation")
+            return
+
+        icon_dir = base_path / 'icons'
+        icon_dir.mkdir(exist_ok=True)
+        generator = IconGenerator(cache_dir=icon_dir)
+
+        for button in config.buttons:
+            if button and button.icon_spec:
+                try:
+                    logger.info(f"Generating icon for button {button.index}")
+                    # Use specific filename and always regenerate
+                    icon_path = generator.generate_from_dict(button.icon_spec, button_index=button.index, force=True)
+                    button.image = str(icon_path)
+                except Exception as e:
+                    logger.error(f"Failed to generate icon for button {button.index}: {e}")
+
+    @staticmethod
     def validate(config: Config) -> List[str]:
         """Validate configuration and return list of errors"""
         errors = []
@@ -192,8 +224,22 @@ class ConfigParser:
             errors.append("obs.port must be between 1 and 65535")
 
         for button in config.buttons:
+            if button is None:
+                continue
+
             if button.image and not Path(button.image).exists():
                 errors.append(f"Button {button.index}: image file not found: {button.image}")
+
+            # Validate icon_spec if present
+            if button.icon_spec:
+                try:
+                    from .icon_generator import IconSpec
+                    spec = IconSpec(button.icon_spec)
+                    spec_errors = spec.validate()
+                    for error in spec_errors:
+                        errors.append(f"Button {button.index}: icon_spec error: {error}")
+                except Exception as e:
+                    errors.append(f"Button {button.index}: icon_spec error: {str(e)}")
 
             errors.extend(
                 ConfigParser._validate_action(

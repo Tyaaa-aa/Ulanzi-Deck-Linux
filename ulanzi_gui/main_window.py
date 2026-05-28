@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLineEdit, QTabWidget, QFormLayout, QFrame, 
                              QMessageBox, QScrollArea, QStyle, QDialog,
                              QApplication, QProgressDialog, QSplitter, QSpinBox,
-                             QStyleOptionButton, QSystemTrayIcon, QMenu)
+                             QStyleOptionButton, QSystemTrayIcon, QMenu, QCheckBox)
 from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter, QDrag, QPen, QAction
 from PyQt6.QtCore import Qt, QSize, QTimer, QRect, QThread, pyqtSignal, QMimeData
 
@@ -703,6 +703,7 @@ class MainWindow(QMainWindow):
             'brightness': self.config.brightness,
             'sleep_timeout': getattr(self.config, 'sleep_timeout', 10),
             'sleep_brightness': getattr(self.config, 'sleep_brightness', 0),
+            'hide_labels': getattr(self.config, 'hide_labels', False),
             'label_style': self.config.label_style,
             'obs': {
                 'host': self.config.obs_host,
@@ -723,6 +724,8 @@ class MainWindow(QMainWindow):
                     'params': btn.action_params,
                     'state': btn.state
                 }
+                if getattr(btn, 'icon_spec', None):
+                    data['buttons'][btn.index]['icon_spec'] = btn.icon_spec
                 
         # Populate dials
         for dial_idx, dial_cfg in self.config.dials.items():
@@ -1076,6 +1079,12 @@ class MainWindow(QMainWindow):
         self.sleep_brightness_combo.currentTextChanged.connect(self.on_sleep_brightness_changed)
         disp_layout.addRow("Sleep Brightness:", self.sleep_brightness_combo)
         
+        # Hide Labels Toggle
+        self.hide_labels_checkbox = QCheckBox()
+        self.hide_labels_checkbox.setChecked(getattr(self.config, 'hide_labels', False))
+        self.hide_labels_checkbox.toggled.connect(self.on_hide_labels_toggled)
+        disp_layout.addRow("Hide Button Labels:", self.hide_labels_checkbox)
+        
         layout.addWidget(disp_card)
         
         # 2. OBS WebSocket Connection Card
@@ -1214,8 +1223,10 @@ class MainWindow(QMainWindow):
             else:
                 btn.setIcon(QIcon())
             
-            # Always set the text label (KeyButton paints it at the bottom)
-            if is_small:
+            # Set the text label (respect global hide_labels toggle)
+            if getattr(self.config, 'hide_labels', False):
+                btn.setText("")
+            elif is_small:
                 btn.setText(btn_cfg.label if btn_cfg else f"SB{idx - 14}")
             else:
                 btn.setText(btn_cfg.label if btn_cfg else f"Btn {idx}")
@@ -1315,9 +1326,39 @@ class MainWindow(QMainWindow):
         icon_layout.addWidget(self.icon_preview)
         icon_layout.setSpacing(10)
         
-        self.choose_icon_btn = QPushButton("Select Icon...")
+        # Vertical button container
+        btn_vbox = QVBoxLayout()
+        btn_vbox.setSpacing(4)
+        
+        btn_hbox = QHBoxLayout()
+        btn_hbox.setSpacing(6)
+        
+        self.choose_icon_btn = QPushButton("Icon...")
         self.choose_icon_btn.clicked.connect(self.open_icon_picker)
-        icon_layout.addWidget(self.choose_icon_btn)
+        btn_hbox.addWidget(self.choose_icon_btn)
+        
+        self.choose_file_btn = QPushButton("File...")
+        self.choose_file_btn.clicked.connect(self.open_image_file_picker)
+        btn_hbox.addWidget(self.choose_file_btn)
+        
+        btn_vbox.addLayout(btn_hbox)
+        
+        self.clear_icon_btn = QPushButton("Remove Icon")
+        self.clear_icon_btn.clicked.connect(self.clear_button_icon)
+        self.clear_icon_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3e2727;
+                color: #ff8888;
+                border: 1px solid #5a3c3c;
+            }
+            QPushButton:hover {
+                background-color: #5c3232;
+                color: #ffaaaa;
+            }
+        """)
+        btn_vbox.addWidget(self.clear_icon_btn)
+        
+        icon_layout.addLayout(btn_vbox)
         
         identity_layout.addRow("Button Icon:", icon_layout)
         self.scroll_layout.addWidget(identity_card)
@@ -1380,10 +1421,103 @@ class MainWindow(QMainWindow):
         self.render_device_mockups()
 
     def open_icon_picker(self):
-        picker = IconPicker(self)
+        # 1. Try to find or parse existing custom icon settings from the button's image filename
+        btn_cfg = None
+        for b in self.config.buttons:
+            if b.index == self.selected_index:
+                btn_cfg = b
+                break
+                
+        current_icon_name = None
+        current_bg = None
+        current_fg = None
+        
+        if btn_cfg and btn_cfg.image:
+            filename = Path(btn_cfg.image).name
+            if "_bg_" in filename and "_fg_" in filename:
+                try:
+                    parts = filename.split("_bg_")
+                    current_icon_name = parts[0]
+                    color_parts = parts[1].split("_fg_")
+                    current_bg = "#" + color_parts[0]
+                    current_fg = "#" + color_parts[1].replace(".png", "")
+                except Exception:
+                    pass
+
+        # 2. Open the customized picker
+        picker = IconPicker(
+            self,
+            current_icon_name=current_icon_name,
+            current_bg_color=current_bg,
+            current_fg_color=current_fg
+        )
         if picker.exec() == QDialog.DialogCode.Accepted and picker.selected_icon_path:
             self.icon_preview.setPixmap(QPixmap(picker.selected_icon_path).scaled(44, 44, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             self.update_button_property('image', picker.selected_icon_path)
+            
+            # Save icon_spec
+            if picker.selected_icon_name:
+                icon_spec = {
+                    'type': 'icon',
+                    'name': picker.selected_icon_name,
+                    'bg_color': picker.bg_color,
+                    'fg_color': picker.fg_color
+                }
+                for btn in self.config.buttons:
+                    if btn.index == self.selected_index:
+                        btn.icon_spec = icon_spec
+                        break
+
+    def open_image_file_picker(self):
+        from PyQt6.QtWidgets import QFileDialog
+        from PIL import Image
+        import re
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Image File", "",
+            "Images (*.png *.jpg *.jpeg *.svg *.gif *.webp);;All Files (*)"
+        )
+        if file_path:
+            dest_dir = Path.home() / '.local/share/ulanzi/icons'
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            
+            src_path = Path(file_path)
+            clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', src_path.stem.lower())
+            dest_path = dest_dir / f"custom_{clean_name}.png"
+            
+            try:
+                # Open, resize and standardize to 196x196 PNG
+                with Image.open(file_path) as img:
+                    img_resized = img.resize((196, 196), Image.Resampling.LANCZOS)
+                    if img_resized.mode in ('RGBA', 'LA') or (img_resized.mode == 'P' and 'transparency' in img_resized.info):
+                        img_resized.save(dest_path, "PNG")
+                    else:
+                        img_resized.convert("RGB").save(dest_path, "PNG")
+                        
+                self.icon_preview.setPixmap(QPixmap(str(dest_path)).scaled(
+                    44, 44, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                ))
+                self.update_button_property('image', str(dest_path))
+                # Clear icon_spec
+                for btn in self.config.buttons:
+                    if btn.index == self.selected_index:
+                        btn.icon_spec = None
+                        break
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to process and save image file:\n{e}")
+
+    def clear_button_icon(self):
+        self.icon_preview.setPixmap(QPixmap())
+        self.update_button_property('image', '')
+        # Clear icon_spec
+        for btn in self.config.buttons:
+            if btn.index == self.selected_index:
+                btn.icon_spec = None
+                break
+
+    def on_hide_labels_toggled(self, checked):
+        self.config.hide_labels = checked
+        self.render_device_mockups()
 
     def on_action_type_changed(self, text):
         # Map UI Selection to internal strings

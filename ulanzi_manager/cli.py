@@ -70,8 +70,13 @@ class UlanziCLI:
             logger.info(f"Set brightness to {config.brightness}%")
 
             # Set label style
-            if config.label_style:
-                self.device.set_label_style(config.label_style)
+            if config.label_style is not None:
+                style = dict(config.label_style)
+                if getattr(config, 'hide_labels', False):
+                    style['ShowTitle'] = False
+                else:
+                    style.setdefault('ShowTitle', True)
+                self.device.set_label_style(style)
                 logger.info("Set label style")
 
             # Set buttons

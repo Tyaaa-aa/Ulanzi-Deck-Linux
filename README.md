@@ -66,7 +66,7 @@ You can run the GUI directly from the cloned repository or via a compiled portab
 
    ```bash
    git clone https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux.git
-   cd ulanzi-d200-linux
+   cd Ulanzi-Deck-Linux
    ```
 
 2. Create a local virtual environment and install dependencies:
@@ -227,4 +227,4 @@ MIT
 
 ## Reference
 
-Based on [ulanzi-d200-linux](https://github.com/mariovalney/ulanzi-d200-linux)
+Based on [ulanzi-d200-linux](https://github.com/racerxdl/ulanzi-d200-linux/) by [racerxdl](https://github.com/racerxdl)

@@ -186,7 +186,7 @@ class UlanziDevice:
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
                 # Add dummy file FIRST to avoid protocol bug and shift subsequent file offsets on retry
                 if dummy_retries > 0:
-                    dummy_str = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=8 + dummy_retries % 32))
+                    dummy_str = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=8 + dummy_retries * 8))
                 else:
                     dummy_str = 'init'
                 zf.writestr('dummy.txt', dummy_str)
@@ -212,8 +212,31 @@ class UlanziDevice:
                             image_path_obj = Path(image_path)
                             if image_path_obj.exists() and image_path_obj.is_file():
                                 icon_name = image_path_obj.name
-                                with open(image_path, 'rb') as f:
-                                    zf.writestr(f'icons/{icon_name}', f.read())
+                                file_size = image_path_obj.stat().st_size
+                                is_png = image_path_obj.suffix.lower() == '.png'
+                                
+                                if file_size > 100 * 1024 or not is_png:
+                                    try:
+                                        from PIL import Image
+                                        logger.info(f"Optimizing oversized or non-PNG image on-the-fly: {image_path_obj.name} ({file_size/1024:.1f} KB)")
+                                        with Image.open(image_path) as img:
+                                            img_resized = img.resize((196, 196), Image.Resampling.LANCZOS)
+                                            out_buffer = io.BytesIO()
+                                            if img_resized.mode in ('RGBA', 'LA') or (img_resized.mode == 'P' and 'transparency' in img_resized.info):
+                                                img_resized.save(out_buffer, format="PNG")
+                                            else:
+                                                img_resized.convert("RGB").save(out_buffer, format="PNG")
+                                            img_bytes = out_buffer.getvalue()
+                                        icon_name = image_path_obj.stem + ".png"
+                                    except Exception as e:
+                                        logger.warning(f"Could not optimize image {image_path}: {e}. Sending raw.")
+                                        with open(image_path, 'rb') as f:
+                                            img_bytes = f.read()
+                                else:
+                                    with open(image_path, 'rb') as f:
+                                        img_bytes = f.read()
+                                        
+                                zf.writestr(f'icons/{icon_name}', img_bytes)
                                 button_data['ViewParam'][0]['Icon'] = f'icons/{icon_name}'
                                 images_added += 1
                                 logger.debug(f"Added image for button {idx}: {image_path}")
@@ -232,14 +255,23 @@ class UlanziDevice:
 
             # Check for invalid bytes at specific positions
             valid = True
+            failed_offset = -1
+            failed_byte = None
             for i in range(1016, file_size, 1024):
                 if zip_data[i:i+1] in invalid_bytes:
                     valid = False
+                    failed_offset = i
+                    failed_byte = zip_data[i:i+1]
                     break
 
             if valid:
                 break
 
+            if dummy_retries > 30:
+                logger.warning("Could not find invalid-byte-free ZIP layout after 30 attempts. Proceeding anyway.")
+                break
+
+            logger.info(f"ZIP validation failed at retry {dummy_retries}: offset {failed_offset} is {failed_byte}. Retrying with new padding...")
             dummy_retries += 1
             time.sleep(0.05)
 
