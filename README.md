@@ -24,17 +24,20 @@ The GUI and its background daemon can be run completely standalone without insta
 Install the USB HID API library and optional keyboard shortcut tool (`xdotool`):
 
 #### Ubuntu/Debian:
+
 ```bash
 sudo apt update
 sudo apt install python3 python3-pip python3-venv xdotool libhidapi-hidraw0
 ```
 
 #### Fedora/RHEL:
+
 ```bash
 sudo dnf install python3 python3-pip xdotool hidapi
 ```
 
 #### Arch Linux:
+
 ```bash
 sudo pacman -S python python-pip xdotool hidapi
 ```
@@ -49,7 +52,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-*Note: Please disconnect and reconnect the Ulanzi device after installing the rule.*
+_Note: Please disconnect and reconnect the Ulanzi device after installing the rule._
 
 ---
 
@@ -60,12 +63,14 @@ You can run the GUI directly from the cloned repository or via a compiled portab
 ### Option A: Running from Source (No installation required)
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/mariovalney/ulanzi-d200-linux.git
    cd ulanzi-d200-linux
    ```
 
 2. Create a local virtual environment and install dependencies:
+
    ```bash
    python3 -m venv venv
    source venv/bin/activate
@@ -82,6 +87,7 @@ You can run the GUI directly from the cloned repository or via a compiled portab
 If you downloaded a standalone release binary (e.g. `ulanzi-gui`):
 
 1. Make the binary executable:
+
    ```bash
    chmod +x ulanzi-gui
    ```
@@ -99,6 +105,7 @@ Both the GUI and CLI default to using the configuration file located at:
 `~/.config/ulanzi/config.yaml`
 
 ### Basic Configuration Example
+
 ```yaml
 # Global settings
 brightness: 100
@@ -142,16 +149,21 @@ buttons:
 The unified entry point script (`ulanzi_gui/main.py`) or compiled executable (`ulanzi-gui`) can perform all management actions by appending flags:
 
 ### Run the Background Daemon Standalone
+
 To launch the background daemon monitoring the device:
+
 - **From executable:** `./ulanzi-gui --daemon`
 - **From source:** `python ulanzi_gui/main.py --daemon`
 
 ### Run CLI Commands Standalone
+
 To interact with the device or configuration via CLI:
+
 - **From executable:** `./ulanzi-gui --cli [subcommand]`
 - **From source:** `python ulanzi_gui/main.py --cli [subcommand]`
 
 #### Available CLI subcommands:
+
 ```bash
 # Check device connection status
 ./ulanzi-gui --cli status
@@ -176,12 +188,14 @@ To interact with the device or configuration via CLI:
 To configure the daemon to run automatically in the background on startup:
 
 1. Copy the systemd service file:
+
    ```bash
    mkdir -p ~/.config/systemd/user
    cp systemd/ulanzi-daemon.service ~/.config/systemd/user/
    ```
 
 2. Enable and start the service:
+
    ```bash
    systemctl --user daemon-reload
    systemctl --user enable ulanzi-daemon
@@ -210,3 +224,7 @@ The compiled standalone executable will be saved in `dist/ulanzi-gui`.
 ## License
 
 MIT
+
+## Reference
+
+Based on [ulanzi-d200-linux](https://github.com/mariovalney/ulanzi-d200-linux)
