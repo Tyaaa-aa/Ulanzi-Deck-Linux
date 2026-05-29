@@ -34,6 +34,7 @@ class Config:
     sleep_timeout: int = 10
     sleep_brightness: int = 0
     hide_labels: bool = False
+    clock_mode: int = 1  # 0=STATS, 1=CLOCK, 2=BACKGROUND
 
     def __post_init__(self):
         if self.label_style is None:
@@ -78,6 +79,9 @@ class ConfigParser:
 
         if 'hide_labels' in data:
             config.hide_labels = bool(data['hide_labels'])
+
+        if 'clock_mode' in data:
+            config.clock_mode = int(data['clock_mode'])
 
         if 'label_style' in data:
             config.label_style = data['label_style']
@@ -219,6 +223,9 @@ class ConfigParser:
 
         if config.brightness < 0 or config.brightness > 100:
             errors.append("brightness must be between 0 and 100")
+
+        if getattr(config, 'clock_mode', 1) not in (0, 1, 2, 3):
+            errors.append("clock_mode must be 0 (STATS), 1 (CLOCK), 2 (BACKGROUND), or 3 (MEDIA)")
 
         if config.obs_port < 1 or config.obs_port > 65535:
             errors.append("obs.port must be between 1 and 65535")

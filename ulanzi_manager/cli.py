@@ -79,6 +79,20 @@ class UlanziCLI:
                 self.device.set_label_style(style)
                 logger.info("Set label style")
 
+            # Set clock/small window mode
+            clock_mode = getattr(config, 'clock_mode', 1)
+            try:
+                self.device.set_small_window_data({
+                    'mode': clock_mode,
+                    'cpu': 0,
+                    'mem': 0,
+                    'gpu': 0,
+                    'time': '00:00:00'
+                })
+                logger.info(f"Set small window mode to {clock_mode}")
+            except Exception as e:
+                logger.warning(f"Failed to set initial clock mode: {e}")
+
             # Set buttons
             button_dict = {}
             for button in config.buttons:

@@ -704,6 +704,7 @@ class MainWindow(QMainWindow):
             'sleep_timeout': getattr(self.config, 'sleep_timeout', 10),
             'sleep_brightness': getattr(self.config, 'sleep_brightness', 0),
             'hide_labels': getattr(self.config, 'hide_labels', False),
+            'clock_mode': getattr(self.config, 'clock_mode', 1),
             'label_style': self.config.label_style,
             'obs': {
                 'host': self.config.obs_host,
@@ -1210,6 +1211,43 @@ class MainWindow(QMainWindow):
                     break
             
             is_small = idx in SMALL_BUTTON_INDEXES
+            
+            # Special rendering for clock slot (index 13) depending on mode
+            if idx == 13:
+                clock_mode = getattr(self.config, 'clock_mode', 1)
+                if clock_mode == 0:
+                    btn.setIcon(QIcon())
+                    btn.setText("STATS")
+                    btn.update()
+                    continue
+                elif clock_mode == 1:
+                    if btn_cfg and btn_cfg.image and Path(btn_cfg.image).is_file():
+                        pixmap = QPixmap(btn_cfg.image).scaled(
+                            80, 54,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation
+                        )
+                        btn.setIcon(QIcon(pixmap))
+                        btn.setIconSize(QSize(80, 54))
+                    else:
+                        btn.setIcon(QIcon())
+                    btn.setText("CLOCK")
+                    btn.update()
+                    continue
+                elif clock_mode == 3:
+                    if btn_cfg and btn_cfg.image and Path(btn_cfg.image).is_file():
+                        pixmap = QPixmap(btn_cfg.image).scaled(
+                            80, 54,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation
+                        )
+                        btn.setIcon(QIcon(pixmap))
+                        btn.setIconSize(QSize(80, 54))
+                    else:
+                        btn.setIcon(QIcon())
+                    btn.setText("MEDIA")
+                    btn.update()
+                    continue
             
             if btn_cfg and btn_cfg.image and Path(btn_cfg.image).is_file():
                 sz = 28 if is_small else 54
@@ -2126,8 +2164,82 @@ class MainWindow(QMainWindow):
             on_media_changed()
 
     def build_clock_inspector(self):
-        self.scroll_layout.addWidget(QLabel("Clocks are managed dynamically on the device status screen."))
-        self.scroll_layout.addWidget(QLabel("Use the dials to switch modes or configure background status displays."))
+        # Find or create config for button 13
+        btn_cfg = None
+        for b in self.config.buttons:
+            if b.index == 13:
+                btn_cfg = b
+                break
+        if not btn_cfg:
+            btn_cfg = ButtonConfig(index=13, image="", label="Clock Button", action_type="command", action_params={})
+            self.config.buttons.append(btn_cfg)
+
+        # 1. Mode Selection Card
+        mode_card = QFrame()
+        mode_card.setObjectName("settings_card")
+        mode_layout = QFormLayout(mode_card)
+        mode_layout.setContentsMargins(15, 15, 15, 15)
+        mode_layout.setSpacing(10)
+
+        card_title = QLabel("Clock Display Configuration")
+        card_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #a0a0b0; letter-spacing: 1px; text-transform: uppercase;")
+        mode_layout.addRow(card_title)
+
+        self.clock_mode_combo = QComboBox()
+        self.clock_mode_combo.addItems([
+            "System Performance Monitor (CPU/RAM)",
+            "Built-in Clock (Analog & Digital)",
+            "Custom Button (Show Image/Label)",
+            "Currently Playing Media"
+        ])
+        current_mode = getattr(self.config, 'clock_mode', 1)
+        self.clock_mode_combo.setCurrentIndex(current_mode)
+        self.clock_mode_combo.currentIndexChanged.connect(self.on_clock_mode_changed)
+        mode_layout.addRow("Display Mode:", self.clock_mode_combo)
+
+        # Help description based on selected mode
+        help_lbl = QLabel()
+        help_lbl.setWordWrap(True)
+        help_lbl.setStyleSheet("color: #7a7a85; font-size: 12px; margin-top: 5px;")
+        if current_mode == 0:
+            help_lbl.setText("STATS Mode: The big LCD screen will dynamically monitor and display your system's CPU and Memory usage.")
+        elif current_mode == 1:
+            help_lbl.setText("CLOCK Mode: Displays Ulanzi's built-in analog and digital clocks over your configured custom background image.")
+        elif current_mode == 2:
+            help_lbl.setText("BACKGROUND Mode: Hides the built-in clock overlays completely, displaying your custom button image and text. Tapping it triggers custom actions.")
+        elif current_mode == 3:
+            help_lbl.setText("MEDIA Mode: Displays the currently playing track title and artist dynamically. Tapping it triggers custom actions (defaults to play/pause).")
+        mode_layout.addRow(help_lbl)
+
+        self.scroll_layout.addWidget(mode_card)
+
+        # Always build the button inspector to allow custom key mapping/action in every mode
+        self.build_button_inspector()
+
+    def on_clock_mode_changed(self, index):
+        self.config.clock_mode = index
+        
+        # If switching to MEDIA mode (3), set default action to media -> play_pause if no custom action is set
+        if index == 3:
+            btn_cfg = None
+            for b in self.config.buttons:
+                if b.index == 13:
+                    btn_cfg = b
+                    break
+            if btn_cfg:
+                is_empty = False
+                if not btn_cfg.action_type:
+                    is_empty = True
+                elif btn_cfg.action_type == 'command' and not btn_cfg.action_params.get('cmd'):
+                    is_empty = True
+                
+                if is_empty:
+                    btn_cfg.action_type = "media"
+                    btn_cfg.action_params = {"control": "play_pause"}
+
+        self.save_configuration_to_file()
+        self.render_device_mockups()
+        self.build_inspector()  # rebuild clock inspector to update sub-cards
 
     def on_brightness_changed(self, text):
         level = int(text.replace("%", ""))
