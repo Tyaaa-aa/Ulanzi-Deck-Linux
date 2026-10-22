@@ -113,7 +113,7 @@ pub fn build(state: &State) -> gtk::Widget {
             for cat in Category::ALL {
                 let specs: Vec<&'static ActionSpec> = catalog::catalog()
                     .iter()
-                    .filter(|s| s.category == cat && matches(s, query))
+                    .filter(|s| s.category == cat && s.id != "auto_profile" && matches(s, query))
                     .collect();
                 if specs.is_empty() {
                     continue;

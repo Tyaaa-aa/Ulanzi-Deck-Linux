@@ -287,6 +287,11 @@ impl Editor {
         }
     }
 
+    /// Every key back to the label settings from Preferences.
+    pub fn clear_label_overrides(&mut self) {
+        self.edit(|p, _| p.clear_label_overrides());
+    }
+
     pub fn set_model(&mut self, model: Model) {
         self.edit(|p, _| p.model = model);
     }

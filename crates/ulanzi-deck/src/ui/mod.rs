@@ -3,6 +3,7 @@
 pub mod action_editor;
 pub mod canvas;
 pub mod color_popover;
+pub mod how_it_works;
 pub mod icon_picker;
 pub mod inspector;
 pub mod library;

@@ -88,10 +88,7 @@ pub fn shell_quote(s: &str) -> String {
 
 /// The same fix, as commands to paste into a terminal.
 pub fn manual_commands(exe: &Path) -> String {
-    format!(
-        "sudo {} --install-rules\n\n# or by hand:\nsudo cp 70-ulanzi-deck.rules {RULES_DEST}\nsudo udevadm control --reload-rules\nsudo udevadm trigger",
-        shell_quote(&exe.to_string_lossy())
-    )
+    format!("sudo {} --install-rules", shell_quote(&exe.to_string_lossy()))
 }
 
 /// `ulanzi-deck --install-rules`, run as root through pkexec: copy the bundled rules and reload udev.
@@ -225,6 +222,36 @@ fn status_body(icon: &str, title: &str, description: &str) -> adw::StatusPage {
         .build()
 }
 
+/// A header that leaves room for the page's content (no scrolling on small dialogs).
+fn small_header(icon: &str, title: &str, description: &str) -> gtk::Box {
+    let b = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(12)
+        .build();
+    b.append(
+        &gtk::Image::builder()
+            .icon_name(icon)
+            .pixel_size(56)
+            .css_classes(["dim-label"])
+            .build(),
+    );
+    b.append(
+        &gtk::Label::builder()
+            .label(title)
+            .css_classes(["title-1"])
+            .build(),
+    );
+    b.append(
+        &gtk::Label::builder()
+            .label(description)
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .build(),
+    );
+    b
+}
+
 fn check_row(c: &Check) -> adw::ActionRow {
     let row = adw::ActionRow::builder()
         .title(c.title)
@@ -263,7 +290,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, start: Option<&str>) 
     let welcome = status_body(
         "io.github.tyaaa_aa.UlanziDeck",
         "Welcome to Ulanzi Deck",
-        "Set up your Ulanzi D200 in a minute: connect it, allow access, and bring over your old setup.",
+        "Set up your Ulanzi D200/D200X in a minute: connect it, allow access, and bring over your old setup.",
     );
     nav.add(&page("welcome", "Welcome", 0, &welcome, Some(&next)));
 
@@ -288,11 +315,22 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, start: Option<&str>) 
             dialog.close();
         });
     }
-    let done = status_body(
-        "emblem-ok-symbolic",
-        "All Set",
-        "Drag actions from the library onto keys, pick images with Choose…, and press Ctrl+Z if \
-         something goes wrong. Everything is saved and sent to the deck as you go.",
+    let done = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    done.set_margin_top(18);
+    done.append(
+        &gtk::Label::builder()
+            .label("All Set")
+            .css_classes(["title-1"])
+            .build(),
+    );
+    done.append(&crate::ui::how_it_works::build());
+    done.append(
+        &gtk::Label::builder()
+            .label("Changes are saved and sent to the deck as you go. Press Ctrl+Z to undo anything.")
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .css_classes(["dim-label"])
+            .build(),
     );
     nav.add(&page("done", "Done", 5, &done, Some(&finish)));
 
@@ -485,7 +523,7 @@ fn connect_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationPage
 
 fn permissions_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationPage {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    body.append(&status_body(
+    body.append(&small_header(
         "dialog-password-symbolic",
         "Allow Access",
         "Linux only lets programs use the deck and the virtual keyboard with permission. \
@@ -500,36 +538,45 @@ fn permissions_page(state: &State, nav: &adw::NavigationView) -> adw::Navigation
         .build();
     body.append(&grant);
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ulanzi-deck"));
-    let manual = adw::ExpanderRow::builder()
-        .title("Show the Commands")
-        .subtitle("To run them yourself in a terminal")
+    // The same fix for people who prefer a terminal, in plain words.
+    let manual_group = adw::PreferencesGroup::builder()
+        .title("Prefer the Terminal?")
+        .description(
+            "Only needed if Grant Access doesn’t work for you. Run this one command; it asks for \
+             your password once.",
+        )
         .build();
     let text = manual_commands(&exe);
-    let label = gtk::Label::builder()
-        .label(&text)
-        .selectable(true)
-        .wrap(true)
-        .xalign(0.0)
-        .css_classes(["monospace"])
-        .margin_start(12)
-        .margin_end(12)
-        .margin_top(8)
-        .margin_bottom(8)
+    let command = adw::ActionRow::builder()
+        .title(glib::markup_escape_text(&text).as_str())
+        .title_selectable(true)
+        .css_classes(["monospace", "property"])
         .build();
     let copy = gtk::Button::builder()
         .icon_name("edit-copy-symbolic")
-        .tooltip_text("Copy")
+        .tooltip_text("Copy the command")
         .valign(gtk::Align::Center)
         .css_classes(["flat"])
         .build();
     {
         let text = text.clone();
-        copy.connect_clicked(move |b| b.clipboard().set_text(&text));
+        copy.connect_clicked(move |b| {
+            b.clipboard().set_text(&text);
+            b.set_icon_name("object-select-symbolic");
+        });
     }
-    manual.add_suffix(&copy);
-    manual.add_row(&label);
-    let manual_group = adw::PreferencesGroup::new();
-    manual_group.add(&manual);
+    command.add_suffix(&copy);
+    manual_group.add(&command);
+    let what = adw::ActionRow::builder()
+        .title("What it does")
+        .subtitle(
+            "Copies Ulanzi Deck’s device rule to /etc/udev/rules.d/ and reloads it, so your user \
+             can open the deck and the virtual keyboard. Nothing else on the system changes.",
+        )
+        .subtitle_lines(0)
+        .activatable(false)
+        .build();
+    manual_group.add(&what);
     body.append(&manual_group);
 
     let rows: Rc<std::cell::RefCell<Vec<adw::ActionRow>>> = Rc::default();

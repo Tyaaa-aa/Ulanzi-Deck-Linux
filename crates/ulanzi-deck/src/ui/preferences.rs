@@ -306,6 +306,15 @@ fn device_page(state: &State) -> adw::PreferencesPage {
     color_row.add_suffix(&color);
     color_row.set_activatable_widget(Some(&color));
     labels.add(&color_row);
+    let reset = adw::ButtonRow::builder()
+        .title("Reset Every Key to These Settings")
+        .start_icon_name("edit-undo-symbolic")
+        .build();
+    {
+        let state = state.clone();
+        reset.connect_activated(move |b| reset_label_overrides(&state, b));
+    }
+    labels.add(&reset);
     page.add(&labels);
     page
 }
@@ -407,6 +416,53 @@ fn integrations_page(state: &State) -> adw::PreferencesPage {
     input.add(&row);
     page.add(&input);
     page
+}
+
+/// Clear per-key label positions and hidden labels in every profile, after asking.
+fn reset_label_overrides(state: &State, near: &impl IsA<gtk::Widget>) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Reset Every Key’s Label?")
+        .body(
+            "Keys with their own label position or a hidden label go back to the settings above, \
+             in every profile.",
+        )
+        .default_response("cancel")
+        .close_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("reset", "Reset");
+    dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+    let state = state.clone();
+    dialog.connect_response(Some("reset"), move |_, _| {
+        // The open profile through the editor (undoable), the others directly.
+        state.edit(|e| e.clear_label_overrides());
+        let current = state.profile_id();
+        let others: Vec<uuid::Uuid> = state
+            .profiles
+            .borrow()
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| *id != current)
+            .collect();
+        if let Some(c) = state.client.borrow().clone() {
+            let st = state.clone();
+            runtime::run(
+                async move {
+                    for id in others {
+                        let mut p = c.profile(id).await?;
+                        p.clear_label_overrides();
+                        c.apply_now(&p).await?;
+                    }
+                    Ok::<(), crate::client::ClientError>(())
+                },
+                move |r| match r {
+                    Ok(()) => crate::ui::toast(&st, "Labels reset on every key"),
+                    Err(e) => crate::ui::toast(&st, &format!("Not all profiles were reset: {e}")),
+                },
+            );
+        }
+    });
+    dialog.present(Some(near));
 }
 
 /// Open the preferences dialog.

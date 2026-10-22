@@ -951,6 +951,8 @@ pub fn picker_button(
     let specs: Vec<&'static catalog::ActionSpec> = catalog::catalog()
         .iter()
         .filter(|s| allow_multi || s.id != "multi")
+        // Per-app switching arrives later; until then the action would do nothing useful.
+        .filter(|s| s.id != "auto_profile")
         .collect();
     let mut index: Vec<Option<usize>> = Vec::new();
     for cat in Category::ALL {
