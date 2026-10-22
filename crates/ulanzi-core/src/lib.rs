@@ -2,6 +2,7 @@
 
 pub mod catalog;
 mod color;
+pub mod edit;
 mod error;
 pub mod migrate;
 pub mod model;
