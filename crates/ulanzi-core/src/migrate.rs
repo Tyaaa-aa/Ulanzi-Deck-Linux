@@ -117,7 +117,7 @@ pub fn migrate_legacy(yaml: &Path, store: &Store, force: bool) -> Result<Migrati
             })),
             hold: None,
         },
-        _ => ScreenConfig::FirmwareClock,
+        _ => ScreenConfig::default(),
     };
     if screen_tap.is_some() {
         m.warn(

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
-use ulanzi_core::model::{Action, BrightnessOp, Model, Profile, ScreenConfig, Settings};
+use ulanzi_core::model::{Action, BrightnessOp, ClockStyle, Model, Profile, ScreenConfig, Settings};
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_proto::{
@@ -404,10 +404,20 @@ impl Deck {
     }
 
     async fn send_window(&mut self) {
-        let mode = match self.profile().screen {
-            ScreenConfig::FirmwareClock => ScreenMode::Clock,
-            ScreenConfig::FirmwareStats => ScreenMode::Stats,
-            ScreenConfig::Custom { .. } => ScreenMode::Image,
+        let now = chrono::Local::now();
+        let (mode, date) = match self.profile().screen {
+            ScreenConfig::FirmwareClock { style } => match style {
+                ClockStyle::Classic => (ScreenMode::Clock, String::new()),
+                ClockStyle::DateWeekday => (
+                    ScreenMode::ClockDateWeekday,
+                    now.format("%Y-%m-%d %a").to_string(),
+                ),
+                ClockStyle::Weekday => (ScreenMode::ClockWeekday, now.format("%a").to_string()),
+                ClockStyle::Date => (ScreenMode::ClockDate, now.format("%Y-%m-%d").to_string()),
+                ClockStyle::Large => (ScreenMode::ClockLarge, String::new()),
+            },
+            ScreenConfig::FirmwareStats => (ScreenMode::Stats, String::new()),
+            ScreenConfig::Custom { .. } => (ScreenMode::Image, String::new()),
         };
         let pct = |k: &str| {
             self.dynamic
@@ -420,10 +430,10 @@ impl Deck {
             mode,
             cpu: pct("cpu"),
             mem: pct("ram"),
-            time: chrono::Local::now().format("%H:%M:%S").to_string(),
+            time: now.format("%H:%M:%S").to_string(),
             gpu: pct("gpu"),
             clock_24h: true,
-            date: String::new(),
+            date,
         };
         self.send(&[small_window(&w)]).await;
     }

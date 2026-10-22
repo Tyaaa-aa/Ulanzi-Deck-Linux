@@ -67,11 +67,13 @@ pub struct Dial {
     pub hold: Option<Action>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScreenConfig {
-    #[default]
-    FirmwareClock,
+    FirmwareClock {
+        #[serde(default)]
+        style: ClockStyle,
+    },
     FirmwareStats,
     Custom {
         widgets: Vec<Widget>,
@@ -80,6 +82,47 @@ pub enum ScreenConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hold: Option<Action>,
     },
+}
+
+impl Default for ScreenConfig {
+    fn default() -> Self {
+        ScreenConfig::FirmwareClock {
+            style: ClockStyle::Classic,
+        }
+    }
+}
+
+/// The deck's built-in clock layouts (drawn by the firmware over the wide-screen image).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClockStyle {
+    /// Analogue dial and digital time.
+    #[default]
+    Classic,
+    DateWeekday,
+    Weekday,
+    Date,
+    Large,
+}
+
+impl ClockStyle {
+    pub const ALL: [ClockStyle; 5] = [
+        ClockStyle::Classic,
+        ClockStyle::DateWeekday,
+        ClockStyle::Weekday,
+        ClockStyle::Date,
+        ClockStyle::Large,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            ClockStyle::Classic => "Clock with dial",
+            ClockStyle::DateWeekday => "Clock, date and weekday",
+            ClockStyle::Weekday => "Clock and weekday",
+            ClockStyle::Date => "Clock and date",
+            ClockStyle::Large => "Large clock",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

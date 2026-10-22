@@ -254,7 +254,12 @@ fn second_run_refuses_without_force() {
 fn clock_modes_map() {
     for (mode, expected) in [
         (0, ScreenConfig::FirmwareStats),
-        (1, ScreenConfig::FirmwareClock),
+        (
+            1,
+            ScreenConfig::FirmwareClock {
+                style: ClockStyle::Classic,
+            },
+        ),
         (
             2,
             ScreenConfig::Custom {

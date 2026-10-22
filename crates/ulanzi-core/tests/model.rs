@@ -258,3 +258,21 @@ fn settings_file_is_private() {
         & 0o777;
     assert_eq!(mode, 0o600, "settings.toml can hold the OBS password");
 }
+
+#[test]
+fn clock_style_defaults_and_roundtrips() {
+    // Files written before clock styles existed still load (style defaults to the classic clock).
+    let old: ScreenConfig = toml::from_str("mode = \"firmware_clock\"").expect("old format");
+    assert_eq!(
+        old,
+        ScreenConfig::FirmwareClock {
+            style: ClockStyle::Classic
+        }
+    );
+    let new = ScreenConfig::FirmwareClock {
+        style: ClockStyle::DateWeekday,
+    };
+    let text = toml::to_string(&new).expect("toml");
+    assert_eq!(toml::from_str::<ScreenConfig>(&text).expect("back"), new);
+    assert_eq!(ClockStyle::ALL.len(), 5);
+}
