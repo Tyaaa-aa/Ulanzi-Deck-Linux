@@ -89,8 +89,7 @@ impl Panel {
             .build();
         stack.add_named(&scroller, Some("inspector"));
 
-        let library = adw::StatusPage::builder().title("Actions").build();
-        stack.add_named(&library, Some("library"));
+        stack.add_named(&crate::ui::library::build(state), Some("library"));
 
         let ctx: C = Rc::new(Ctx {
             state: state.clone(),

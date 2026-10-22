@@ -63,6 +63,8 @@ pub fn hit_zone(width: f64, x: f64) -> DialZone {
 pub enum Payload {
     Key(u8),
     Action(ulanzi_core::model::Action),
+    /// An image file dropped from a file manager.
+    File(std::path::PathBuf),
 }
 
 pub fn action_payload(a: &ulanzi_core::model::Action) -> String {
@@ -79,7 +81,8 @@ pub fn parse_payload(s: &str) -> Option<Payload> {
 
 /// Accept dragged keys and actions on `w`; `on_drop` gets the payload and the drop x position.
 fn accept_drops(w: &gtk::Button, on_drop: impl Fn(Payload, f64) + 'static) {
-    let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    let target = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    target.set_types(&[glib::Type::STRING, gdk::FileList::static_type()]);
     {
         let w = w.clone();
         target.connect_enter(move |_, _, _| {
@@ -95,7 +98,11 @@ fn accept_drops(w: &gtk::Button, on_drop: impl Fn(Payload, f64) + 'static) {
         let w = w.clone();
         target.connect_drop(move |_, value, x, _| {
             w.remove_css_class("drop-target");
-            match value.get::<String>().ok().and_then(|s| parse_payload(&s)) {
+            let payload = match value.get::<gdk::FileList>() {
+                Ok(files) => files.files().first().and_then(|f| f.path()).map(Payload::File),
+                Err(_) => value.get::<String>().ok().and_then(|s| parse_payload(&s)),
+            };
+            match payload {
                 Some(p) => {
                     on_drop(p, x);
                     true
@@ -382,6 +389,12 @@ pub fn build(state: &State) -> Canvas {
             Payload::Action(a) => {
                 state.edit(|e| e.drop_action(Slot::Key(n), a));
                 state.select(|s| s.click(Slot::Key(n)));
+            }
+            Payload::File(path) => {
+                // Dropping on a selected key sets the image on the whole selection.
+                let sel = state.selection.borrow().keys();
+                let keys = if sel.contains(&n) { sel } else { vec![n] };
+                crate::ui::icon_picker::import_into(&state, &path, &keys);
             }
         });
     }

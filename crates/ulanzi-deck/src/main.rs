@@ -19,6 +19,8 @@ struct Shot {
     size: (i32, i32),
     dark: Option<bool>,
     select: Option<String>,
+    /// `library` or `picker:<tab>`.
+    open: Option<String>,
 }
 
 fn parse_size(s: &str) -> Option<(i32, i32)> {
@@ -40,6 +42,7 @@ fn parse_args() -> Option<Shot> {
         size: get("--size").and_then(|s| parse_size(&s)).unwrap_or((1280, 800)),
         dark: get("--theme").map(|t| t == "dark"),
         select: get("--select"),
+        open: get("--open"),
     })
 }
 
@@ -101,10 +104,10 @@ fn main() -> glib::ExitCode {
             // A fixed-size window: the compositor would otherwise restore the size it remembers.
             win.window.set_default_size(shot.size.0, shot.size.1);
             win.window.set_size_request(shot.size.0, shot.size.1);
-            win.window.set_resizable(false);
         }
         win.window.present();
         let window = win.window.clone();
+        let library_toggle = win.library_toggle.clone();
         let app = app.clone();
         let state2 = state.clone();
         let shot = shot.clone();
@@ -121,7 +124,14 @@ fn main() -> glib::ExitCode {
                     _ => {}
                 });
             }
-            glib::timeout_add_local_once(Duration::from_millis(900), move || {
+            match shot.open.as_deref() {
+                Some("library") => library_toggle.set_active(true),
+                Some(o) if o.starts_with("picker") => {
+                    ui::icon_picker::open_at(&state2, &window, o.split_once(':').map(|(_, t)| t))
+                }
+                _ => {}
+            }
+            glib::timeout_add_local_once(Duration::from_millis(1200), move || {
                 let (min, nat, _, _) = window.measure(gtk::Orientation::Horizontal, -1);
                 eprintln!(
                     "window {}x{} (min width {min}, natural {nat})",

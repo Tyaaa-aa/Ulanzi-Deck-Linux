@@ -187,3 +187,20 @@ fn crc32(data: &[u8]) -> u32 {
     }
     !c
 }
+
+#[test]
+fn small_icon_for_pickers() {
+    use ulanzi_core::model::IconSet;
+    let lib = ulanzi_core::render::IconLibrary::bundled();
+    let red = ulanzi_core::Color::rgb(255, 0, 0);
+    for (set, name) in [(IconSet::Lucide, "play"), (IconSet::Brands, "steam")] {
+        let png = lib.icon_png(set, name, 48, red).expect(name);
+        let img = image::load_from_memory(&png).expect("png").to_rgba8();
+        assert_eq!(img.dimensions(), (48, 48));
+        assert!(
+            img.pixels().any(|p| p.0 == [255, 0, 0, 255]),
+            "{name} has no solid red pixel"
+        );
+    }
+    assert!(lib.icon_png(IconSet::Lucide, "no-such-icon", 48, red).is_none());
+}

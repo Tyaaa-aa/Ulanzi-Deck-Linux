@@ -234,3 +234,18 @@ colorbutton.mixed > button,
   background-color: alpha(@window_fg_color, 0.08);
   box-shadow: inset 0 -1px alpha(@window_fg_color, 0.2);
 }
+
+/* Image picker */
+.picker-grid > child {
+  border-radius: 10px;
+  padding: 6px 2px;
+}
+
+.picker-emoji {
+  font-size: 30px;
+  min-height: 40px;
+}
+
+.picker-image {
+  border-radius: 6px;
+}

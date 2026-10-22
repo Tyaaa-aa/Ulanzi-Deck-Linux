@@ -2,7 +2,9 @@
 
 pub mod action_editor;
 pub mod canvas;
+pub mod icon_picker;
 pub mod inspector;
+pub mod library;
 pub mod sidebar;
 pub mod window;
 

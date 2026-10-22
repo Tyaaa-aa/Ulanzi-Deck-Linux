@@ -3,6 +3,10 @@ use std::sync::OnceLock;
 
 use include_dir::{Dir, include_dir};
 
+use resvg::tiny_skia::{Pixmap, Transform};
+use resvg::usvg;
+
+use crate::Color;
 use crate::model::IconSet;
 
 static LUCIDE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/lucide");
@@ -37,6 +41,38 @@ impl IconLibrary {
         };
         map.into_iter().flat_map(|m| m.keys().copied())
     }
+
+    /// The icon alone, `px` square on transparent, as PNG (for pickers and previews).
+    pub fn icon_png(&self, set: IconSet, name: &str, px: u32, fg: Color) -> Option<Vec<u8>> {
+        let svg = colorize(self.svg(set, name)?, fg);
+        let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+        let size = tree.size();
+        let k = px as f32 / size.width().max(size.height());
+        let (ox, oy) = (
+            (px as f32 - size.width() * k) / 2.0,
+            (px as f32 - size.height() * k) / 2.0,
+        );
+        let mut pix = Pixmap::new(px, px)?;
+        resvg::render(
+            &tree,
+            Transform::from_scale(k, k).post_translate(ox, oy),
+            &mut pix.as_mut(),
+        );
+        pix.encode_png().ok()
+    }
+}
+
+/// Give an icon the colour `fg` (Simple Icons have none, so their root gets a fill).
+pub(crate) fn colorize(svg: &str, fg: Color) -> String {
+    let svg = if svg.contains("currentColor") {
+        svg.to_string()
+    } else {
+        svg.replacen("<svg ", "<svg fill=\"currentColor\" ", 1)
+    };
+    svg.replace(
+        "currentColor",
+        &format!("#{:02x}{:02x}{:02x}", fg.0[0], fg.0[1], fg.0[2]),
+    )
 }
 
 fn load(dir: &'static Dir<'static>) -> BTreeMap<&'static str, &'static str> {

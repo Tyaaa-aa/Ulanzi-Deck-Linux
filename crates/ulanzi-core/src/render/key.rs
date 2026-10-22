@@ -87,16 +87,7 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
 }
 
 fn draw_svg(pix: &mut Pixmap, svg: &str, fg: Color, scale: f32) -> Result<(), String> {
-    // Simple Icons have no colour; give the root a fill so they take the foreground colour.
-    let svg = if svg.contains("currentColor") {
-        svg.to_string()
-    } else {
-        svg.replacen("<svg ", "<svg fill=\"currentColor\" ", 1)
-    };
-    let svg = svg.replace(
-        "currentColor",
-        &format!("#{:02x}{:02x}{:02x}", fg.0[0], fg.0[1], fg.0[2]),
-    );
+    let svg = super::icons::colorize(svg, fg);
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).map_err(|e| e.to_string())?;
     let size = tree.size();
     let box_px = KEY_PX as f32 * scale.clamp(0.05, 1.0);

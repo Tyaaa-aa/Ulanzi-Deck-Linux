@@ -13,6 +13,7 @@ use crate::ui::{canvas, inspector, sidebar};
 pub struct Window {
     pub window: adw::ApplicationWindow,
     pub inner_split: adw::OverlaySplitView,
+    pub library_toggle: gtk::ToggleButton,
 }
 
 fn status_pill(state: &State) -> gtk::MenuButton {
@@ -304,7 +305,11 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     }
 
     install_actions(&window, state);
-    Window { window, inner_split }
+    Window {
+        window,
+        inner_split,
+        library_toggle,
+    }
 }
 
 fn install_actions(window: &adw::ApplicationWindow, state: &State) {
@@ -367,6 +372,22 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
             s.edit(|e| e.clear(&keys));
         }),
     );
+    {
+        let pick = gio::SimpleAction::new("pick-image", None);
+        let (s, w) = (state.clone(), window.clone());
+        pick.connect_activate(move |_, _| crate::ui::icon_picker::open(&s, &w));
+        let update = {
+            let (s, pick) = (state.clone(), pick.clone());
+            move || pick.set_enabled(!s.selection.borrow().keys().is_empty())
+        };
+        update();
+        state.on(move |c| {
+            if c == Change::Selection {
+                update();
+            }
+        });
+        window.add_action(&pick);
+    }
     let s = state.clone();
     action(
         "deselect",
