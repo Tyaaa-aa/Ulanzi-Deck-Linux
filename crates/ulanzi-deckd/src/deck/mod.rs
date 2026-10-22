@@ -205,7 +205,10 @@ impl Deck {
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let hold_deadline = self.press.next_deadline();
-            let upload_at = if self.upload_pending {
+            // Only arm the upload timer when an upload can actually happen; otherwise a deadline in
+            // the past would fire on every loop and spin a core.
+            let can_upload = self.transport.is_some() && self.awaiting_info.is_none();
+            let upload_at = if self.upload_pending && can_upload {
                 self.next_upload_at
             } else {
                 None
@@ -256,6 +259,7 @@ impl Deck {
             }
             DeckMsg::DeviceDown(state) => {
                 self.transport = None;
+                self.upload_pending = false;
                 self.set_device(state);
             }
             DeckMsg::Apply { profile } => {
@@ -491,6 +495,8 @@ impl Deck {
         self.transport = None;
         self.shown = None;
         self.firmware = None;
+        // configure() uploads the whole page on reconnect anyway.
+        self.upload_pending = false;
         self.set_device(DeviceState::NotFound);
     }
 

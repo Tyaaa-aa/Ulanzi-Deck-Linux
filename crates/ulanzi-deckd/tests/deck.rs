@@ -567,3 +567,44 @@ fn uploads_are_two_seconds_apart() {
     assert_eq!(upload_cooldown(0), Duration::from_secs(2));
     assert_eq!(upload_cooldown(300 * 1024), Duration::from_secs(2));
 }
+
+/// CPU time (user + system) this process has used, in clock ticks.
+fn cpu_ticks() -> u64 {
+    let stat = std::fs::read_to_string("/proc/self/stat").expect("stat");
+    let after = &stat[stat.rfind(')').expect("comm") + 2..];
+    let f: Vec<&str> = after.split_whitespace().collect();
+    f[11].parse::<u64>().expect("utime") + f[12].parse::<u64>().expect("stime")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_busy_loop_when_the_deck_goes_away_with_an_upload_pending() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
+    store.save_profile(&profile()).expect("save");
+    let (tx, _events) = spawn_deck(store, Settings::default(), Arc::new(FakeRunner::default()));
+    let (t, mock) = answering_mock();
+    tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
+        .await
+        .expect("up");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // A live change inside the upload cooldown leaves an upload pending...
+    let playing = DynamicState {
+        playing: Some(true),
+        ..DynamicState::default()
+    };
+    tx.send(DeckMsg::Dynamic(playing)).await.expect("dynamic");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // ...then the deck disappears.
+    mock.inject
+        .send(Err(std::io::Error::from_raw_os_error(19)))
+        .await
+        .expect("unplug");
+    tokio::time::sleep(Duration::from_millis(3000)).await;
+    let before = cpu_ticks();
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let used = cpu_ticks() - before;
+    assert!(
+        used < 30,
+        "the deck loop used {used} ticks of CPU in 1 s while unplugged"
+    );
+}
