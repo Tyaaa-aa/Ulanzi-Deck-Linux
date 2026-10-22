@@ -33,7 +33,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 include_dir = "0.7"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
-zbus = { version = "6", default-features = false, features = ["tokio"] }
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 evdev = "0.13"
 rustix = { version = "1", features = ["fs", "process", "std"] }
 inotify = "0.11"
