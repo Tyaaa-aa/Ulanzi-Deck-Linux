@@ -4,6 +4,7 @@ mod color;
 mod error;
 pub mod migrate;
 pub mod model;
+pub mod render;
 pub mod store;
 
 pub use color::{Color, ColorParseError};

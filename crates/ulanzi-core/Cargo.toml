@@ -16,6 +16,10 @@ toml.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+resvg.workspace = true
+image.workspace = true
+include_dir.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+image.workspace = true
