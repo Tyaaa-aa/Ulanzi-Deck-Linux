@@ -35,8 +35,17 @@ use crate::transport::{DeviceState, Transport};
 const TICK: Duration = Duration::from_secs(1);
 /// Re-send unlock this often, in case the deck locked anyway.
 const UNLOCK_EVERY: Duration = Duration::from_secs(30);
-/// Minimum time between uploads: the deck shows garbage when uploads arrive back to back.
+/// Minimum time between uploads: the deck shows garbage, or reboots, when uploads arrive while it is
+/// still unpacking the previous one.
 const MIN_UPLOAD_GAP: Duration = Duration::from_secs(1);
+/// How long to wait for the device-info reply (the deck's "ready") before uploading anyway.
+const INFO_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Time the deck needs after an upload of `bytes` before it can take another: one second plus about
+/// 4 ms per KB (a typical 300 KB page waits ~2.2 s).
+pub fn upload_cooldown(bytes: usize) -> Duration {
+    MIN_UPLOAD_GAP + Duration::from_millis(bytes as u64 * 4 / 1024)
+}
 
 /// The page last uploaded: (profile, page index) and its manifest entries.
 struct Shown {
@@ -119,7 +128,10 @@ struct Deck {
     cache: RenderCache,
     /// What the deck shows now, for partial updates.
     shown: Option<Shown>,
-    last_upload: Option<Instant>,
+    /// No upload before this (the deck is unpacking the previous one).
+    next_upload_at: Option<Instant>,
+    /// Set from connect until the deck answers the info request.
+    awaiting_info: Option<Instant>,
     upload_pending: bool,
     /// The pending upload must be a full page (a connect or page change asked for it).
     pending_full: bool,
@@ -171,7 +183,8 @@ impl Deck {
             dynamic: DynamicState::default(),
             cache: RenderCache::default(),
             shown: None,
-            last_upload: None,
+            next_upload_at: None,
+            awaiting_info: None,
             upload_pending: false,
             pending_full: false,
             last_unlock: now,
@@ -192,9 +205,10 @@ impl Deck {
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let hold_deadline = self.press.next_deadline();
-            let upload_at = match (self.upload_pending, self.last_upload) {
-                (true, Some(t)) => Some(t + MIN_UPLOAD_GAP),
-                _ => None,
+            let upload_at = if self.upload_pending {
+                self.next_upload_at
+            } else {
+                None
             };
             let transport = self.transport.as_mut();
             tokio::select! {
@@ -325,6 +339,14 @@ impl Deck {
             sleep_time(0),
         ])
         .await;
+        // The page goes out once the deck answers the info request (it is ready then), or after
+        // INFO_TIMEOUT. Uploading the moment a rebooted deck reappears leaves it on its factory page.
+        self.awaiting_info = Some(Instant::now());
+    }
+
+    /// The deck is ready (or we stopped waiting): upload the page and the wide screen.
+    async fn deck_ready(&mut self) {
+        self.awaiting_info = None;
         self.push_page(true).await;
         self.send_window().await;
     }
@@ -345,6 +367,9 @@ impl Deck {
                         json.split_whitespace().collect::<Vec<_>>().join(" ")
                     );
                     self.firmware = fw;
+                }
+                if self.awaiting_info.is_some() {
+                    self.deck_ready().await;
                 }
             }
             DeviceReport::Other(code) => tracing::debug!("unhandled report {code:#06x}"),
@@ -382,18 +407,17 @@ impl Deck {
     }
 
     /// Upload the current page if anything changed: the whole page when the page or profile changed
-    /// (or with `force`), otherwise only the changed keys. Every upload is spaced by [`MIN_UPLOAD_GAP`]:
-    /// a request inside the gap is remembered and sent, with the latest state, when it ends.
+    /// (or with `force`), otherwise only the changed keys. After each upload the deck needs time to
+    /// unpack it ([`upload_cooldown`]); a request inside that time is remembered and sent, with the
+    /// latest state, when it ends.
     async fn push_page(&mut self, force: bool) {
-        if self.transport.is_none() {
+        // Before the deck is ready, deck_ready() does the upload.
+        if self.transport.is_none() || self.awaiting_info.is_some() {
             return;
         }
         let now = Instant::now();
-        // Even a forced (full) upload waits out the gap; the deck cannot take uploads back to back.
-        if self
-            .last_upload
-            .is_some_and(|t| now.duration_since(t) < MIN_UPLOAD_GAP)
-        {
+        // Even a forced (full) upload waits; a second upload while the deck unpacks crashes it.
+        if self.next_upload_at.is_some_and(|t| now < t) {
             self.upload_pending = true;
             self.pending_full |= force;
             return;
@@ -449,8 +473,15 @@ impl Deck {
                 file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images))
             }
         };
+        let bytes = packets.len() * ulanzi_proto::PACKET_SIZE;
         if self.send(&packets).await {
-            self.last_upload = Some(now);
+            let done = Instant::now();
+            tracing::info!(
+                "upload of {} KB sent in {} ms",
+                bytes / 1024,
+                done.duration_since(now).as_millis()
+            );
+            self.next_upload_at = Some(done + upload_cooldown(bytes));
             self.shown = Some(Shown {
                 at: here,
                 entries: built.entries,
@@ -482,6 +513,13 @@ impl Deck {
 
     async fn on_tick(&mut self) {
         let now = Instant::now();
+        if self
+            .awaiting_info
+            .is_some_and(|t| now.duration_since(t) >= INFO_TIMEOUT)
+        {
+            tracing::warn!("the deck did not answer the info request; uploading anyway");
+            self.deck_ready().await;
+        }
         if self.sleep.should_sleep(now) {
             self.sleep.sleep();
             tracing::info!("sleeping after inactivity");

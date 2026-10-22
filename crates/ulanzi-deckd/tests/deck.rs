@@ -116,12 +116,12 @@ async fn rig_with(settings: Settings) -> Rig {
     };
     let runner = FakeRunner::default();
     let (tx, events) = spawn_deck(store, settings, Arc::new(runner.clone()));
-    let (t, mock) = MockTransport::new();
+    let (t, mock) = answering_mock();
     tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
         .await
         .expect("send");
     // Let the connect upload's spacing window pass so each test starts from a quiet deck.
-    tokio::time::sleep(Duration::from_millis(1100)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     Rig {
         _dir: dir,
         tx,
@@ -320,7 +320,7 @@ async fn unplug_mid_upload_repushes_on_reconnect() {
         saw_down |= matches!(e, DeckEvent::State(DeviceState::NotFound));
     }
     assert!(saw_down);
-    let (t2, mock2) = MockTransport::new();
+    let (t2, mock2) = answering_mock();
     r.tx.send(DeckMsg::DeviceUp(Box::new(t2), "/dev/mock".into()))
         .await
         .expect("send");
@@ -401,6 +401,13 @@ fn info_frame() -> Vec<u8> {
     v
 }
 
+/// A mock deck that answers like the real one (see [`answer_info_requests`]).
+fn answering_mock() -> (MockTransport, MockHandle) {
+    let (t, m) = MockTransport::new();
+    answer_info_requests(m.clone());
+    (t, m)
+}
+
 /// Answer like the real deck: an info frame for every info request, and (seen on hardware) for unlock too.
 fn answer_info_requests(mock: MockHandle) {
     tokio::spawn(async move {
@@ -425,7 +432,6 @@ fn answer_info_requests(mock: MockHandle) {
 #[tokio::test(start_paused = true)]
 async fn device_info_replies_do_not_loop() {
     let r = rig().await;
-    answer_info_requests(r.mock.clone());
     tokio::time::sleep(Duration::from_secs(3)).await;
     let cmds = r.mock.commands();
     assert_eq!(cmds.iter().filter(|c| **c == INFO).count(), 1, "{cmds:?}");
@@ -447,12 +453,12 @@ async fn info_storm_cannot_flood_uploads() {
 #[tokio::test(start_paused = true)]
 async fn full_uploads_respect_the_gap_too() {
     let r = rig().await;
-    let (t2, mock2) = MockTransport::new();
+    let (t2, mock2) = answering_mock();
     r.tx.send(DeckMsg::DeviceUp(Box::new(t2), "/dev/mock".into()))
         .await
         .expect("up");
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let (t3, mock3) = MockTransport::new();
+    let (t3, mock3) = answering_mock();
     r.tx.send(DeckMsg::DeviceUp(Box::new(t3), "/dev/mock".into()))
         .await
         .expect("up");
@@ -505,7 +511,7 @@ fn uploaded_manifest(packets: &[ulanzi_proto::Packet]) -> String {
 async fn reconnect_uses_fresh_image_names() {
     let r = rig().await;
     let first = uploaded_manifest(&r.mock.sent());
-    let (t2, mock2) = MockTransport::new();
+    let (t2, mock2) = answering_mock();
     r.tx.send(DeckMsg::DeviceUp(Box::new(t2), "/dev/mock".into()))
         .await
         .expect("up");
@@ -516,4 +522,47 @@ async fn reconnect_uses_fresh_image_names() {
         first, second,
         "the deck caches by file name, so a new full upload must use new names"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn page_waits_for_the_device_info_reply() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
+    store.save_profile(&profile()).expect("save");
+    let (tx, _events) = spawn_deck(store, Settings::default(), Arc::new(FakeRunner::default()));
+    let (t, mock) = MockTransport::new(); // a deck that has not answered yet
+    tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
+        .await
+        .expect("up");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(mock.commands().contains(&INFO));
+    assert!(
+        !mock.commands().contains(&BUTTONS),
+        "no upload before the deck said it is ready"
+    );
+    mock.inject.send(Ok(info_frame())).await.expect("reply");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(mock.commands().contains(&BUTTONS));
+}
+
+#[tokio::test(start_paused = true)]
+async fn page_is_sent_anyway_when_the_deck_never_answers() {
+    let dir = tempfile::tempdir().expect("tmp");
+    let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
+    store.save_profile(&profile()).expect("save");
+    let (tx, _events) = spawn_deck(store, Settings::default(), Arc::new(FakeRunner::default()));
+    let (t, mock) = MockTransport::new();
+    tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
+        .await
+        .expect("up");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(mock.commands().contains(&BUTTONS));
+}
+
+#[test]
+fn cooldown_grows_with_upload_size() {
+    use ulanzi_deckd::deck::upload_cooldown;
+    assert_eq!(upload_cooldown(0), Duration::from_secs(1));
+    assert!(upload_cooldown(300 * 1024) >= Duration::from_secs(2));
+    assert!(upload_cooldown(300 * 1024) <= Duration::from_secs(3));
 }

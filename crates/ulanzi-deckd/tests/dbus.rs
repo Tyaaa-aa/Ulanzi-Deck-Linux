@@ -67,6 +67,10 @@ async fn rig() -> Option<Rig> {
     tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
         .await
         .expect("up");
+    // Answer the info request like the real deck, so the page upload is not held back.
+    let mut info = vec![0x7c, 0x7c, 0x03, 0x03, 2, 0, 0, 0, b'{', b'}'];
+    info.resize(1024, 0);
+    mock.inject.send(Ok(info)).await.expect("info");
 
     let server = zbus::connection::Builder::address(bus.addr.as_str())
         .expect("addr")
