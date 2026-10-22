@@ -466,10 +466,17 @@ impl Editor {
         if from >= n || to >= n || from == to {
             return;
         }
+        let current = self.profile.pages[self.page].id;
         self.edit(|p, _| {
             let pg = p.pages.remove(from);
             p.pages.insert(to, pg);
         });
-        self.page = to;
+        // Stay on the page that was open.
+        self.page = self
+            .profile
+            .pages
+            .iter()
+            .position(|p| p.id == current)
+            .unwrap_or(0);
     }
 }

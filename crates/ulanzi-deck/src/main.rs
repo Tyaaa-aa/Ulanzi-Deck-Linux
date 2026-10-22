@@ -49,6 +49,21 @@ fn parse_args() -> Option<Shot> {
     })
 }
 
+/// Depth-first search for a widget (screenshot mode only).
+fn find_widget(root: &gtk::Widget, pred: &dyn Fn(&gtk::Widget) -> bool) -> Option<gtk::Widget> {
+    if pred(root) {
+        return Some(root.clone());
+    }
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        if let Some(found) = find_widget(&c, pred) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
+}
+
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(include_str!("style.css"));
@@ -208,6 +223,26 @@ fn main() -> glib::ExitCode {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
+                Some(o) if o.starts_with("color") => {
+                    // Open the first colour button's popover (after the inspector is built).
+                    let (window, custom) = (window.clone(), o.ends_with(":custom"));
+                    glib::timeout_add_local_once(Duration::from_millis(300), move || {
+                        if let Some(b) = find_widget(window.upcast_ref(), &|w| {
+                            w.tooltip_text().as_deref() == Some("Choose a colour")
+                        }) && let Ok(b) = b.downcast::<gtk::MenuButton>()
+                        {
+                            b.popup();
+                            if custom
+                                && let Some(pop) = b.popover()
+                                && let Some(t) =
+                                    find_widget(pop.upcast_ref(), &|w| w.is::<gtk::ToggleButton>())
+                                && let Ok(t) = t.downcast::<gtk::ToggleButton>()
+                            {
+                                t.set_active(true);
+                            }
+                        }
+                    });
+                }
                 Some("about") => {
                     gio::prelude::ActionGroupExt::activate_action(&app, "about", None);
                 }

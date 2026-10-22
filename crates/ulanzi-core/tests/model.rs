@@ -314,3 +314,15 @@ fn old_profile_wide_dials_move_onto_every_page() {
     let again = toml::to_string(&p).expect("ser");
     assert!(!again.contains("[[dials]]"), "{again}");
 }
+
+#[test]
+fn profiles_follow_the_saved_order() {
+    use uuid::Uuid;
+    let (a, b, c) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+    let mut list = vec![(a, "A".to_string()), (b, "B".to_string()), (c, "C".to_string())];
+    // c first, then a; b is not in the saved order so it goes last.
+    ulanzi_core::model::order_profiles(&mut list, &[c, a]);
+    assert_eq!(list.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![c, a, b]);
+    let s: ulanzi_core::model::Settings = toml::from_str("").expect("defaults");
+    assert!(s.profile_order.is_empty());
+}

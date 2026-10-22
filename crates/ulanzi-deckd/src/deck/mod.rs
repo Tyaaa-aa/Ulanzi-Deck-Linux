@@ -342,7 +342,12 @@ impl Deck {
                     profile: p.id,
                     profile_name: p.name.clone(),
                     page: self.nav.page,
-                    profiles: self.profiles.iter().map(|p| (p.id, p.name.clone())).collect(),
+                    profiles: {
+                        let mut list: Vec<(Uuid, String)> =
+                            self.profiles.iter().map(|p| (p.id, p.name.clone())).collect();
+                        ulanzi_core::model::order_profiles(&mut list, &self.settings.profile_order);
+                        list
+                    },
                     firmware: self.firmware.clone(),
                 });
             }

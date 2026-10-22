@@ -27,6 +27,8 @@ pub enum Change {
     Pressed(Slot),
     /// A live preview of an appearance change on the selected keys started or ended.
     Preview,
+    /// Dragging an action from the library started or ended.
+    Drag,
 }
 
 /// Device / service status shown in the header pill and banner.
@@ -54,6 +56,8 @@ pub struct AppState {
     pub demo: Cell<bool>,
     /// True while the inspector applies its own edit (it then refreshes itself without a rebuild).
     pub inspector_edit: Cell<bool>,
+    /// An action from the library is being dragged (the dials show their drop zones).
+    pub dragging_action: Cell<bool>,
     /// An appearance change shown on the selected keys before it is applied (hovering a colour).
     pub preview: RefCell<Option<ulanzi_core::edit::Field>>,
     /// Expandable rows the user opened, by path, so rebuilding the inspector keeps them open.
@@ -91,6 +95,7 @@ impl AppState {
             demo: Cell::new(false),
             inspector_edit: Cell::new(false),
             preview: RefCell::new(None),
+            dragging_action: Cell::new(false),
             expanded: RefCell::new(std::collections::HashSet::new()),
             listeners: RefCell::new(Vec::new()),
         })

@@ -164,6 +164,61 @@ fn label_valign(align: &str) -> gtk::Align {
     }
 }
 
+const HINT: &str = "The ‹ › buttons flip pages on the deck. Drop an image on a key to use it.";
+
+/// The three drop zones of a dial: left third, middle, right third (as [`hit_zone`]).
+fn draw_dial_zones(cr: &gtk::cairo::Context, w: f64, h: f64, hover: Option<DialZone>) {
+    use std::f64::consts::PI;
+    let (cx, cy, r) = (w / 2.0, h / 2.0, w.min(h) / 2.0 - 1.0);
+    let accent = adw::StyleManager::default().accent_color_rgba();
+    cr.save().ok();
+    cr.arc(cx, cy, r, 0.0, 2.0 * PI);
+    cr.clip();
+    for (i, z) in [DialZone::Left, DialZone::Press, DialZone::Right]
+        .iter()
+        .enumerate()
+    {
+        let x0 = cx - r + i as f64 * (2.0 * r / 3.0);
+        cr.rectangle(x0, cy - r, 2.0 * r / 3.0, 2.0 * r);
+        if hover == Some(*z) {
+            cr.set_source_rgba(
+                accent.red() as f64,
+                accent.green() as f64,
+                accent.blue() as f64,
+                0.75,
+            );
+        } else {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.07);
+        }
+        let _ = cr.fill();
+    }
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.35);
+    cr.set_line_width(1.0);
+    for i in 1..3 {
+        let x = cx - r + i as f64 * (2.0 * r / 3.0);
+        cr.move_to(x, cy - r);
+        cr.line_to(x, cy + r);
+    }
+    let _ = cr.stroke();
+    cr.restore().ok();
+    // Glyphs: ‹ turn left, ● press, › turn right.
+    let s = r * 0.18;
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.9);
+    cr.set_line_width(2.0);
+    cr.set_line_cap(gtk::cairo::LineCap::Round);
+    let lx = cx - r * 2.0 / 3.0;
+    cr.move_to(lx + s * 0.5, cy - s);
+    cr.line_to(lx - s * 0.5, cy);
+    cr.line_to(lx + s * 0.5, cy + s);
+    let rx = cx + r * 2.0 / 3.0;
+    cr.move_to(rx - s * 0.5, cy - s);
+    cr.line_to(rx + s * 0.5, cy);
+    cr.line_to(rx - s * 0.5, cy + s);
+    let _ = cr.stroke();
+    cr.arc(cx, cy, s * 0.6, 0.0, 2.0 * PI);
+    let _ = cr.fill();
+}
+
 /// The texture for a key look (cached), or None for an empty key.
 pub fn key_texture(look: &KeyLook, profile_dir: &std::path::Path) -> Option<gdk::Texture> {
     let h = look_hash(look, profile_dir);
@@ -294,6 +349,23 @@ pub fn build(state: &State) -> Canvas {
             .valign(gtk::Align::Center)
             .build(),
     ]);
+    // Each dial draws its three drop zones (turn left, press, turn right) while an action is dragged.
+    let zones: Rc<Vec<Rc<std::cell::Cell<Option<DialZone>>>>> =
+        Rc::new((0..3).map(|_| Rc::new(std::cell::Cell::new(None))).collect());
+    let zone_areas: Rc<Vec<gtk::DrawingArea>> = Rc::new(
+        (0..3)
+            .map(|n| {
+                let area = gtk::DrawingArea::new();
+                let (hover, state) = (zones[n].clone(), state.clone());
+                area.set_draw_func(move |_, cr, w, h| {
+                    if state.dragging_action.get() {
+                        draw_dial_zones(cr, w as f64, h as f64, hover.get());
+                    }
+                });
+                area
+            })
+            .collect(),
+    );
     let dials: Rc<Vec<gtk::Button>> = Rc::new(
         (0..3)
             .map(|n| {
@@ -301,6 +373,7 @@ pub fn build(state: &State) -> Canvas {
                     .css_classes(["deck-dial"])
                     .tooltip_text(format!("Dial {}", n + 1))
                     .valign(gtk::Align::Center)
+                    .child(&zone_areas[n])
                     .build()
             })
             .collect(),
@@ -335,7 +408,7 @@ pub fn build(state: &State) -> Canvas {
         .margin_top(28)
         .build();
     let hint = gtk::Label::builder()
-        .label("The ‹ › buttons flip pages on the deck. Drop an image on a key to use it.")
+        .label(HINT)
         .css_classes(["hint"])
         .margin_top(14)
         .wrap(true)
@@ -432,6 +505,31 @@ pub fn build(state: &State) -> Canvas {
         });
     }
     for (n, d) in dials.iter().enumerate() {
+        // Show which zone the pointer is over while dragging across the dial.
+        let motion = gtk::DropControllerMotion::new();
+        {
+            let (zone, area, dial, hint) = (zones[n].clone(), zone_areas[n].clone(), d.clone(), hint.clone());
+            motion.connect_motion(move |_, x, _| {
+                let z = hit_zone(dial.width() as f64, x);
+                if zone.get() != Some(z) {
+                    zone.set(Some(z));
+                    area.queue_draw();
+                    hint.set_label(match z {
+                        DialZone::Left => "Drop here: runs when the dial turns left",
+                        DialZone::Press => "Drop here: runs when the dial is pressed",
+                        DialZone::Right => "Drop here: runs when the dial turns right",
+                    });
+                }
+            });
+        }
+        {
+            let (zone, area) = (zones[n].clone(), zone_areas[n].clone());
+            motion.connect_leave(move |_| {
+                zone.set(None);
+                area.queue_draw();
+            });
+        }
+        d.add_controller(motion);
         let state = state.clone();
         let dial = d.clone();
         accept_drops(d, move |p, x| {
@@ -552,6 +650,16 @@ pub fn build(state: &State) -> Canvas {
                     }
                     dots.append(&dot);
                 }
+            }
+            Change::Drag => {
+                for a in zone_areas.iter() {
+                    a.queue_draw();
+                }
+                hint.set_label(if state.dragging_action.get() {
+                    "Drop on a key, or on a dial: left side = turn left, middle = press, right side = turn right"
+                } else {
+                    HINT
+                });
             }
             Change::Selection => {
                 let sel = state.selection.borrow();

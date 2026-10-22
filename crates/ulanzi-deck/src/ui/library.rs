@@ -42,10 +42,19 @@ fn card(state: &State, spec: &'static ActionSpec) -> gtk::Widget {
     {
         let state = state.clone();
         drag.connect_drag_begin(move |src, _| {
+            state.dragging_action.set(true);
+            state.notify(crate::state::Change::Drag);
             let look = catalog::default_look(&(spec.make)());
             if let Some(t) = crate::ui::canvas::key_texture(&look, &crate::ui::canvas::profile_dir(&state)) {
                 src.set_icon(Some(&t), 24, 24);
             }
+        });
+    }
+    {
+        let state = state.clone();
+        drag.connect_drag_end(move |_, _, _| {
+            state.dragging_action.set(false);
+            state.notify(crate::state::Change::Drag);
         });
     }
     button.add_controller(drag);

@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, gio};
+use gtk::gdk;
 use ulanzi_core::Color;
 
 /// Swatches in rows of eight: neutrals, then GNOME palette colours light to dark.
@@ -29,6 +29,42 @@ pub fn rgba(c: Color) -> gdk::RGBA {
 pub fn color(c: &gdk::RGBA) -> Color {
     let v = |f: f32| (f.clamp(0.0, 1.0) * 255.0).round() as u8;
     Color([v(c.red()), v(c.green()), v(c.blue()), 255])
+}
+
+/// Hue in degrees, saturation and value in 0..1.
+pub fn to_hsv(c: Color) -> (f64, f64, f64) {
+    let [r, g, b, _] = c.0.map(|v| v as f64 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let d = max - min;
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / d).rem_euclid(6.0))
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    let s = if max == 0.0 { 0.0 } else { d / max };
+    (h, s, max)
+}
+
+pub fn from_hsv(h: f64, s: f64, v: f64) -> Color {
+    let c = v * s;
+    let hp = (h.rem_euclid(360.0)) / 60.0;
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r, g, b) = match hp as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let q = |f: f64| ((f + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Color::rgb(q(r), q(g), q(b))
 }
 
 /// A small square that paints one colour (striped when `None`, meaning mixed).
@@ -155,39 +191,154 @@ pub fn color_button(
             }
         });
     }
-    let more = gtk::Button::builder()
-        .label("More…")
-        .tooltip_text("The full colour picker")
+    // Any colour: a saturation/brightness square and a hue strip, previewed while dragging.
+    let custom = gtk::ToggleButton::builder()
+        .label("Custom")
+        .tooltip_text("Pick any colour")
         .build();
     let row = gtk::Box::builder().spacing(6).build();
     row.append(&hex);
-    row.append(&more);
+    row.append(&custom);
     column.append(&row);
+
+    let hsv = Rc::new(Cell::new(current.map(to_hsv).unwrap_or((0.0, 0.0, 0.5))));
+    let sv = gtk::DrawingArea::builder()
+        .content_width(244)
+        .content_height(140)
+        .css_classes(["color-plane"])
+        .build();
+    let hue = gtk::DrawingArea::builder()
+        .content_width(244)
+        .content_height(16)
+        .build();
+    {
+        let hsv = hsv.clone();
+        sv.set_draw_func(move |_, cr, w, h| {
+            let (w, h) = (w as f64, h as f64);
+            let (hh, s, v) = hsv.get();
+            let base = from_hsv(hh, 1.0, 1.0).0;
+            cr.rectangle(0.0, 0.0, w, h);
+            cr.set_source_rgb(
+                base[0] as f64 / 255.0,
+                base[1] as f64 / 255.0,
+                base[2] as f64 / 255.0,
+            );
+            let _ = cr.fill_preserve();
+            let white = gtk::cairo::LinearGradient::new(0.0, 0.0, w, 0.0);
+            white.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 1.0);
+            white.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+            let _ = cr.set_source(&white);
+            let _ = cr.fill_preserve();
+            let black = gtk::cairo::LinearGradient::new(0.0, 0.0, 0.0, h);
+            black.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0);
+            black.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 1.0);
+            let _ = cr.set_source(&black);
+            let _ = cr.fill();
+            let (x, y) = (s * w, (1.0 - v) * h);
+            cr.arc(x, y, 6.0, 0.0, std::f64::consts::TAU);
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.set_line_width(2.5);
+            let _ = cr.stroke_preserve();
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.5);
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+        });
+    }
+    {
+        let hsv = hsv.clone();
+        hue.set_draw_func(move |_, cr, w, h| {
+            let (w, h) = (w as f64, h as f64);
+            let g = gtk::cairo::LinearGradient::new(0.0, 0.0, w, 0.0);
+            for k in 0..=6 {
+                let c = from_hsv(k as f64 * 60.0, 1.0, 1.0).0;
+                g.add_color_stop_rgb(
+                    k as f64 / 6.0,
+                    c[0] as f64 / 255.0,
+                    c[1] as f64 / 255.0,
+                    c[2] as f64 / 255.0,
+                );
+            }
+            cr.rectangle(0.0, 0.0, w, h);
+            let _ = cr.set_source(&g);
+            let _ = cr.fill();
+            let x = hsv.get().0 / 360.0 * w;
+            cr.rectangle(x - 3.0, 0.0, 6.0, h);
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.set_line_width(2.0);
+            let _ = cr.stroke();
+        });
+    }
+    // Dragging previews; letting go applies.
+    let drag_on = |area: &gtk::DrawingArea, is_plane: bool| {
+        let drag = gtk::GestureDrag::new();
+        let update = {
+            let (hsv, sv, hue, preview, area) = (
+                hsv.clone(),
+                sv.clone(),
+                hue.clone(),
+                preview.clone(),
+                area.clone(),
+            );
+            move |x: f64, y: f64| {
+                let (w, h) = (area.width().max(1) as f64, area.height().max(1) as f64);
+                let (mut hh, mut s, mut v) = hsv.get();
+                if is_plane {
+                    s = (x / w).clamp(0.0, 1.0);
+                    v = 1.0 - (y / h).clamp(0.0, 1.0);
+                } else {
+                    hh = (x / w).clamp(0.0, 1.0) * 359.9;
+                }
+                hsv.set((hh, s, v));
+                sv.queue_draw();
+                hue.queue_draw();
+                preview(Some(from_hsv(hh, s, v)));
+            }
+        };
+        let start = Rc::new(Cell::new((0.0, 0.0)));
+        {
+            let (update, start) = (update.clone(), start.clone());
+            drag.connect_drag_begin(move |_, x, y| {
+                start.set((x, y));
+                update(x, y);
+            });
+        }
+        {
+            let (update, start) = (update.clone(), start.clone());
+            drag.connect_drag_update(move |_, dx, dy| {
+                let (x, y) = start.get();
+                update(x + dx, y + dy);
+            });
+        }
+        {
+            let (hsv, apply, hex) = (hsv.clone(), apply.clone(), hex.clone());
+            drag.connect_drag_end(move |_, _, _| {
+                let (hh, s, v) = hsv.get();
+                let c = from_hsv(hh, s, v);
+                hex.set_text(&c.to_string());
+                apply(c);
+            });
+        }
+        area.add_controller(drag);
+    };
+    drag_on(&sv, true);
+    drag_on(&hue, false);
+    let picker = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    picker.append(&sv);
+    picker.append(&hue);
+    let reveal = gtk::Revealer::builder()
+        .child(&picker)
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .build();
+    custom
+        .bind_property("active", &reveal, "reveal-child")
+        .sync_create()
+        .build();
+    column.append(&reveal);
 
     let popover = gtk::Popover::builder().child(&column).build();
     {
         let preview = preview.clone();
         popover.connect_closed(move |_| preview(None));
-    }
-    {
-        let (apply, face_value, popover) = (apply.clone(), face_value.clone(), popover.clone());
-        more.connect_clicked(move |b| {
-            popover.popdown();
-            let dialog = gtk::ColorDialog::builder().with_alpha(false).build();
-            let window = b.root().and_downcast::<gtk::Window>();
-            let initial = face_value.get().map(rgba);
-            let apply = apply.clone();
-            dialog.choose_rgba(
-                window.as_ref(),
-                initial.as_ref(),
-                None::<&gio::Cancellable>,
-                move |r| {
-                    if let Ok(c) = r {
-                        apply(color(&c));
-                    }
-                },
-            );
-        });
     }
     button.set_popover(Some(&popover));
     button
@@ -196,6 +347,18 @@ pub fn color_button(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hsv_round_trips() {
+        for hex in ["#e8605a", "#3584e4", "#000000", "#ffffff", "#808080", "#33d17a"] {
+            let c: Color = hex.parse().expect("hex");
+            let (h, sat, v) = to_hsv(c);
+            assert_eq!(from_hsv(h, sat, v), c, "{hex}");
+        }
+        assert_eq!(from_hsv(0.0, 1.0, 1.0), Color::rgb(255, 0, 0));
+        assert_eq!(from_hsv(120.0, 1.0, 1.0), Color::rgb(0, 255, 0));
+        assert_eq!(from_hsv(240.0, 1.0, 0.5), Color::rgb(0, 0, 128));
+    }
 
     #[test]
     fn colors_convert() {

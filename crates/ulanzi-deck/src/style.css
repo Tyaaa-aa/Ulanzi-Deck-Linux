@@ -249,3 +249,8 @@ colorbutton.mixed > button,
 .picker-image {
   border-radius: 6px;
 }
+
+/* Reordering pages and profiles */
+row.drop-target {
+  box-shadow: inset 0 0 0 2px alpha(@accent_bg_color, 0.8);
+}

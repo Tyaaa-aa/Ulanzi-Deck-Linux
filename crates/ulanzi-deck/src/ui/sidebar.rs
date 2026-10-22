@@ -194,9 +194,11 @@ pub fn build(state: &State) -> gtk::Box {
                 }
                 let current = state.profile_id();
                 let list = state.profiles.borrow().clone();
-                for (id, name) in &list {
+                for (i, (id, name)) in list.iter().enumerate() {
                     let row = profile_row(name, "Always", *id == current);
-                    attach_profile_menu(&state, &row, *id, name);
+                    attach_profile_menu(&state, &row, *id, name, i, list.len());
+                    let st = state.clone();
+                    reorderable(&row, "profile", i, move |from, to| move_profile(&st, from, to));
                     profiles.append(&row);
                     if *id == current {
                         profiles.select_row(Some(&row));
@@ -208,8 +210,12 @@ pub fn build(state: &State) -> gtk::Box {
                     pages.remove(&row);
                 }
                 let e = state.editor.borrow();
+                let count = e.profile().pages.len();
                 for (i, p) in e.profile().pages.iter().enumerate() {
                     let row = page_row(i + 1, &p.name, p.keys.len());
+                    attach_page_menu(&state, &row, i, count, &p.name);
+                    let st = state.clone();
+                    reorderable(&row, "page", i, move |from, to| move_page(&st, from, to));
                     pages.append(&row);
                     if i == e.page() {
                         pages.select_row(Some(&row));
@@ -274,8 +280,19 @@ fn new_profile(state: &State) {
 }
 
 /// Right-click (or long-press) a profile for Rename and Delete; double-click renames.
-fn attach_profile_menu(state: &State, row: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) {
+fn attach_profile_menu(
+    state: &State,
+    row: &gtk::ListBoxRow,
+    id: uuid::Uuid,
+    name: &str,
+    index: usize,
+    count: usize,
+) {
     let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    {
+        let st = state.clone();
+        add_move_buttons(&menu, index, count, move |from, to| move_profile(&st, from, to));
+    }
     let rename = gtk::Button::builder()
         .label("Rename…")
         .css_classes(["flat"])
@@ -423,4 +440,196 @@ fn delete_dialog(state: &State, near: &impl IsA<gtk::Widget>, id: uuid::Uuid, na
         });
     });
     dialog.present(Some(near));
+}
+
+/// "Move Up" and "Move Down" buttons for a list menu.
+fn add_move_buttons(menu: &gtk::Box, index: usize, count: usize, on_move: impl Fn(usize, usize) + 'static) {
+    let on_move = std::rc::Rc::new(on_move);
+    for (label, to) in [
+        ("Move Up", index.checked_sub(1)),
+        ("Move Down", Some(index + 1).filter(|t| *t < count)),
+    ] {
+        let b = gtk::Button::builder()
+            .label(label)
+            .css_classes(["flat"])
+            .sensitive(to.is_some())
+            .build();
+        let on_move = on_move.clone();
+        b.connect_clicked(move |b| {
+            if let Some(pop) = b
+                .ancestor(gtk::Popover::static_type())
+                .and_downcast::<gtk::Popover>()
+            {
+                pop.popdown();
+            }
+            if let Some(to) = to {
+                on_move(index, to);
+            }
+        });
+        menu.append(&b);
+    }
+}
+
+/// Let `row` be dragged onto another row of the same `kind` to move it there.
+fn reorderable(
+    row: &gtk::ListBoxRow,
+    kind: &'static str,
+    index: usize,
+    on_move: impl Fn(usize, usize) + 'static,
+) {
+    let prefix = format!("ulanzi-{kind}:");
+    let source = gtk::DragSource::builder()
+        .actions(gtk::gdk::DragAction::MOVE)
+        .build();
+    {
+        let payload = format!("{prefix}{index}");
+        source
+            .connect_prepare(move |_, _, _| Some(gtk::gdk::ContentProvider::for_value(&payload.to_value())));
+    }
+    {
+        let row = row.clone();
+        source.connect_drag_begin(move |src, _| {
+            let icon = gtk::WidgetPaintable::new(Some(&row));
+            src.set_icon(Some(&icon), 20, 20);
+        });
+    }
+    row.add_controller(source);
+    let target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+    {
+        let row = row.clone();
+        target.connect_enter(move |_, _, _| {
+            row.add_css_class("drop-target");
+            gtk::gdk::DragAction::MOVE
+        });
+    }
+    {
+        let row = row.clone();
+        target.connect_leave(move |_| row.remove_css_class("drop-target"));
+    }
+    {
+        let row = row.clone();
+        target.connect_drop(move |_, value, _, _| {
+            row.remove_css_class("drop-target");
+            let Some(from) = value
+                .get::<String>()
+                .ok()
+                .and_then(|s| s.strip_prefix(&prefix).and_then(|n| n.parse::<usize>().ok()))
+            else {
+                return false;
+            };
+            if from != index {
+                on_move(from, index);
+            }
+            true
+        });
+    }
+    row.add_controller(target);
+}
+
+fn move_page(state: &State, from: usize, to: usize) {
+    state.edit(|e| e.move_page(from, to));
+    state.notify(Change::Page);
+}
+
+/// Reorder profiles; the order is kept in the settings.
+fn move_profile(state: &State, from: usize, to: usize) {
+    {
+        let mut list = state.profiles.borrow_mut();
+        if from >= list.len() || to >= list.len() {
+            return;
+        }
+        let p = list.remove(from);
+        list.insert(to, p);
+        state.settings.borrow_mut().profile_order = list.iter().map(|(id, _)| *id).collect();
+    }
+    state.notify(Change::Profiles);
+    let s = state.settings.borrow().clone();
+    if let Some(c) = state.client.borrow().clone() {
+        let st = state.clone();
+        runtime::run(async move { c.apply_settings(&s).await }, move |r| {
+            if let Err(e) = r {
+                crate::ui::toast(&st, &format!("Order not saved: {e}"));
+            }
+        });
+    }
+}
+
+/// Right-click a page for Move Up/Down, Rename and Delete.
+fn attach_page_menu(state: &State, row: &gtk::ListBoxRow, index: usize, count: usize, name: &str) {
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    {
+        let st = state.clone();
+        add_move_buttons(&menu, index, count, move |from, to| move_page(&st, from, to));
+    }
+    let rename = gtk::Button::builder()
+        .label("Rename…")
+        .css_classes(["flat"])
+        .build();
+    let delete = gtk::Button::builder()
+        .label("Delete")
+        .css_classes(["flat", "error"])
+        .sensitive(count > 1)
+        .build();
+    menu.append(&rename);
+    menu.append(&delete);
+    let pop = gtk::Popover::builder().child(&menu).build();
+    if let Some(b) = row.child().and_downcast::<gtk::Box>() {
+        b.append(&pop);
+    }
+    {
+        let (state, pop, name) = (state.clone(), pop.clone(), name.to_string());
+        rename.connect_clicked(move |b| {
+            pop.popdown();
+            let entry = adw::EntryRow::builder().title("Name").text(&name).build();
+            let list = gtk::ListBox::builder()
+                .css_classes(["boxed-list"])
+                .selection_mode(gtk::SelectionMode::None)
+                .build();
+            list.append(&entry);
+            let dialog = adw::AlertDialog::builder()
+                .heading("Rename Page")
+                .extra_child(&list)
+                .default_response("rename")
+                .close_response("cancel")
+                .build();
+            dialog.add_response("cancel", "Cancel");
+            dialog.add_response("rename", "Rename");
+            dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+            let st = state.clone();
+            dialog.connect_response(Some("rename"), move |_, _| {
+                let new = entry.text().trim().to_string();
+                if !new.is_empty() {
+                    st.edit(|e| e.rename_page(index, &new));
+                }
+            });
+            dialog.present(Some(b));
+        });
+    }
+    {
+        let (state, pop) = (state.clone(), pop.clone());
+        delete.connect_clicked(move |_| {
+            pop.popdown();
+            state.edit(|e| {
+                e.remove_page(index);
+            });
+            state.notify(Change::Page);
+            crate::ui::toast(&state, "Page deleted. Press Ctrl+Z to bring it back");
+        });
+    }
+    let show = {
+        let pop = pop.clone();
+        move |x: f64, y: f64| {
+            pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            pop.popup();
+        }
+    };
+    let right = gtk::GestureClick::builder().button(3).build();
+    {
+        let show = show.clone();
+        right.connect_pressed(move |_, _, x, y| show(x, y));
+    }
+    row.add_controller(right);
+    let long = gtk::GestureLongPress::new();
+    long.connect_pressed(move |_, x, y| show(x, y));
+    row.add_controller(long);
 }

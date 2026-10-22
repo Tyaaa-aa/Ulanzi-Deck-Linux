@@ -30,6 +30,14 @@ pub struct Settings {
     pub obs: ObsSettings,
     pub autostart: bool,
     pub tray: bool,
+    /// The order profiles are listed in (ids not listed come after, in their own order).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profile_order: Vec<Uuid>,
+}
+
+/// Sort `list` by `order`; entries not in `order` keep their relative order at the end.
+pub fn order_profiles<T>(list: &mut [(Uuid, T)], order: &[Uuid]) {
+    list.sort_by_key(|(id, _)| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
 }
 
 impl Default for Settings {
@@ -47,6 +55,7 @@ impl Default for Settings {
             obs: ObsSettings::default(),
             autostart: true,
             tray: true,
+            profile_order: Vec::new(),
         }
     }
 }

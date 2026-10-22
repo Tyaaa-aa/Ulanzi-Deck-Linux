@@ -384,3 +384,22 @@ fn dials_belong_to_the_page() {
     e.set_page(two);
     assert_eq!(e.dials()[0].press, Some(Action::NextPage));
 }
+
+#[test]
+fn moving_a_page_keeps_the_page_you_are_on() {
+    let mut e = editor_with_keys();
+    e.add_page("Two");
+    e.add_page("Three"); // inserted after the current page (0): Main, Three, Two
+    let names = |e: &Editor| {
+        e.profile()
+            .pages
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&e), ["Main", "Three", "Two"]);
+    e.move_page(2, 0);
+    assert_eq!(names(&e), ["Two", "Main", "Three"]);
+    // Still on "Main".
+    assert_eq!(e.profile().pages[e.page()].name, "Main");
+}
