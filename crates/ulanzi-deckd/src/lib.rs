@@ -1,6 +1,7 @@
 //! Ulanzi Deck daemon: owns the device, runs actions, serves D-Bus.
 
 pub mod actions;
+pub mod dbus;
 pub mod deck;
 pub mod screen;
 pub mod sysinfo;

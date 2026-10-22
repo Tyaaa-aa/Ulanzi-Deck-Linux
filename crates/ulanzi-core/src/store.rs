@@ -158,6 +158,13 @@ impl Store {
     }
 }
 
+/// Parse and normalize a profile received as text (e.g. over D-Bus).
+pub fn parse_profile(text: &str) -> Result<Profile, CoreError> {
+    let mut p: Profile = parse_versioned(Path::new("<profile>"), text)?;
+    p.normalize();
+    Ok(p)
+}
+
 fn to_toml<T: Serialize>(v: &T) -> Result<String, CoreError> {
     toml::to_string_pretty(v).map_err(|e| CoreError::Serialize(e.to_string()))
 }

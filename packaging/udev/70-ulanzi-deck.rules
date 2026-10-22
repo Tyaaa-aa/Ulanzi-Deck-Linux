@@ -1,0 +1,3 @@
+# Ulanzi D200 / D200X: let the logged-in user open the deck and create the virtual keyboard.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2207", ATTRS{idProduct}=="0019", TAG+="uaccess"
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
