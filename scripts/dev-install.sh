@@ -18,7 +18,7 @@ cat <<MSG
 Installed ulanzi-deckd and ulanzictl to $bin.
 
 If the udev rule is not installed yet, run (asks for your password):
-  sudo install -m 0644 $repo/packaging/udev/70-ulanzi-deck.rules /etc/udev/rules.d/
+  sudo install -m 0644 "$repo/packaging/udev/70-ulanzi-deck.rules" /etc/udev/rules.d/
   sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Start the service:   systemctl --user start ulanzi-deckd
