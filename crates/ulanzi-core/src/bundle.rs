@@ -134,22 +134,51 @@ pub fn export(store: &Store, ids: &[Uuid], include_settings: bool) -> Result<Vec
             .map(|id| store.load_profile(*id))
             .collect::<Result<_, _>>()?
     };
+    let mut out = Vec::with_capacity(profiles.len());
+    for profile in profiles {
+        let mut icons = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(store.profile_dir(profile.id).join("icons")) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if e.file_type().is_ok_and(|t| t.is_file()) && image_ext(&name) {
+                    icons.push((format!("icons/{name}"), std::fs::read(e.path())?));
+                }
+            }
+        }
+        out.push(BundleProfile { profile, icons });
+    }
+    let settings = if include_settings {
+        let mut s = store.load_settings()?;
+        s.obs.password = None;
+        Some(s)
+    } else {
+        None
+    };
     let manifest = Manifest {
         format: FORMAT,
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         includes_settings: include_settings,
-        profiles: profiles
+        profiles: out
             .iter()
-            .map(|p| ManifestProfile {
-                id: p.id,
-                name: p.name.clone(),
-                model: p.model,
-                pages: p.pages.len() as u32,
-                keys: p.pages.iter().map(|pg| pg.keys.len() as u32).sum(),
+            .map(|bp| ManifestProfile {
+                id: bp.profile.id,
+                name: bp.profile.name.clone(),
+                model: bp.profile.model,
+                pages: bp.profile.pages.len() as u32,
+                keys: bp.profile.pages.iter().map(|pg| pg.keys.len() as u32).sum(),
             })
             .collect(),
     };
+    to_bytes(&Bundle {
+        manifest,
+        profiles: out,
+        settings,
+    })
+}
+
+/// Write a bundle to bytes (the OBS password is never written).
+pub fn to_bytes(b: &Bundle) -> Result<Vec<u8>, BundleError> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -160,23 +189,17 @@ pub fn export(store: &Store, ids: &[Uuid], include_settings: bool) -> Result<Vec
         zip.write_all(data)?;
         Ok(())
     };
-    put("manifest.toml", to_toml(&manifest)?.as_bytes())?;
-    if include_settings {
-        let mut s = store.load_settings()?;
+    put("manifest.toml", to_toml(&b.manifest)?.as_bytes())?;
+    if let Some(s) = &b.settings {
+        let mut s = s.clone();
         s.obs.password = None;
         put("settings.toml", to_toml(&s)?.as_bytes())?;
     }
-    for p in &profiles {
-        let dir = format!("profiles/{}", p.id);
-        put(&format!("{dir}/profile.toml"), to_toml(p)?.as_bytes())?;
-        let icons = store.profile_dir(p.id).join("icons");
-        if let Ok(entries) = std::fs::read_dir(&icons) {
-            for e in entries.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if e.file_type().is_ok_and(|t| t.is_file()) && image_ext(&name) {
-                    put(&format!("{dir}/icons/{name}"), &std::fs::read(e.path())?)?;
-                }
-            }
+    for bp in &b.profiles {
+        let dir = format!("profiles/{}", bp.profile.id);
+        put(&format!("{dir}/profile.toml"), to_toml(&bp.profile)?.as_bytes())?;
+        for (rel, data) in &bp.icons {
+            put(&format!("{dir}/{rel}"), data)?;
         }
     }
     Ok(zip

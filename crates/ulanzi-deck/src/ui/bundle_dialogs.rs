@@ -42,7 +42,7 @@ pub fn restore(state: &State, name: &str, done: impl FnOnce(Option<String>) + 's
 }
 
 /// After an import or restore: refresh the profile list and reopen the profile being edited.
-fn reload_open_profile(state: &State) {
+pub fn reload_open_profile(state: &State) {
     state.rules.borrow_mut().clear();
     let id = state.profile_id();
     if let Some(c) = state.client.borrow().clone() {

@@ -14,6 +14,7 @@ pub mod render;
 pub mod snapshot;
 pub mod steam;
 pub mod store;
+pub mod template;
 
 pub use color::{Color, ColorParseError};
 pub use error::CoreError;

@@ -27,6 +27,58 @@ fn heading(text: &str, add_tooltip: &str, on_add: impl Fn() + 'static) -> gtk::B
     row
 }
 
+/// "Profiles" with a + menu: empty profile, from a template, or from a file.
+fn profiles_heading(state: &State) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.append(
+        &gtk::Label::builder()
+            .label("Profiles")
+            .xalign(0.0)
+            .hexpand(true)
+            .css_classes(["sidebar-heading"])
+            .build(),
+    );
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let pop = gtk::Popover::builder().child(&menu).build();
+    let item = |label: &str, f: Box<dyn Fn(&gtk::Button)>| {
+        let b = gtk::Button::builder().label(label).css_classes(["flat"]).build();
+        let pop = pop.clone();
+        b.connect_clicked(move |b| {
+            pop.popdown();
+            f(b);
+        });
+        menu.append(&b);
+    };
+    {
+        let state = state.clone();
+        item("Empty Profile", Box::new(move |_| new_profile(&state)));
+    }
+    {
+        let state = state.clone();
+        item(
+            "From Template…",
+            Box::new(move |b| crate::ui::templates::open(&state, b)),
+        );
+    }
+    {
+        let state = state.clone();
+        item(
+            "Import File…",
+            Box::new(move |b| crate::ui::bundle_dialogs::choose_and_import(&state, b)),
+        );
+    }
+    let add = gtk::MenuButton::builder()
+        .icon_name("list-add-symbolic")
+        .tooltip_text("New profile")
+        .css_classes(["flat", "circular"])
+        .margin_end(8)
+        .valign(gtk::Align::End)
+        .popover(&pop)
+        .build();
+    row.append(&add);
+    row
+}
+
 fn profile_row(name: &str, subtitle: &str, active: bool) -> gtk::ListBoxRow {
     let b = gtk::Box::builder()
         .spacing(12)
@@ -118,7 +170,7 @@ pub fn build(state: &State) -> gtk::Box {
 
     {
         let state = state.clone();
-        column.append(&heading("Profiles", "New profile", move || new_profile(&state)));
+        column.append(&profiles_heading(&state));
     }
     column.append(&profiles);
     {
@@ -333,6 +385,23 @@ fn attach_profile_menu(
                 pop.popdown();
             }
             crate::ui::bundle_dialogs::open_export(&state, b, Some(id));
+        });
+    }
+    let save_template = gtk::Button::builder()
+        .label("Save as Template…")
+        .css_classes(["flat"])
+        .build();
+    menu.append(&save_template);
+    {
+        let (state, name) = (state.clone(), name.to_string());
+        save_template.connect_clicked(move |b| {
+            if let Some(pop) = b
+                .ancestor(gtk::Popover::static_type())
+                .and_downcast::<gtk::Popover>()
+            {
+                pop.popdown();
+            }
+            crate::ui::templates::save_as_template(&state, id, &name);
         });
     }
     let rename = gtk::Button::builder()

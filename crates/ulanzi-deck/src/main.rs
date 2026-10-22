@@ -267,6 +267,7 @@ fn main() -> glib::ExitCode {
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
                 Some("apps") => ui::app_picker::preview_dialog(&window),
+                Some("templates") => ui::templates::open(&state2, &window),
                 Some("export") => ui::bundle_dialogs::open_export(&state2, &window, None),
                 Some(o) if o.starts_with("import:") => {
                     let path = PathBuf::from(&o["import:".len()..]);
