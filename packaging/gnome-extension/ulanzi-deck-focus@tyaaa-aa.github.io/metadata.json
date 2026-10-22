@@ -1,0 +1,7 @@
+{
+  "uuid": "ulanzi-deck-focus@tyaaa-aa.github.io",
+  "name": "Ulanzi Deck Focus",
+  "description": "Tells Ulanzi Deck which app is in front, so it can switch deck profiles automatically.",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "url": "https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux"
+}

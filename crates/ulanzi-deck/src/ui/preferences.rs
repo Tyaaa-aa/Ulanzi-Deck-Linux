@@ -170,7 +170,7 @@ fn general_page(state: &State) -> adw::PreferencesPage {
     bg.add(&tray);
     let auto = adw::SwitchRow::builder()
         .title("Switch Profiles by App")
-        .subtitle("Right-click a profile → Auto-Switch… to choose its apps (KDE Plasma)")
+        .subtitle("Right-click a profile → Auto-Switch… to choose its apps")
         .active(s.auto_switch)
         .build();
     {

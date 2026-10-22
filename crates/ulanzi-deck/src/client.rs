@@ -361,6 +361,11 @@ impl Client {
         Ok(self.inner.proxy.call("RestoreSnapshot", &(name,)).await?)
     }
 
+    /// How auto-switch learns the app in front: (backend, state, detail).
+    pub async fn focus_status(&self) -> Result<(String, String, String)> {
+        Ok(self.inner.proxy.call("FocusStatus", &()).await?)
+    }
+
     pub async fn create_profile(&self, name: &str) -> Result<Uuid> {
         let id: String = self.inner.proxy.call("CreateProfile", &(name,)).await?;
         Uuid::parse_str(&id).map_err(|e| ClientError::Protocol(e.to_string()))

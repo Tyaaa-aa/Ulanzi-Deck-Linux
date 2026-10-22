@@ -120,9 +120,54 @@ pub fn open(state: &State, near: &impl IsA<gtk::Widget>, id: Uuid, name: &str) {
     let rule = Rc::new(RefCell::new(rule));
 
     let page = adw::PreferencesPage::new();
+    // Whether this desktop tells us which app is in front.
+    let status_group = adw::PreferencesGroup::new();
+    let status = adw::ActionRow::builder()
+        .title("Checking this desktop…")
+        .subtitle_lines(0)
+        .build();
+    let status_icon = gtk::Image::from_icon_name("content-loading-symbolic");
+    status.add_prefix(&status_icon);
+    status_group.add(&status);
+    page.add(&status_group);
+    if let Some(c) = state.client.borrow().clone() {
+        let (status, icon) = (status.downgrade(), status_icon.downgrade());
+        runtime::run(async move { c.focus_status().await }, move |r| {
+            let (Some(status), Some(icon), Ok((backend, st, detail))) = (status.upgrade(), icon.upgrade(), r)
+            else {
+                return;
+            };
+            let desktop = match backend.as_str() {
+                "kwin" => "KDE Plasma",
+                "gnome" => "GNOME",
+                "hyprland" => "Hyprland",
+                "sway" => "Sway",
+                "x11" => "X11",
+                _ => "This desktop",
+            };
+            let (title, icon_name, class) = match st.as_str() {
+                "active" => (format!("Works on {desktop}"), "emblem-ok-symbolic", "success"),
+                "waiting" => (
+                    format!("{desktop}: almost ready"),
+                    "dialog-information-symbolic",
+                    "accent",
+                ),
+                _ => (
+                    "Not available here".to_string(),
+                    "dialog-warning-symbolic",
+                    "warning",
+                ),
+            };
+            status.set_title(&title);
+            status.set_subtitle(&detail);
+            icon.set_icon_name(Some(icon_name));
+            icon.add_css_class(class);
+        });
+    }
+
     let apps_group = adw::PreferencesGroup::builder()
         .title(format!("Switch to “{name}” When…"))
-        .description("One of these apps is in front. Works on KDE Plasma.")
+        .description("One of these apps is in front")
         .build();
     page.add(&apps_group);
 

@@ -236,7 +236,15 @@ impl DeckService {
         if let Ok(mut f) = self.focused.lock() {
             *f = w.clone();
         }
+        crate::focus::mark_working();
         self.send(DeckMsg::Focus(w)).await
+    }
+
+    /// How auto-switch learns the app in front: (backend, state, detail), state being active,
+    /// waiting or unavailable.
+    async fn focus_status(&self) -> Result<(String, String, String)> {
+        let s = crate::focus::status();
+        Ok((s.backend, s.state, s.detail))
     }
 
     /// The window in front: (class, desktop id, title).

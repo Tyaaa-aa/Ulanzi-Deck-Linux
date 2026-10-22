@@ -1,8 +1,5 @@
-//! Knowing which app is in front, for auto profile switching.
-//!
-//! Wayland keeps this from ordinary programs, so each desktop needs its own route. On KDE Plasma a
-//! small KWin script reports every window switch to our D-Bus `WindowActivated` method; it is
-//! loaded when the service starts and again whenever KWin restarts.
+//! KDE Plasma: a small KWin script reports every window switch to our D-Bus `WindowActivated`
+//! method; it is loaded when the service starts and again whenever KWin restarts.
 
 use std::path::Path;
 
@@ -72,8 +69,18 @@ pub async fn run(conn: zbus::Connection, state_dir: std::path::PathBuf) {
         tracing::info!("auto profile switching works on KDE Plasma for now (KWin not found)");
     } else {
         match load(&conn, &script).await {
-            Ok(()) => tracing::info!("auto profile switching: watching the app in front (KWin)"),
-            Err(e) => tracing::warn!("auto profile switching: KWin script not loaded: {e}"),
+            Ok(()) => {
+                tracing::info!("auto profile switching: watching the app in front (KWin)");
+                super::set_status("kwin", "waiting", "Waiting for the first window switch");
+            }
+            Err(e) => {
+                tracing::warn!("auto profile switching: KWin script not loaded: {e}");
+                super::set_status(
+                    "kwin",
+                    "unavailable",
+                    &format!("KWin didn't accept the script: {e}"),
+                );
+            }
         }
     }
     // KWin restarted (or started late): load the script again.
