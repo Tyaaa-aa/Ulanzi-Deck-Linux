@@ -114,6 +114,18 @@ impl Store {
         write_atomic(&path, to_toml(p)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
     }
 
+    /// Move a profile's directory aside to `profiles/.deleted-<id>-<unix-ts>` (recoverable by hand).
+    pub fn delete_profile(&self, id: Uuid) -> Result<PathBuf, CoreError> {
+        let from = self.profile_dir(id);
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let to = self.profiles_dir().join(format!(".deleted-{id}-{ts}"));
+        fs::rename(&from, &to).map_err(|e| CoreError::io(&from, e))?;
+        Ok(to)
+    }
+
     /// Every profile directory, valid or not. Invalid files are renamed to
     /// `profile.toml.invalid-<unix-ts>` and reported, never fatal.
     pub fn list_profiles(&self) -> Vec<ProfileLoad> {
@@ -122,6 +134,7 @@ impl Store {
         };
         let mut dirs: Vec<PathBuf> = entries
             .flatten()
+            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
             .map(|e| e.path())
             .filter(|p| p.is_dir())
             .collect();

@@ -64,6 +64,8 @@ pub enum DeckMsg {
     /// Settings changed (already saved by the caller).
     Settings(Box<Settings>),
     SwitchProfile(Uuid),
+    /// A profile was deleted (the caller already moved its files aside).
+    RemoveProfile(Uuid),
     SetPage(usize),
     NextPage,
     PrevPage,
@@ -283,6 +285,21 @@ impl Deck {
                 }
             }
             DeckMsg::SwitchProfile(id) => self.switch_profile(id).await,
+            DeckMsg::RemoveProfile(id) => {
+                if self.profiles.len() > 1
+                    && let Some(i) = self.profiles.iter().position(|p| p.id == id)
+                {
+                    let was_active = i == self.active;
+                    self.profiles.remove(i);
+                    if self.active >= i && self.active > 0 {
+                        self.active -= 1;
+                    }
+                    if was_active {
+                        let id = self.profiles[self.active].id;
+                        self.switch_profile(id).await;
+                    }
+                }
+            }
             DeckMsg::SetPage(i) => {
                 let pages = self.profile().pages.clone();
                 self.nav.goto(i, &pages);

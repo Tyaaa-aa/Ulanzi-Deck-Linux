@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
-use ulanzi_core::model::BrightnessOp;
+use ulanzi_core::model::{BrightnessOp, Model, Profile, Settings};
 use ulanzi_core::store::{ProfileLoad, Store, parse_profile};
 use ulanzi_proto::InputKind;
 use uuid::Uuid;
@@ -17,6 +17,8 @@ pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck";
 pub const OBJECT_PATH: &str = "/io/github/tyaaa_aa/UlanziDeck";
 pub const INTERFACE: &str = "io.github.tyaaa_aa.UlanziDeck1";
 pub const API_VERSION: u32 = 1;
+/// What the GUI sees instead of a stored OBS password; sending it back keeps the stored one.
+pub const PASSWORD_PLACEHOLDER: &str = "••••";
 
 #[derive(Debug, zbus::DBusError)]
 #[zbus(prefix = "io.github.tyaaa_aa.UlanziDeck1.Error")]
@@ -193,6 +195,81 @@ impl DeckService {
         let _ = self.tx.send(DeckMsg::SwitchProfile(r.profile_id)).await;
         Ok((r.profile_id.to_string(), r.keys as u32, r.warnings))
     }
+
+    /// Current settings as TOML; a stored OBS password is replaced by a placeholder.
+    async fn get_settings(&self) -> Result<String> {
+        let mut s = self
+            .store
+            .load_settings()
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        if s.obs.password.as_deref().is_some_and(|p| !p.is_empty()) {
+            s.obs.password = Some(PASSWORD_PLACEHOLDER.into());
+        }
+        toml::to_string_pretty(&s).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// Replace the settings. A password equal to the placeholder keeps the stored one.
+    async fn apply_settings(&self, toml_text: String) -> Result<()> {
+        let mut s: Settings = toml::from_str(&toml_text).map_err(|e| DeckError::Invalid(e.to_string()))?;
+        if s.obs.password.as_deref() == Some(PASSWORD_PLACEHOLDER) {
+            let old = self
+                .store
+                .load_settings()
+                .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+            s.obs.password = old.obs.password;
+        }
+        self.store
+            .save_settings(&s)
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        self.send(DeckMsg::Settings(Box::new(s))).await
+    }
+
+    /// Create an empty profile and return its id.
+    async fn create_profile(
+        &self,
+        name: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(DeckError::Invalid("a profile needs a name".into()));
+        }
+        let model = self.snapshot().await.map(|s| s.model).unwrap_or(Model::D200X);
+        let p = Profile::new_default(name, model);
+        self.store
+            .save_profile(&p)
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        let id = p.id.to_string();
+        self.send(DeckMsg::Apply { profile: Box::new(p) }).await?;
+        let _ = Self::profiles_changed(&emitter).await;
+        Ok(id)
+    }
+
+    /// Delete a profile (its files are moved aside). The last profile cannot be deleted.
+    async fn delete_profile(
+        &self,
+        id: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<()> {
+        let id = Self::id(&id)?;
+        if self.snapshot().await?.profiles.len() <= 1 {
+            return Err(DeckError::Invalid("the last profile cannot be deleted".into()));
+        }
+        self.store
+            .delete_profile(id)
+            .map_err(|e| DeckError::NotFound(e.to_string()))?;
+        self.send(DeckMsg::RemoveProfile(id)).await?;
+        let _ = Self::profiles_changed(&emitter).await;
+        Ok(())
+    }
+
+    /// The revision a client must pass to ApplyProfile for this profile.
+    async fn profile_revision(&self, id: String) -> Result<u64> {
+        Ok(self.revision(Self::id(&id)?))
+    }
+
+    #[zbus(signal)]
+    async fn profiles_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn device_state_changed(e: &SignalEmitter<'_>, state: &str, detail: &str) -> zbus::Result<()>;

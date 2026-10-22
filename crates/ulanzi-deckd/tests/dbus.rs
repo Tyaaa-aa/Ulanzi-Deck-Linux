@@ -217,3 +217,79 @@ async fn second_instance_exits_3() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn settings_roundtrip_hides_password() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let mut s: Settings =
+        toml::from_str(&p.call::<_, _, String>("GetSettings", &()).await.expect("get")).expect("toml");
+    s.brightness = 42;
+    s.obs.password = Some("hunter2".into());
+    p.call::<_, _, ()>("ApplySettings", &(toml::to_string(&s).expect("toml"),))
+        .await
+        .expect("apply");
+    let text: String = p.call("GetSettings", &()).await.expect("get");
+    assert!(!text.contains("hunter2"), "{text}");
+    let back: Settings = toml::from_str(&text).expect("toml");
+    assert_eq!(back.brightness, 42);
+    assert_eq!(back.obs.password.as_deref(), Some("••••"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_settings_keeps_password_placeholder() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let mut s = Settings::default();
+    s.obs.password = Some("hunter2".into());
+    p.call::<_, _, ()>("ApplySettings", &(toml::to_string(&s).expect("toml"),))
+        .await
+        .expect("apply");
+    s.obs.password = Some("••••".into());
+    s.brightness = 7;
+    p.call::<_, _, ()>("ApplySettings", &(toml::to_string(&s).expect("toml"),))
+        .await
+        .expect("apply");
+    let saved = std::fs::read_to_string(r._dir.path().join("c/settings.toml")).expect("read");
+    assert!(
+        saved.contains("hunter2"),
+        "the real password must survive a round trip through the GUI"
+    );
+    assert!(saved.contains("brightness = 7"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn create_and_delete_profile() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let id: String = p.call("CreateProfile", &("Streaming",)).await.expect("create");
+    let list: Vec<(String, String)> = p.call("ListProfiles", &()).await.expect("list");
+    assert!(list.iter().any(|(i, n)| *i == id && n == "Streaming"), "{list:?}");
+    p.call::<_, _, ()>("DeleteProfile", &(id.clone(),))
+        .await
+        .expect("delete");
+    let list: Vec<(String, String)> = p.call("ListProfiles", &()).await.expect("list");
+    assert!(!list.iter().any(|(i, _)| *i == id));
+    let err = p
+        .call::<_, _, ()>("DeleteProfile", &(r.profile.id.to_string(),))
+        .await
+        .expect_err("last one");
+    assert!(err.to_string().contains("Invalid"), "{err}");
+    // Deleted profiles are moved aside, not destroyed.
+    let aside = std::fs::read_dir(r._dir.path().join("c/profiles"))
+        .expect("ls")
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().starts_with(".deleted-"));
+    assert!(aside);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn profile_revision_is_exposed() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let rev: u64 = p
+        .call("ProfileRevision", &(r.profile.id.to_string(),))
+        .await
+        .expect("rev");
+    assert_eq!(rev, 1);
+}

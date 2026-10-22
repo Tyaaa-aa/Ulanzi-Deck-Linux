@@ -2040,6 +2040,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulanzi-deck"
+version = "2.0.0-alpha.1"
+dependencies = [
+ "futures-util",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "ulanzi-core",
+ "ulanzi-deckd",
+ "uuid",
+ "zbus",
+]
+
+[[package]]
 name = "ulanzi-deckd"
 version = "2.0.0-alpha.1"
 dependencies = [
