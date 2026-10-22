@@ -213,12 +213,8 @@ impl Editor {
     pub fn drop_action(&mut self, slot: Slot, action: Action) {
         self.edit(|p, page| match slot {
             Slot::Key(i) if i < KEYS => {
-                let keys = &mut p.pages[page].keys;
-                let fresh = keys.get(&i).is_none_or(|k| k.look == KeyLook::default());
-                let key = keys.entry(i).or_default();
-                if fresh {
-                    key.look = default_look(&action);
-                }
+                let key = p.pages[page].keys.entry(i).or_default();
+                crate::catalog::refresh_look(&mut key.look, key.tap.as_ref(), &action);
                 key.tap = Some(action);
             }
             Slot::Key(_) => {}
@@ -247,6 +243,11 @@ impl Editor {
         self.edit(|p, page| {
             if index < KEYS {
                 let key = p.pages[page].keys.entry(index).or_default();
+                if let Some(new) = &tap
+                    && key.tap.as_ref() != Some(new)
+                {
+                    crate::catalog::refresh_look(&mut key.look, key.tap.as_ref(), new);
+                }
                 key.tap = tap;
                 key.hold = hold;
             }

@@ -103,7 +103,11 @@ fn drop_action_keeps_custom_look() {
     let mut e = editor_with_keys();
     let before = key(&e, 0).look.clone();
     e.drop_action(Slot::Key(0), Action::SleepNow);
-    assert_eq!(key(&e, 0).look, before);
+    // The custom colour stays; the empty icon and label are filled in.
+    let after = &key(&e, 0).look;
+    assert_eq!(after.foreground, before.foreground);
+    assert_eq!(after.source, default_look(&Action::SleepNow).source);
+    assert_eq!(after.label.text, default_look(&Action::SleepNow).label.text);
     assert_eq!(key(&e, 0).tap, Some(Action::SleepNow));
 }
 
@@ -265,4 +269,81 @@ fn set_model_is_undoable() {
     assert_eq!(e.profile().model, other);
     assert!(e.undo());
     assert_eq!(e.profile().model, before);
+}
+
+fn launch(id: Option<&str>) -> Action {
+    Action::LaunchApp {
+        desktop_id: id.map(String::from),
+        exec: None,
+    }
+}
+
+fn editor_with(look: KeyLook, tap: Action) -> Editor {
+    let mut p = Profile::new_default("P", Model::D200X);
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            look,
+            tap: Some(tap),
+            hold: None,
+        },
+    );
+    Editor::new(p)
+}
+
+#[test]
+fn changing_action_updates_an_untouched_look() {
+    let cmd = Action::Command {
+        cmd: String::new(),
+        terminal: false,
+    };
+    let url = Action::OpenUrl { url: String::new() };
+    let mut e = editor_with(default_look(&cmd), cmd);
+    e.set_key_actions(0, Some(url.clone()), None);
+    assert_eq!(key(&e, 0).look, default_look(&url));
+    // Picking from the list behaves the same.
+    e.drop_action(Slot::Key(0), Action::NextPage);
+    assert_eq!(key(&e, 0).look, default_look(&Action::NextPage));
+}
+
+#[test]
+fn changing_action_keeps_what_the_user_customised() {
+    let cmd = Action::Command {
+        cmd: String::new(),
+        terminal: false,
+    };
+    let url = Action::OpenUrl { url: String::new() };
+    let mut look = default_look(&cmd);
+    look.background = rgb(200, 0, 0);
+    look.label.text = "Mine".into();
+    let mut e = editor_with(look, cmd);
+    e.set_key_actions(0, Some(url.clone()), None);
+    let after = &key(&e, 0).look;
+    assert_eq!(after.source, default_look(&url).source);
+    assert_eq!(after.foreground, default_look(&url).foreground);
+    assert_eq!(after.background, rgb(200, 0, 0));
+    assert_eq!(after.label.text, "Mine");
+}
+
+#[test]
+fn launch_app_uses_the_apps_icon_and_name() {
+    let mut e = editor_with(default_look(&launch(None)), launch(None));
+    e.set_key_actions(0, Some(launch(Some("zz-not-installed.desktop"))), None);
+    let l = &key(&e, 0).look;
+    assert_eq!(
+        l.source,
+        ImageSource::App {
+            desktop_id: "zz-not-installed.desktop".into()
+        }
+    );
+    assert_eq!(l.label.text, "zz-not-installed");
+    // Switching to another app follows it too.
+    e.set_key_actions(0, Some(launch(Some("zz-other.desktop"))), None);
+    assert_eq!(
+        key(&e, 0).look.source,
+        ImageSource::App {
+            desktop_id: "zz-other.desktop".into()
+        }
+    );
+    assert_eq!(key(&e, 0).look.label.text, "zz-other");
 }

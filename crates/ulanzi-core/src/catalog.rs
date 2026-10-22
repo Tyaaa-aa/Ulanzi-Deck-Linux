@@ -407,6 +407,25 @@ pub fn default_look(a: &Action) -> KeyLook {
     let Some(spec) = spec_for(a) else {
         return KeyLook::default();
     };
+    // An app launcher shows the app itself.
+    if let Action::LaunchApp {
+        desktop_id: Some(id), ..
+    } = a
+    {
+        let name = crate::apps::lookup(id)
+            .map(|e| e.name)
+            .unwrap_or_else(|| id.trim_end_matches(".desktop").to_string());
+        return KeyLook {
+            source: ImageSource::App {
+                desktop_id: id.clone(),
+            },
+            label: Label {
+                text: name,
+                visible: true,
+            },
+            ..KeyLook::default()
+        };
+    }
     KeyLook {
         source: ImageSource::Icon {
             set: IconSet::Lucide,
@@ -419,6 +438,26 @@ pub fn default_look(a: &Action) -> KeyLook {
             visible: true,
         },
         ..KeyLook::default()
+    }
+}
+
+/// After a key's action changes from `old` to `new`, replace each part of its look that still shows
+/// the old action's default (icon, colours, label) with the new action's; customised parts stay.
+pub fn refresh_look(look: &mut KeyLook, old: Option<&Action>, new: &Action) {
+    let was = old.map(default_look).unwrap_or_default();
+    let blank = KeyLook::default();
+    let now = default_look(new);
+    if look.source == was.source || look.source == blank.source {
+        look.source = now.source;
+    }
+    if look.foreground == was.foreground {
+        look.foreground = now.foreground;
+    }
+    if look.background == was.background {
+        look.background = now.background;
+    }
+    if look.label.text == was.label.text || look.label.text.is_empty() {
+        look.label.text = now.label.text;
     }
 }
 
