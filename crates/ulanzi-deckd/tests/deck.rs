@@ -391,3 +391,82 @@ async fn live_changes_use_partial_updates() {
     assert!(cmds.contains(&PARTIAL), "{cmds:?}");
     assert!(!cmds.contains(&BUTTONS), "{cmds:?}");
 }
+
+fn info_frame() -> Vec<u8> {
+    let json = br#"{ "SerialNumber": "X", "Dversion": "5.2.3", "DeviceType": "D200" }"#;
+    let mut v = vec![0x7c, 0x7c, 0x03, 0x03];
+    v.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    v.extend_from_slice(json);
+    v.resize(1024, 0);
+    v
+}
+
+/// Answer like the real deck: an info frame for every info request, and (seen on hardware) for unlock too.
+fn answer_info_requests(mock: MockHandle) {
+    tokio::spawn(async move {
+        let mut answered = 0;
+        loop {
+            let asked = mock
+                .commands()
+                .iter()
+                .filter(|c| **c == INFO || **c == UNLOCK)
+                .count();
+            while answered < asked {
+                answered += 1;
+                if mock.inject.send(Ok(info_frame())).await.is_err() {
+                    return;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+}
+
+#[tokio::test(start_paused = true)]
+async fn device_info_replies_do_not_loop() {
+    let r = rig().await;
+    answer_info_requests(r.mock.clone());
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let cmds = r.mock.commands();
+    assert_eq!(cmds.iter().filter(|c| **c == INFO).count(), 1, "{cmds:?}");
+    assert_eq!(cmds.iter().filter(|c| **c == BUTTONS).count(), 1, "{cmds:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn info_storm_cannot_flood_uploads() {
+    let r = rig().await;
+    r.mock.clear();
+    for _ in 0..50 {
+        r.mock.inject.send(Ok(info_frame())).await.expect("inject");
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let uploads = r.mock.commands().iter().filter(|c| **c == BUTTONS).count();
+    assert!(uploads <= 4, "{uploads} uploads in 3 s");
+}
+
+#[tokio::test(start_paused = true)]
+async fn full_uploads_respect_the_gap_too() {
+    let r = rig().await;
+    let (t2, mock2) = MockTransport::new();
+    r.tx.send(DeckMsg::DeviceUp(Box::new(t2), "/dev/mock".into()))
+        .await
+        .expect("up");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (t3, mock3) = MockTransport::new();
+    r.tx.send(DeckMsg::DeviceUp(Box::new(t3), "/dev/mock".into()))
+        .await
+        .expect("up");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(mock2.commands().iter().filter(|c| **c == BUTTONS).count(), 1);
+    assert_eq!(
+        mock3.commands().iter().filter(|c| **c == BUTTONS).count(),
+        0,
+        "inside the 1 s gap"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        mock3.commands().iter().filter(|c| **c == BUTTONS).count(),
+        1,
+        "sent once the gap ended"
+    );
+}

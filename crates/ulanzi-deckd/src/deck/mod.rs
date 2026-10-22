@@ -121,6 +121,8 @@ struct Deck {
     shown: Option<Shown>,
     last_upload: Option<Instant>,
     upload_pending: bool,
+    /// The pending upload must be a full page (a connect or page change asked for it).
+    pending_full: bool,
     last_unlock: Instant,
     firmware: Option<String>,
 }
@@ -171,6 +173,7 @@ impl Deck {
             shown: None,
             last_upload: None,
             upload_pending: false,
+            pending_full: false,
             last_unlock: now,
             firmware: None,
         }
@@ -333,12 +336,15 @@ impl Deck {
             DeviceReport::DeviceInfo(json) => {
                 let v: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
                 let fw = v.get("Dversion").and_then(|f| f.as_str()).map(str::to_string);
-                tracing::info!("deck info: {}", json.trim());
-                let restarted = self.firmware.is_some();
-                self.firmware = fw;
-                // An unasked info frame means the deck restarted: set it up again.
-                if restarted {
-                    self.configure().await;
+                // The deck sends info frames for more than our request (unlock triggers one too), so
+                // they are only recorded. Reconfiguring here looped on real hardware; a deck that
+                // really restarts re-enumerates on USB and gets a full setup from the hot-plug path.
+                if fw != self.firmware {
+                    tracing::info!(
+                        "deck info: {}",
+                        json.split_whitespace().collect::<Vec<_>>().join(" ")
+                    );
+                    self.firmware = fw;
                 }
             }
             DeviceReport::Other(code) => tracing::debug!("unhandled report {code:#06x}"),
@@ -376,21 +382,23 @@ impl Deck {
     }
 
     /// Upload the current page if anything changed: the whole page when the page or profile changed
-    /// (or with `force`), otherwise only the changed keys. Uploads are spaced by [`MIN_UPLOAD_GAP`]:
+    /// (or with `force`), otherwise only the changed keys. Every upload is spaced by [`MIN_UPLOAD_GAP`]:
     /// a request inside the gap is remembered and sent, with the latest state, when it ends.
     async fn push_page(&mut self, force: bool) {
         if self.transport.is_none() {
             return;
         }
         let now = Instant::now();
-        if !force
-            && self
-                .last_upload
-                .is_some_and(|t| now.duration_since(t) < MIN_UPLOAD_GAP)
+        // Even a forced (full) upload waits out the gap; the deck cannot take uploads back to back.
+        if self
+            .last_upload
+            .is_some_and(|t| now.duration_since(t) < MIN_UPLOAD_GAP)
         {
             self.upload_pending = true;
+            self.pending_full |= force;
             return;
         }
+        let force = force || std::mem::take(&mut self.pending_full);
         self.upload_pending = false;
         let profile = &self.profiles[self.active];
         let dir = self.store.profile_dir(profile.id);
