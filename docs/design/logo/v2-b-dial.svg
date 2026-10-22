@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="64" y1="40" x2="64" y2="94" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6f5f4"/>
+      <stop offset="1" stop-color="#8b8a88"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="64" y1="46" x2="64" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b9b8b5"/>
+      <stop offset="1" stop-color="#f2f1ef"/>
+    </linearGradient>
+  </defs>
+  <title>ulanzi-deck-logos-v2</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path id="B_front" data-name="B front" d="M38 22 L90 22 C104.359 22 116 33.641 116 48 L116 94 C116 108.359 104.359 120 90 120 L38 120 C23.641 120 12 108.359 12 94 L12 48 C12 33.641 23.641 22 38 22 Z" fill="#1c1a21"/>
+    <path id="B_top" data-name="B top" d="M38 16 L90 16 C104.359 16 116 27.641 116 42 L116 88 C116 102.359 104.359 114 90 114 L38 114 C23.641 114 12 102.359 12 88 L12 42 C12 27.641 23.641 16 38 16 Z" fill="#36343d"/>
+    <path id="B_lit_ticks" data-name="B lit ticks" d="M37.84 94.16 L32.89 99.11 M29.82 82.16 L23.35 84.84 M27 68 L20 68 M29.82 53.84 L23.35 51.16 M37.84 41.84 L32.89 36.89 M49.84 33.82 L47.16 27.35 M64 31 L64 24 M78.16 33.82 L80.84 27.35 M90.16 41.84 L95.11 36.89" fill="none" stroke="#e8605a" stroke-width="4" stroke-linecap="round" stroke-miterlimit="10"/>
+    <path id="B_dim_ticks" data-name="B dim ticks" d="M98.18 53.84 L104.65 51.16 M101 68 L108 68 M98.18 82.16 L104.65 84.84 M90.16 94.16 L95.11 99.11" fill="none" stroke="#6b6970" stroke-width="4" stroke-linecap="round" stroke-miterlimit="10"/>
+    <path id="B_knob_shadow" data-name="B knob shadow" d="M36 70 C36 54.536 48.536 42 64 42 C79.464 42 92 54.536 92 70 C92 85.464 79.464 98 64 98 C48.536 98 36 85.464 36 70 Z" fill="#1c1a21"/>
+    <path id="B_knob" data-name="B knob" d="M37 67 C37 52.088 49.088 40 64 40 C78.912 40 91 52.088 91 67 C91 81.912 78.912 94 64 94 C49.088 94 37 81.912 37 67 Z" fill="url(#linear-gradient-1)"/>
+    <path id="B_cap" data-name="B cap" d="M43 67 C43 55.402 52.402 46 64 46 C75.598 46 85 55.402 85 67 C85 78.598 75.598 88 64 88 C52.402 88 43 78.598 43 67 Z" fill="url(#linear-gradient-2)"/>
+    <path id="B_pointer" data-name="B pointer" d="M69.66 62.34 L77.44 54.56" fill="none" stroke="#e8605a" stroke-width="4.5" stroke-linecap="round" stroke-miterlimit="10"/>
+  </g>
+</svg>

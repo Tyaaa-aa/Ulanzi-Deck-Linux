@@ -117,7 +117,7 @@ fn drop_action_on_dial_and_small_and_screen() {
     e.drop_action(Slot::Small(1), Action::Back);
     assert_eq!(e.profile().small_buttons.right, Some(Action::Back));
     e.set_dial(1, |d| d.left = Some(Action::PrevPage));
-    assert_eq!(e.profile().dials[1].left, Some(Action::PrevPage));
+    assert_eq!(e.dials()[1].left, Some(Action::PrevPage));
     e.drop_action(Slot::Screen, Action::SleepNow);
     assert!(matches!(
         e.profile().screen,
@@ -366,4 +366,21 @@ fn rename_profile_trims_and_ignores_empty() {
     assert_eq!(e.profile().name, "Gaming");
     assert!(e.undo());
     assert_eq!(e.profile().name, "P");
+}
+
+#[test]
+fn dials_belong_to_the_page() {
+    let mut e = editor_with_keys();
+    e.set_dial(0, |d| d.press = Some(Action::NextPage));
+    // A new page starts with the dials of the page it was added from.
+    let two = e.add_page("Two");
+    e.set_page(two);
+    assert_eq!(e.dials()[0].press, Some(Action::NextPage));
+    e.set_dial(0, |d| d.press = Some(Action::PrevPage));
+    e.set_page(0);
+    assert_eq!(e.dials()[0].press, Some(Action::NextPage));
+    // Copy one dial to every page.
+    e.dial_to_all_pages(0);
+    e.set_page(two);
+    assert_eq!(e.dials()[0].press, Some(Action::NextPage));
 }

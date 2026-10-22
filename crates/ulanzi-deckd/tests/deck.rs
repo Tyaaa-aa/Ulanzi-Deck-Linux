@@ -84,7 +84,8 @@ fn profile() -> Profile {
             None,
         ),
     );
-    p.dials[0].right = Some(Action::Volume {
+    p.pages[1].dials[0].right = Some(cmd("page-two-dial"));
+    p.pages[0].dials[0].right = Some(Action::Volume {
         target: AudioTarget::Default,
         op: VolumeOp::Up,
         step: 2,
@@ -341,6 +342,16 @@ async fn dial_burst_runs_in_order() {
         ran.iter()
             .all(|a| matches!(a, Action::Volume { op: VolumeOp::Up, .. }))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dials_follow_the_page() {
+    let r = rig().await;
+    r.tx.send(DeckMsg::SetPage(1)).await.expect("send");
+    settle().await;
+    r.mock.inject.send(Ok(report(17, 2, 3))).await.expect("inject");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(r.runner.ran(), vec![cmd("page-two-dial")]);
 }
 
 #[tokio::test(start_paused = true)]

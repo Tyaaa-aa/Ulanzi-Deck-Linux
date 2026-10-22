@@ -119,7 +119,7 @@ fn migrates_fixture() {
     );
 
     assert_eq!(
-        p.dials[1].right,
+        p.pages[0].dials[1].right,
         Some(Action::Volume {
             target: AudioTarget::App {
                 name: "Discord".into()
@@ -130,7 +130,7 @@ fn migrates_fixture() {
         })
     );
     assert_eq!(
-        p.dials[0].press,
+        p.pages[0].dials[0].press,
         Some(Action::Volume {
             target: AudioTarget::Default,
             op: VolumeOp::Mute,
@@ -139,7 +139,7 @@ fn migrates_fixture() {
         })
     );
     assert_eq!(
-        p.dials[2].left,
+        p.pages[0].dials[2].left,
         Some(Action::Volume {
             target: AudioTarget::Device {
                 name: "alsa_output.usb".into()
@@ -149,7 +149,7 @@ fn migrates_fixture() {
             limit_100: true
         })
     );
-    assert_eq!(p.dials[2].press, None);
+    assert_eq!(p.pages[0].dials[2].press, None);
 
     assert_eq!(
         p.screen,

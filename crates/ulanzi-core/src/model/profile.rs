@@ -31,7 +31,9 @@ pub struct Profile {
     pub r#match: MatchRule,
     #[serde(default)]
     pub small_buttons: SmallButtons,
-    #[serde(default)]
+    /// Before dials were per page they lived here; kept only to read old files (moved onto every
+    /// page by [`Profile::normalize`]).
+    #[serde(default, skip_serializing_if = "no_dials")]
     pub dials: [Dial; 3],
     #[serde(default)]
     pub screen: ScreenConfig,
@@ -140,6 +142,10 @@ pub enum PageKind {
     Folder,
 }
 
+fn no_dials(d: &[Dial; 3]) -> bool {
+    d.iter().all(|d| *d == Dial::default())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Page {
@@ -149,6 +155,9 @@ pub struct Page {
     pub kind: PageKind,
     #[serde(default, with = "key_map")]
     pub keys: BTreeMap<u8, Key>,
+    /// What the three dials do on this page.
+    #[serde(default, skip_serializing_if = "no_dials")]
+    pub dials: [Dial; 3],
 }
 
 impl Page {
@@ -158,6 +167,7 @@ impl Page {
             name: name.into(),
             kind: PageKind::Page,
             keys: BTreeMap::new(),
+            dials: Default::default(),
         }
     }
 }
@@ -210,6 +220,15 @@ impl Profile {
                 "profile \"{}\" had no pages; added an empty \"Main\" page",
                 self.name
             ));
+        }
+        // Dials used to be one set per profile: give every page that set.
+        if !no_dials(&self.dials) {
+            let old = std::mem::take(&mut self.dials);
+            for page in &mut self.pages {
+                if no_dials(&page.dials) {
+                    page.dials = old.clone();
+                }
+            }
         }
         for page in &mut self.pages {
             let bad: Vec<u8> = page.keys.keys().copied().filter(|i| *i >= KEY_COUNT).collect();

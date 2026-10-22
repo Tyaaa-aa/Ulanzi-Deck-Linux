@@ -603,7 +603,11 @@ impl Deck {
             }
             InputKind::TurnLeft | InputKind::TurnRight => {
                 if let Control::Dial(i) = ev.control {
-                    let dial = self.profile().dials.get(i as usize);
+                    let dial = self
+                        .profile()
+                        .pages
+                        .get(self.nav.page)
+                        .and_then(|p| p.dials.get(i as usize));
                     let a = if ev.kind == InputKind::TurnLeft {
                         dial.and_then(|d| d.left.clone())
                     } else {
@@ -623,7 +627,7 @@ impl Deck {
             Control::Key(i) => p.pages.get(self.nav.page)?.keys.get(&i)?.tap.clone(),
             Control::Small(0) => p.small_buttons.left.clone(),
             Control::Small(_) => p.small_buttons.right.clone(),
-            Control::Dial(i) => p.dials.get(i as usize)?.press.clone(),
+            Control::Dial(i) => p.pages.get(self.nav.page)?.dials.get(i as usize)?.press.clone(),
             Control::Screen => match &p.screen {
                 ScreenConfig::Custom { tap, .. } => tap.clone(),
                 _ => None,
@@ -636,7 +640,7 @@ impl Deck {
         let p = self.profile();
         match c {
             Control::Key(i) => p.pages.get(self.nav.page)?.keys.get(&i)?.hold.clone(),
-            Control::Dial(i) => p.dials.get(i as usize)?.hold.clone(),
+            Control::Dial(i) => p.pages.get(self.nav.page)?.dials.get(i as usize)?.hold.clone(),
             Control::Screen => match &p.screen {
                 ScreenConfig::Custom { hold, .. } => hold.clone(),
                 _ => None,

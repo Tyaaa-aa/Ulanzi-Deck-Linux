@@ -228,7 +228,7 @@ impl Editor {
             Slot::Small(0) => p.small_buttons.left = Some(action),
             Slot::Small(_) => p.small_buttons.right = Some(action),
             Slot::Dial(d) => {
-                if let Some(dial) = p.dials.get_mut(d as usize) {
+                if let Some(dial) = p.pages[page].dials.get_mut(d as usize) {
                     dial.press = Some(action);
                 }
             }
@@ -261,9 +261,26 @@ impl Editor {
         });
     }
 
+    /// The dials of the current page.
+    pub fn dials(&self) -> &[Dial; 3] {
+        &self.profile.pages[self.page].dials
+    }
+
+    /// Give every page the current page's setup of `dial`.
+    pub fn dial_to_all_pages(&mut self, dial: u8) {
+        self.edit(|p, page| {
+            let Some(d) = p.pages[page].dials.get(dial as usize).cloned() else {
+                return;
+            };
+            for pg in &mut p.pages {
+                pg.dials[dial as usize] = d.clone();
+            }
+        });
+    }
+
     pub fn set_dial(&mut self, dial: u8, f: impl FnOnce(&mut Dial)) {
-        self.edit(|p, _| {
-            if let Some(d) = p.dials.get_mut(dial as usize) {
+        self.edit(|p, page| {
+            if let Some(d) = p.pages[page].dials.get_mut(dial as usize) {
                 f(d);
             }
         });
@@ -414,7 +431,13 @@ impl Editor {
     /// Add a page after the current one; returns its index.
     pub fn add_page(&mut self, name: &str) -> usize {
         let at = (self.page + 1).min(self.profile.pages.len());
-        self.edit(|p, _| p.pages.insert(at, Page::new(name)));
+        // A new page starts with the dials of the page it was added from.
+        let dials = self.profile.pages[self.page].dials.clone();
+        self.edit(|p, _| {
+            let mut page = Page::new(name);
+            page.dials = dials;
+            p.pages.insert(at, page)
+        });
         at
     }
 

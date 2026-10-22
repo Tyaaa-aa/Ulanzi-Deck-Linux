@@ -129,7 +129,7 @@ fn profile_roundtrip_all_action_variants() {
         },
         dynamic: true,
     };
-    p.dials[1].right = every_action().into_iter().nth(14);
+    p.pages[0].dials[1].right = every_action().into_iter().nth(14);
     p.screen = ScreenConfig::Custom {
         widgets: vec![Widget::NowPlaying],
         tap: None,
@@ -294,4 +294,23 @@ fn label_position_override_is_optional_and_clearable() {
     p.clear_label_overrides();
     let l = &p.pages[0].keys[&0].look.label;
     assert_eq!((l.position, l.visible), (None, true));
+}
+
+#[test]
+fn old_profile_wide_dials_move_onto_every_page() {
+    use ulanzi_core::model::{Action, Model, Page, Profile};
+    let mut old = Profile::new_default("P", Model::D200X);
+    old.pages.push(Page::new("Two"));
+    old.dials[1].press = Some(Action::NextPage);
+    let text = toml::to_string(&old).expect("ser");
+    let p = ulanzi_core::store::parse_profile(&text).expect("parse");
+    assert!(
+        p.pages
+            .iter()
+            .all(|pg| pg.dials[1].press == Some(Action::NextPage))
+    );
+    assert!(p.dials.iter().all(|d| *d == ulanzi_core::model::Dial::default()));
+    // Saved again, the profile-wide table is gone.
+    let again = toml::to_string(&p).expect("ser");
+    assert!(!again.contains("[[dials]]"), "{again}");
 }

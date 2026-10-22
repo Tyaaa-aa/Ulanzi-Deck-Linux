@@ -94,7 +94,7 @@ pub fn migrate_legacy(yaml: &Path, store: &Store, force: bool) -> Result<Migrati
                 continue;
             };
             let ctx = format!("dial {}", pos + 1);
-            let dial = &mut profile.dials[pos];
+            let dial = &mut profile.pages[0].dials[pos];
             dial.press = v.get("click").and_then(|a| m.action_of(a, &ctx));
             dial.left = v.get("left").and_then(|a| m.action_of(a, &ctx));
             dial.right = v.get("right").and_then(|a| m.action_of(a, &ctx));
