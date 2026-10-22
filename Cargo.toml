@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/ulanzi-proto", "crates/ulanzi-core", "crates/ulanzi-deckd", "crates/ulanzictl"]
+
+[workspace.package]
+version = "2.0.0-alpha.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux"
+rust-version = "1.99"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+
+[workspace.dependencies]
+ulanzi-proto = { path = "crates/ulanzi-proto" }
+ulanzi-core = { path = "crates/ulanzi-core" }
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+serde_norway = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+tiny-skia = "0.12"
+resvg = "0.48"
+cosmic-text = "0.19"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+include_dir = "0.7"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+zbus = { version = "6", default-features = false, features = ["tokio"] }
+evdev = "0.13"
+rustix = { version = "1", features = ["fs", "process"] }
+inotify = "0.11"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+proptest = "1"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

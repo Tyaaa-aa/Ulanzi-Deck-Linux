@@ -1,5 +1,0 @@
-# Ulanzi D200 StreamDeck Device
-# Vendor ID: 2207, Product ID: 0019
-
-SUBSYSTEM=="usb", ATTRS{idVendor}=="2207", ATTRS{idProduct}=="0019", MODE="0666"
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2207", ATTRS{idProduct}=="0019", MODE="0666"
