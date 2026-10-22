@@ -97,6 +97,13 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     tokio::spawn(forward_signals(conn.clone(), events.resubscribe()));
+    let quit = Arc::new(tokio::sync::Notify::new());
+    tokio::spawn(ulanzi_deckd::tray::run(
+        tx.clone(),
+        events.resubscribe(),
+        store.clone(),
+        quit.clone(),
+    ));
     tokio::spawn(hotplug(tx.clone(), events));
     tokio::spawn(sample_loop(
         tx.clone(),
@@ -115,6 +122,10 @@ async fn main() -> ExitCode {
         tokio::select! {
             _ = term.recv() => break,
             _ = int.recv() => break,
+            _ = quit.notified() => {
+                tracing::info!("quit from the tray");
+                break;
+            }
             _ = hup.recv() => {
                 tracing::info!("reloading configuration");
                 reload(&tx, &store).await;

@@ -6,6 +6,7 @@ pub mod icon_picker;
 pub mod inspector;
 pub mod library;
 pub mod onboarding;
+pub mod preferences;
 pub mod sidebar;
 pub mod window;
 

@@ -128,10 +128,20 @@ fn main() -> glib::ExitCode {
             app.add_action(&onboarding);
         }
         {
+            let prefs = gio::SimpleAction::new("preferences", None);
+            let (state, window) = (state.clone(), window.clone());
+            prefs.connect_activate(move |_, _| ui::preferences::open(&state, &window));
+            app.add_action(&prefs);
+            app.set_accels_for_action("app.preferences", &["<Ctrl>comma"]);
+        }
+        if shot.is_none() {
+            ui::preferences::follow_appearance(&state);
+        }
+        {
             let about = gio::SimpleAction::new("about", None);
             let window = window.clone();
             about.connect_activate(move |_, _| {
-                adw::AboutDialog::builder()
+                let about = adw::AboutDialog::builder()
                     .application_name("Ulanzi Deck")
                     .application_icon(APP_ID)
                     .version(env!("CARGO_PKG_VERSION"))
@@ -140,8 +150,27 @@ fn main() -> glib::ExitCode {
                     .website("https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux")
                     .issue_url("https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues")
                     .comments("Configure the Ulanzi D200 and D200X stream decks on Linux.")
-                    .build()
-                    .present(Some(&window));
+                    .build();
+                about.add_acknowledgement_section(
+                    Some("Protocol Notes"),
+                    &["homedeck https://github.com/redphx/homedeck"],
+                );
+                about.add_legal_section(
+                    "Lucide icons",
+                    Some("© Lucide Contributors"),
+                    gtk::License::Custom,
+                    Some("ISC License"),
+                );
+                about.add_legal_section(
+                    "Simple Icons",
+                    Some("Simple Icons contributors"),
+                    gtk::License::Custom,
+                    Some(
+                        "CC0 1.0. Brand logos are trademarks of their owners and are shown only to \
+                         label your own keys; their use does not imply endorsement.",
+                    ),
+                );
+                about.present(Some(&window));
             });
             app.add_action(&about);
         }
@@ -167,6 +196,10 @@ fn main() -> glib::ExitCode {
                 Some("library") => library_toggle.set_active(true),
                 Some(o) if o.starts_with("onboarding") => {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
+                }
+                Some("preferences") => ui::preferences::open(&state2, &window),
+                Some("about") => {
+                    gio::prelude::ActionGroupExt::activate_action(&app, "about", None);
                 }
                 Some(o) if o.starts_with("picker") => {
                     ui::icon_picker::open_at(&state2, &window, o.split_once(':').map(|(_, t)| t))
