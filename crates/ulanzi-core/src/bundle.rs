@@ -245,6 +245,17 @@ fn check_image(name: &str, data: &[u8]) -> Result<(), BundleError> {
     Ok(())
 }
 
+/// Only the manifest (for listing snapshots and previews), without checking the rest.
+pub fn read_manifest(bytes: &[u8]) -> Result<Manifest, BundleError> {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| BundleError::NotABundle)?;
+    let f = zip
+        .by_name("manifest.toml")
+        .map_err(|_| BundleError::NotABundle)?;
+    let mut text = String::new();
+    f.take(1024 * 1024).read_to_string(&mut text)?;
+    toml::from_str(&text).map_err(|_| BundleError::NotABundle)
+}
+
 /// Read and check a bundle. Nothing is written.
 pub fn read(bytes: &[u8]) -> Result<Bundle, BundleError> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| BundleError::NotABundle)?;
