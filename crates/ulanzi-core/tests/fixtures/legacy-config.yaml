@@ -1,0 +1,123 @@
+# Sanitized replica of a real Python-era config (same shapes, made-up values).
+brightness: 10
+sleep_timeout: 0
+sleep_brightness: 0
+hide_labels: true
+clock_mode: 3
+label_style: {}
+obs:
+  host: localhost
+  port: 4444
+  password: null
+buttons:
+- image: /nonexistent/generated/monitor_bg_2a0405_fg_b03133.png
+  label: screen off
+  action: command
+  params:
+    cmd: echo screen-off
+  state: 0
+  icon_spec:
+    type: icon
+    name: monitor
+    bg_color: '#2a0405'
+    fg_color: '#b03133'
+- image: /nonexistent/generated/monitor_bg_1f0001_fg_550000.png
+  label: ''
+  action: key
+  params:
+    keys: super+F12
+  icon_spec:
+    type: icon
+    name: monitor
+    bg_color: '#1f0001'
+    fg_color: '#550000'
+- label: Sleep
+  action: command
+  params:
+    cmd: systemctl suspend
+  icon_spec:
+    type: icon
+    name: power
+    bg_color: '#2f2d00'
+    fg_color: '#f1c40f'
+- image: icons/red.png
+  label: kill app
+  action: command
+  params:
+    cmd: pkill -9 someapp
+- image: icons/speaker.png
+  label: speaker
+  action: command
+  params:
+    cmd: 'pactl set-default-sink $(pactl list short sinks | grep analog | awk ''{print $2}'')'
+- action: media
+  label: ''
+  params:
+    control: previous
+    player: ''
+- action: media
+  params:
+    control: play_pause
+    player: ''
+- action: media
+  params:
+    control: next
+    player: spotify
+- image: icons/missing.png
+  action: command
+  params:
+    cmd: plasmashell --replace
+- label: Browser
+  action: app
+  params:
+    name: firefox
+- label: Mute
+  action: key
+  params:
+    keys: ctrl+super+m
+- label: Scene
+  action: obs
+  params:
+    action: toggle_scene
+    scene1: Gaming
+    scene2: Desktop
+- label: AHHH
+  action: command
+  params:
+    cmd: "pw-play '/x/y.mp3'"
+- label: Clock Button
+  action: media
+  params:
+    control: play_pause
+- null
+- label: Side Btn 1
+  action: command
+  params: {}
+- label: Side Btn 2
+  action: command
+  params: {}
+dials:
+  17:
+    click:
+      action: volume
+      params: {operation: mute, step: 2, limit_100: true, target: default}
+    left:
+      action: volume
+      params: {operation: down, step: 2, limit_100: true, target: default}
+    right:
+      action: volume
+      params: {operation: up, step: 2, limit_100: true, target: default}
+  18:
+    click:
+      action: volume
+      params: {operation: mute, step: 2, limit_100: true, target: app, name: Discord}
+    left:
+      action: volume
+      params: {operation: down, step: 4, limit_100: true, target: app, name: Discord}
+    right:
+      action: volume
+      params: {operation: up, step: 4, limit_100: true, target: app, name: Discord}
+  19:
+    left:
+      action: volume
+      params: {operation: down, step: 4, target: device, name: alsa_output.usb}
