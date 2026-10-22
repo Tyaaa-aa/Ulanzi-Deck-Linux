@@ -75,6 +75,47 @@ impl DeckService {
             .unwrap_or(1)
     }
 
+    /// Every profile's revision moves on, so an open editor reloads instead of saving over a change.
+    fn bump(&self, ids: &[Uuid]) {
+        if let Ok(mut r) = self.revisions.lock() {
+            for id in ids {
+                let next = r.get(id).copied().unwrap_or(1) + 1;
+                r.insert(*id, next);
+            }
+        }
+    }
+
+    /// Tell the deck about profiles that appeared, changed or went away on disk.
+    async fn resync(&self) -> Result<()> {
+        let on_disk: Vec<Uuid> = self
+            .store
+            .list_profiles()
+            .into_iter()
+            .filter_map(|l| match l {
+                ProfileLoad::Ok(p) => Some(p.id),
+                _ => None,
+            })
+            .collect();
+        reload(&self.tx, &self.store).await;
+        for (id, _) in self.snapshot().await?.profiles {
+            if !on_disk.contains(&id) {
+                self.send(DeckMsg::RemoveProfile(id)).await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn snap(&self, reason: &str) -> Result<String> {
+        ulanzi_core::snapshot::take(&self.store, reason)
+            .map(|s| s.name)
+            .map_err(|e| DeckError::Unavailable(format!("could not back up first: {e}")))
+    }
+
+    fn read_bundle(path: &str) -> Result<ulanzi_core::bundle::Bundle> {
+        let bytes = std::fs::read(path).map_err(|e| DeckError::NotFound(format!("{path}: {e}")))?;
+        ulanzi_core::bundle::read(&bytes).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
     fn id(s: &str) -> Result<Uuid> {
         Uuid::parse_str(s).map_err(|_| DeckError::Invalid(format!("{s:?} is not a profile id")))
     }
@@ -204,6 +245,113 @@ impl DeckService {
         Ok((w.class, w.desktop_id, w.title))
     }
 
+    /// Check a `.ulanzideck` file: its manifest (TOML) and the names of profiles that already exist.
+    async fn preview_bundle(&self, path: String) -> Result<(String, Vec<String>)> {
+        let b = Self::read_bundle(&path)?;
+        let have: Vec<Uuid> = self
+            .store
+            .list_profiles()
+            .into_iter()
+            .filter_map(|l| match l {
+                ProfileLoad::Ok(p) => Some(p.id),
+                _ => None,
+            })
+            .collect();
+        let conflicts = b
+            .profiles
+            .iter()
+            .filter(|p| have.contains(&p.profile.id))
+            .map(|p| p.profile.name.clone())
+            .collect();
+        let manifest = toml::to_string_pretty(&b.manifest).map_err(|e| DeckError::Invalid(e.to_string()))?;
+        Ok((manifest, conflicts))
+    }
+
+    /// Import a `.ulanzideck` file. `conflict` is keep_both, replace or skip. Returns the imported
+    /// profile ids, warnings, and the snapshot taken first (restore it to undo).
+    async fn import_bundle(
+        &self,
+        path: String,
+        conflict: String,
+        keep_rules: bool,
+        settings: bool,
+        switch_to: bool,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<(Vec<String>, Vec<String>, String)> {
+        use ulanzi_core::bundle::{Conflict, ImportOptions};
+        let b = Self::read_bundle(&path)?;
+        let conflict = match conflict.as_str() {
+            "replace" => Conflict::Replace,
+            "skip" => Conflict::Skip,
+            _ => Conflict::KeepBoth,
+        };
+        let undo = self.snap("before-import")?;
+        let device = self.snapshot().await.ok().map(|s| s.model);
+        let r = ulanzi_core::bundle::import(
+            &self.store,
+            &b,
+            &ImportOptions {
+                conflict,
+                keep_rules,
+                settings,
+                device,
+            },
+        )
+        .map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let touched: Vec<Uuid> = r.imported.iter().chain(&r.replaced).copied().collect();
+        self.bump(&touched);
+        self.resync().await?;
+        if switch_to && let Some(id) = touched.first() {
+            self.send(DeckMsg::SwitchProfile(*id)).await?;
+        }
+        let _ = Self::profiles_changed(&emitter).await;
+        Ok((touched.iter().map(Uuid::to_string).collect(), r.warnings, undo))
+    }
+
+    /// Write profiles (all when `ids` is empty) to a `.ulanzideck` file.
+    async fn export_bundle(&self, path: String, ids: Vec<String>, include_settings: bool) -> Result<()> {
+        let ids: Vec<Uuid> = ids.iter().map(|i| Self::id(i)).collect::<Result<_>>()?;
+        let bytes = ulanzi_core::bundle::export(&self.store, &ids, include_settings)
+            .map_err(|e| DeckError::Invalid(e.to_string()))?;
+        ulanzi_core::store::write_atomic(std::path::Path::new(&path), &bytes)
+            .map_err(|e| DeckError::Unavailable(format!("{path}: {e}")))
+    }
+
+    /// Backups, newest first: (name, created, reason, profile names).
+    async fn list_snapshots(&self) -> Result<Vec<(String, String, String, Vec<String>)>> {
+        Ok(ulanzi_core::snapshot::list(&self.store)
+            .into_iter()
+            .map(|s| (s.name, s.created, s.reason, s.profiles))
+            .collect())
+    }
+
+    async fn take_snapshot(&self, reason: String) -> Result<String> {
+        self.snap(&reason)
+    }
+
+    /// Put everything back as in snapshot `name`. Returns the snapshot taken just before (to undo).
+    async fn restore_snapshot(
+        &self,
+        name: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<String> {
+        let before = ulanzi_core::snapshot::restore(&self.store, &name)
+            .map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let ids: Vec<Uuid> = self
+            .store
+            .list_profiles()
+            .into_iter()
+            .filter_map(|l| match l {
+                ProfileLoad::Ok(p) => Some(p.id),
+                _ => None,
+            })
+            .collect();
+        self.bump(&ids);
+        self.resync().await?;
+        let _ = Self::profiles_changed(&emitter).await;
+        Ok(before.name)
+    }
+
     /// Import the old Python config. Returns (profile id, keys, warnings).
     async fn migrate(&self, force: bool) -> Result<(String, u32, Vec<String>)> {
         let path = ulanzi_core::migrate::legacy_config_path()
@@ -211,6 +359,7 @@ impl DeckService {
             .ok_or_else(|| {
                 DeckError::NotFound("no old configuration at ~/.config/ulanzi/config.yaml".into())
             })?;
+        self.snap("before-migration")?;
         let r = ulanzi_core::migrate::migrate_legacy(&path, &self.store, force)
             .map_err(|e| DeckError::Invalid(e.to_string()))?;
         reload(&self.tx, &self.store).await;
@@ -277,6 +426,7 @@ impl DeckService {
         if self.snapshot().await?.profiles.len() <= 1 {
             return Err(DeckError::Invalid("the last profile cannot be deleted".into()));
         }
+        self.snap("before-delete")?;
         self.store
             .delete_profile(id)
             .map_err(|e| DeckError::NotFound(e.to_string()))?;

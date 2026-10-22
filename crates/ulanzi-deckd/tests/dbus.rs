@@ -293,3 +293,86 @@ async fn profile_revision_is_exposed() {
         .expect("rev");
     assert_eq!(rev, 1);
 }
+
+type Imported = (Vec<String>, Vec<String>, String);
+type Snapshots = Vec<(String, String, String, Vec<String>)>;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn export_then_import_round_trip() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let file = r._dir.path().join("out.ulanzideck");
+    let path = file.to_string_lossy().into_owned();
+    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), Vec::<String>::new(), false))
+        .await
+        .expect("export");
+    let (manifest, conflicts): (String, Vec<String>) =
+        p.call("PreviewBundle", &(path.as_str(),)).await.expect("preview");
+    assert!(manifest.contains("Default"), "{manifest}");
+    assert_eq!(conflicts, vec!["Default".to_string()]);
+    let (imported, _warnings, _undo): Imported = p
+        .call("ImportBundle", &(path.as_str(), "keep_both", true, false, false))
+        .await
+        .expect("import");
+    assert_eq!(imported.len(), 1);
+    let list: Vec<(String, String)> = p.call("ListProfiles", &()).await.expect("list");
+    assert!(list.iter().any(|(_, n)| n == "Default (2)"), "{list:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn import_takes_snapshot_and_undo_restores() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let file = r._dir.path().join("out.ulanzideck");
+    let path = file.to_string_lossy().into_owned();
+    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), Vec::<String>::new(), false))
+        .await
+        .expect("export");
+    let (imported, _, undo): Imported = p
+        .call("ImportBundle", &(path.as_str(), "keep_both", true, false, false))
+        .await
+        .expect("import");
+    let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("list");
+    assert!(
+        snaps.iter().any(|s| s.0 == undo && s.2 == "before-import"),
+        "{snaps:?}"
+    );
+    let _: String = p
+        .call("RestoreSnapshot", &(undo.as_str(),))
+        .await
+        .expect("restore");
+    let list: Vec<(String, String)> = p.call("ListProfiles", &()).await.expect("list");
+    assert!(!list.iter().any(|(i, _)| *i == imported[0]), "{list:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn import_replace_reloads_open_profile() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let id = r.profile.id.to_string();
+    let file = r._dir.path().join("out.ulanzideck");
+    let path = file.to_string_lossy().into_owned();
+    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), vec![id.clone()], false))
+        .await
+        .expect("export");
+    let before: u64 = p.call("ProfileRevision", &(id.as_str(),)).await.expect("rev");
+    let _: Imported = p
+        .call("ImportBundle", &(path.as_str(), "replace", true, false, false))
+        .await
+        .expect("import");
+    let after: u64 = p.call("ProfileRevision", &(id.as_str(),)).await.expect("rev");
+    assert!(
+        after > before,
+        "an open editor must see the change ({before} → {after})"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_profile_takes_snapshot() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let id: String = p.call("CreateProfile", &("Temp",)).await.expect("create");
+    p.call::<_, _, ()>("DeleteProfile", &(id,)).await.expect("delete");
+    let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("list");
+    assert!(snaps.iter().any(|s| s.2 == "before-delete"), "{snaps:?}");
+}

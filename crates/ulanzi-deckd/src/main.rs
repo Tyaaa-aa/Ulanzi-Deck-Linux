@@ -95,6 +95,11 @@ async fn main() -> ExitCode {
     tracing::info!("ulanzi-deckd {} starting", env!("CARGO_PKG_VERSION"));
 
     first_run(&store);
+    if ulanzi_core::snapshot::due_daily(&store)
+        && let Err(e) = ulanzi_core::snapshot::take(&store, "daily")
+    {
+        tracing::warn!("daily backup failed: {e}");
+    }
     let settings = store.load_settings().unwrap_or_else(|e| {
         tracing::error!("settings unreadable, using defaults: {e}");
         Default::default()

@@ -41,6 +41,33 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Import profiles from a .ulanzideck file (a backup is taken first).
+    Import {
+        file: PathBuf,
+        /// Replace profiles that already exist (default: keep both).
+        #[arg(long, conflicts_with = "skip")]
+        replace: bool,
+        /// Skip profiles that already exist.
+        #[arg(long)]
+        skip: bool,
+        /// Switch to the first imported profile.
+        #[arg(long)]
+        switch: bool,
+    },
+    /// Export profiles to a .ulanzideck file (all of them unless --profile is given).
+    Export {
+        file: PathBuf,
+        /// A profile name or id; repeat for several.
+        #[arg(long = "profile")]
+        profiles: Vec<String>,
+        /// Include the settings (never the OBS password).
+        #[arg(long)]
+        settings: bool,
+    },
+    /// List backups, newest first.
+    Snapshots,
+    /// Restore a backup by name (the current state is backed up first).
+    Restore { name: String },
     /// Check profile files for errors (all profiles when no file is given).
     Validate { file: Option<PathBuf> },
     /// Print key presses, page changes and action errors as they happen.
@@ -115,6 +142,13 @@ async fn proxy() -> Result<zbus::Proxy<'static>, String> {
     zbus::Proxy::new(&conn, BUS_NAME, OBJECT_PATH, INTERFACE)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// The service resolves paths itself, so hand it an absolute one.
+fn absolute(p: &Path) -> Result<String, String> {
+    std::path::absolute(p)
+        .map(|a| a.to_string_lossy().into_owned())
+        .map_err(|e| format!("{}: {e}", p.display()))
 }
 
 fn not_running(e: zbus::Error) -> String {
@@ -199,6 +233,74 @@ async fn run(cli: Cli) -> Result<(), String> {
             for w in warnings {
                 println!("  warning: {w}");
             }
+        }
+        Cmd::Import {
+            file,
+            replace,
+            skip,
+            switch,
+        } => {
+            let path = absolute(&file)?;
+            let conflict = if replace {
+                "replace"
+            } else if skip {
+                "skip"
+            } else {
+                "keep_both"
+            };
+            let (ids, warnings, undo): (Vec<String>, Vec<String>, String) = proxy()
+                .await?
+                .call("ImportBundle", &(path.as_str(), conflict, true, false, switch))
+                .await
+                .map_err(not_running)?;
+            println!("imported {} profile(s)", ids.len());
+            for w in warnings {
+                println!("  warning: {w}");
+            }
+            println!("to undo: ulanzictl restore {undo}");
+        }
+        Cmd::Export {
+            file,
+            profiles,
+            settings,
+        } => {
+            let p = proxy().await?;
+            let list: Vec<(String, String)> = p.call("ListProfiles", &()).await.map_err(not_running)?;
+            let ids = profiles
+                .iter()
+                .map(|want| {
+                    list.iter()
+                        .find(|(id, name)| id == want || name.eq_ignore_ascii_case(want))
+                        .map(|(id, _)| id.clone())
+                        .ok_or_else(|| format!("no profile called {want:?}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let path = absolute(&file)?;
+            p.call::<_, _, ()>("ExportBundle", &(path.as_str(), ids, settings))
+                .await
+                .map_err(not_running)?;
+            println!("wrote {path}");
+        }
+        Cmd::Snapshots => {
+            let snaps: Vec<(String, String, String, Vec<String>)> = proxy()
+                .await?
+                .call("ListSnapshots", &())
+                .await
+                .map_err(not_running)?;
+            if snaps.is_empty() {
+                println!("no backups yet");
+            }
+            for (name, created, reason, profiles) in snaps {
+                println!("{name}\n  {created} · {reason} · {}", profiles.join(", "));
+            }
+        }
+        Cmd::Restore { name } => {
+            let undo: String = proxy()
+                .await?
+                .call("RestoreSnapshot", &(name.as_str(),))
+                .await
+                .map_err(not_running)?;
+            println!("restored {name}; to undo: ulanzictl restore {undo}");
         }
         Cmd::Validate { file } => match file {
             Some(f) => {
@@ -339,6 +441,36 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Cmd, clap::Error> {
         Cli::try_parse_from(std::iter::once("ulanzictl").chain(args.iter().copied())).map(|c| c.cmd)
+    }
+
+    #[test]
+    fn import_and_export_flags() {
+        assert_eq!(
+            parse(&["import", "a.ulanzideck", "--replace", "--switch"]).expect("ok"),
+            Cmd::Import {
+                file: "a.ulanzideck".into(),
+                replace: true,
+                skip: false,
+                switch: true
+            }
+        );
+        assert!(parse(&["import", "a.ulanzideck", "--replace", "--skip"]).is_err());
+        assert_eq!(
+            parse(&[
+                "export",
+                "b.ulanzideck",
+                "--profile",
+                "Photo Editing",
+                "--profile",
+                "Default"
+            ])
+            .expect("ok"),
+            Cmd::Export {
+                file: "b.ulanzideck".into(),
+                profiles: vec!["Photo Editing".into(), "Default".into()],
+                settings: false
+            }
+        );
     }
 
     #[test]
