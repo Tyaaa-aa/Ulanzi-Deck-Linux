@@ -6,6 +6,7 @@ use crate::state::{Change, State};
 
 pub struct Panel {
     pub root: gtk::Widget,
+    pub header: adw::HeaderBar,
 }
 
 impl Panel {
@@ -37,6 +38,9 @@ impl Panel {
         view.set_content(Some(&stack));
         let _ = state;
         let _ = Change::Selection;
-        Panel { root: view.upcast() }
+        Panel {
+            root: view.upcast(),
+            header,
+        }
     }
 }

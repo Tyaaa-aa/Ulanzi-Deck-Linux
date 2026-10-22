@@ -227,7 +227,8 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .max_sidebar_width(380.0)
         .sidebar_width_fraction(0.3)
         .build();
-    inner_split.set_content(Some(&canvas::build(state)));
+    let canvas = canvas::build(state);
+    inner_split.set_content(Some(&canvas.widget));
     let panel = inspector::Panel::build(state, &library_toggle);
     inner_split.set_sidebar(Some(&panel.root));
     content_view.set_content(Some(&inner_split));
@@ -263,6 +264,34 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     ));
     narrow.add_setter(&outer_split, "collapsed", Some(&true.to_value()));
     narrow.add_setter(&inner_split, "collapsed", Some(&true.to_value()));
+    {
+        let f = canvas.set_compact.clone();
+        narrow.connect_apply(move |_| f(true));
+        let f = canvas.set_compact.clone();
+        narrow.connect_unapply(move |_| f(false));
+    }
+    // With the sidebar folded away, a header button brings it back.
+    let sidebar_toggle = gtk::ToggleButton::builder()
+        .icon_name("sidebar-show-symbolic")
+        .tooltip_text("Profiles and Pages")
+        .visible(false)
+        .build();
+    header.pack_start(&sidebar_toggle);
+    outer_split
+        .bind_property("collapsed", &sidebar_toggle, "visible")
+        .sync_create()
+        .build();
+    outer_split
+        .bind_property("show-sidebar", &sidebar_toggle, "active")
+        .sync_create()
+        .bidirectional()
+        .build();
+    // The panel's own window buttons only while it sits beside the canvas.
+    inner_split
+        .bind_property("collapsed", &panel.header, "show-end-title-buttons")
+        .sync_create()
+        .invert_boolean()
+        .build();
     window.add_breakpoint(narrow);
     {
         let (inner, state) = (inner_split.clone(), state.clone());

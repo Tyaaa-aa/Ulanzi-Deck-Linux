@@ -114,6 +114,22 @@
   font-size: smaller;
 }
 
+/* Narrow windows */
+.deck-body.compact {
+  padding: 18px;
+  border-radius: 26px;
+}
+
+.deck-body.compact .deck-dial {
+  min-width: 54px;
+  min-height: 54px;
+}
+
+.deck-body.compact .deck-small {
+  min-width: 32px;
+  min-height: 32px;
+}
+
 /* Header status pill */
 .status-pill {
   border-radius: 99px;

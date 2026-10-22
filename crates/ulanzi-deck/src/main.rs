@@ -98,7 +98,10 @@ fn main() -> glib::ExitCode {
                     adw::ColorScheme::ForceLight
                 });
             }
+            // A fixed-size window: the compositor would otherwise restore the size it remembers.
             win.window.set_default_size(shot.size.0, shot.size.1);
+            win.window.set_size_request(shot.size.0, shot.size.1);
+            win.window.set_resizable(false);
         }
         win.window.present();
         let window = win.window.clone();
@@ -119,6 +122,12 @@ fn main() -> glib::ExitCode {
                 });
             }
             glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                let (min, nat, _, _) = window.measure(gtk::Orientation::Horizontal, -1);
+                eprintln!(
+                    "window {}x{} (min width {min}, natural {nat})",
+                    window.width(),
+                    window.height()
+                );
                 match save_screenshot(&window, &shot.path) {
                     Ok(()) => println!("saved {}", shot.path.display()),
                     Err(e) => eprintln!("screenshot failed: {e}"),

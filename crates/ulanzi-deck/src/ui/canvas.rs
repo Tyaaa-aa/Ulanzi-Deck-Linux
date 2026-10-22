@@ -37,6 +37,95 @@ pub fn select_op(m: gdk::ModifierType) -> SelectOp {
     }
 }
 
+/// Where on a dial something was dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialZone {
+    Left,
+    Press,
+    Right,
+}
+
+/// Left third = turn left, right third = turn right, middle = press.
+pub fn hit_zone(width: f64, x: f64) -> DialZone {
+    if width <= 0.0 {
+        DialZone::Press
+    } else if x < width / 3.0 {
+        DialZone::Left
+    } else if x > width * 2.0 / 3.0 {
+        DialZone::Right
+    } else {
+        DialZone::Press
+    }
+}
+
+/// What is being dragged.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Payload {
+    Key(u8),
+    Action(ulanzi_core::model::Action),
+}
+
+pub fn action_payload(a: &ulanzi_core::model::Action) -> String {
+    format!("ulanzi-action:{}", serde_json::to_string(a).unwrap_or_default())
+}
+
+pub fn parse_payload(s: &str) -> Option<Payload> {
+    if let Some(n) = s.strip_prefix("ulanzi-key:") {
+        return n.parse().ok().map(Payload::Key);
+    }
+    let json = s.strip_prefix("ulanzi-action:")?;
+    serde_json::from_str(json).ok().map(Payload::Action)
+}
+
+/// Accept dragged keys and actions on `w`; `on_drop` gets the payload and the drop x position.
+fn accept_drops(w: &gtk::Button, on_drop: impl Fn(Payload, f64) + 'static) {
+    let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    {
+        let w = w.clone();
+        target.connect_enter(move |_, _, _| {
+            w.add_css_class("drop-target");
+            gdk::DragAction::COPY
+        });
+    }
+    {
+        let w = w.clone();
+        target.connect_leave(move |_| w.remove_css_class("drop-target"));
+    }
+    {
+        let w = w.clone();
+        target.connect_drop(move |_, value, x, _| {
+            w.remove_css_class("drop-target");
+            match value.get::<String>().ok().and_then(|s| parse_payload(&s)) {
+                Some(p) => {
+                    on_drop(p, x);
+                    true
+                }
+                None => false,
+            }
+        });
+    }
+    w.add_controller(target);
+}
+
+/// Make key `n` draggable (to swap it with another key).
+fn drag_key(k: &KeyWidget, n: u8) {
+    let source = gtk::DragSource::builder().actions(gdk::DragAction::MOVE).build();
+    source.connect_prepare(move |_, _, _| {
+        Some(gdk::ContentProvider::for_value(
+            &format!("ulanzi-key:{n}").to_value(),
+        ))
+    });
+    {
+        let picture = k.picture.clone();
+        source.connect_drag_begin(move |src, _| {
+            if let Some(p) = picture.paintable() {
+                src.set_icon(Some(&p), 30, 30);
+            }
+        });
+    }
+    k.button.add_controller(source);
+}
+
 fn modifiers(w: &impl IsA<gtk::Widget>) -> gdk::ModifierType {
     w.display()
         .default_seat()
@@ -139,7 +228,15 @@ fn screen_texture(state: &State) -> Option<gdk::Texture> {
     texture(&png)
 }
 
-pub fn build(state: &State) -> gtk::Widget {
+/// The canvas widget and a switch for its compact size (narrow windows).
+pub struct Canvas {
+    pub widget: gtk::Widget,
+    pub set_compact: Rc<dyn Fn(bool)>,
+}
+
+pub const COMPACT_KEY_PX: i32 = 62;
+
+pub fn build(state: &State) -> Canvas {
     let keys: Rc<Vec<KeyWidget>> = Rc::new((0..13).map(|_| key_widget(KEY_PX)).collect());
     let screen = key_widget(KEY_PX * 2 + GAP);
     screen.button.remove_css_class("deck-key");
@@ -271,6 +368,59 @@ pub fn build(state: &State) -> gtk::Widget {
         let state = state.clone();
         d.connect_clicked(move |b| click(&state, Slot::Dial(n as u8), b));
     }
+    // Drag and drop.
+    for (n, k) in keys.iter().enumerate() {
+        let n = n as u8;
+        drag_key(k, n);
+        let state = state.clone();
+        accept_drops(&k.button, move |p, _| match p {
+            Payload::Key(from) if from != n => {
+                state.edit(|e| e.swap(from, n));
+                state.select(|s| s.click(Slot::Key(n)));
+            }
+            Payload::Key(_) => {}
+            Payload::Action(a) => {
+                state.edit(|e| e.drop_action(Slot::Key(n), a));
+                state.select(|s| s.click(Slot::Key(n)));
+            }
+        });
+    }
+    {
+        let state = state.clone();
+        accept_drops(&screen.0.button, move |p, _| {
+            if let Payload::Action(a) = p {
+                state.edit(|e| e.drop_action(Slot::Screen, a));
+                state.select(|s| s.click(Slot::Screen));
+            }
+        });
+    }
+    for (n, b) in small.iter().enumerate() {
+        let state = state.clone();
+        accept_drops(b, move |p, _| {
+            if let Payload::Action(a) = p {
+                state.edit(|e| e.drop_action(Slot::Small(n as u8), a));
+                state.select(|s| s.click(Slot::Small(n as u8)));
+            }
+        });
+    }
+    for (n, d) in dials.iter().enumerate() {
+        let state = state.clone();
+        let dial = d.clone();
+        accept_drops(d, move |p, x| {
+            if let Payload::Action(a) = p {
+                let zone = hit_zone(dial.width() as f64, x);
+                state.edit(|e| {
+                    e.set_dial(n as u8, |d| match zone {
+                        DialZone::Left => d.left = Some(a),
+                        DialZone::Right => d.right = Some(a),
+                        DialZone::Press => d.press = Some(a),
+                    })
+                });
+                state.select(|s| s.click(Slot::Dial(n as u8)));
+            }
+        });
+    }
+
     // Clicking the background clears the selection.
     {
         let state = state.clone();
@@ -383,7 +533,29 @@ pub fn build(state: &State) -> gtk::Widget {
     redraw(Change::Profile);
     redraw(Change::Selection);
     state.on(redraw);
-    scroller.upcast()
+    let set_compact: Rc<dyn Fn(bool)> = {
+        let (keys, screen, body, grid) = (keys.clone(), screen.clone(), body.clone(), grid.clone());
+        Rc::new(move |compact: bool| {
+            let (px, gap) = if compact {
+                (COMPACT_KEY_PX, 8)
+            } else {
+                (KEY_PX, GAP)
+            };
+            for k in keys.iter() {
+                k.button.set_size_request(px, px);
+                k.picture.set_size_request(px - 12, px - 12);
+            }
+            screen.0.button.set_size_request(px * 2 + gap, px);
+            screen.0.picture.set_size_request(px * 2 + gap - 12, px - 12);
+            grid.set_row_spacing(gap as u32);
+            grid.set_column_spacing(gap as u32);
+            set_class(&body, "compact", compact);
+        })
+    };
+    Canvas {
+        widget: scroller.upcast(),
+        set_compact,
+    }
 }
 
 fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
@@ -397,6 +569,22 @@ fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dial_hit_zones() {
+        assert_eq!(hit_zone(76.0, 5.0), DialZone::Left);
+        assert_eq!(hit_zone(76.0, 38.0), DialZone::Press);
+        assert_eq!(hit_zone(76.0, 70.0), DialZone::Right);
+        assert_eq!(hit_zone(0.0, 0.0), DialZone::Press);
+    }
+
+    #[test]
+    fn drag_payloads_roundtrip() {
+        assert_eq!(parse_payload("ulanzi-key:7"), Some(Payload::Key(7)));
+        let a = ulanzi_core::model::Action::NextPage;
+        assert_eq!(parse_payload(&action_payload(&a)), Some(Payload::Action(a)));
+        assert_eq!(parse_payload("hello"), None);
+    }
 
     #[test]
     fn modifiers_to_selection_op() {
