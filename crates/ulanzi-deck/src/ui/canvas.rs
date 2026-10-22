@@ -394,7 +394,7 @@ pub fn build(state: &State) -> Canvas {
                 // Dropping on a selected key sets the image on the whole selection.
                 let sel = state.selection.borrow().keys();
                 let keys = if sel.contains(&n) { sel } else { vec![n] };
-                crate::ui::icon_picker::import_into(&state, &path, &keys);
+                crate::ui::icon_picker::import_into(&state, &path, &keys, |_| {});
             }
         });
     }

@@ -191,6 +191,7 @@ fn main() -> glib::ExitCode {
                         .filter_map(|k| k.parse().ok())
                         .for_each(|k| s.toggle(ulanzi_core::edit::Slot::Key(k))),
                     Some(("dial", n)) => s.click(ulanzi_core::edit::Slot::Dial(n.parse().unwrap_or(0))),
+                    Some(("small", n)) => s.click(ulanzi_core::edit::Slot::Small(n.parse().unwrap_or(0))),
                     _ if sel == "screen" => s.click(ulanzi_core::edit::Slot::Screen),
                     _ => {}
                 });

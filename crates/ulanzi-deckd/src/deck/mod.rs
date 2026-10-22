@@ -104,10 +104,21 @@ pub fn spawn_deck(
     runner: Arc<dyn ActionRunner>,
 ) -> (mpsc::Sender<DeckMsg>, broadcast::Receiver<DeckEvent>) {
     let (tx, rx) = mpsc::channel(256);
+    let events = start_deck(store, settings, runner, rx);
+    (tx, events)
+}
+
+/// Start the deck actor on an existing channel (messages sent before this wait in the channel).
+pub fn start_deck(
+    store: Store,
+    settings: Settings,
+    runner: Arc<dyn ActionRunner>,
+    rx: mpsc::Receiver<DeckMsg>,
+) -> broadcast::Receiver<DeckEvent> {
     let (events, events_rx) = broadcast::channel(256);
     let deck = Deck::new(store, settings, runner, events);
     tokio::spawn(deck.run(rx));
-    (tx, events_rx)
+    events_rx
 }
 
 struct Deck {

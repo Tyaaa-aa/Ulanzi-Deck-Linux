@@ -23,6 +23,8 @@ gtk-update-icon-cache -q -t "$icons" 2>/dev/null || true
 install -m 0644 packaging/systemd/ulanzi-deckd.service "$units/"
 install -m 0644 packaging/dbus/io.github.tyaaa_aa.UlanziDeck.service "$dbus/"
 systemctl --user daemon-reload
+# Let the session bus see the (new) activation file.
+busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 
 cat <<MSG
 Installed ulanzi-deck, ulanzi-deckd and ulanzictl to $bin, and the app to the menu.

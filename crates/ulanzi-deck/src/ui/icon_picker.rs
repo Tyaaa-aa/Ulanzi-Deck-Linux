@@ -18,21 +18,29 @@ use crate::state::State;
 use crate::ui::action_editor::installed_apps;
 use crate::ui::canvas::profile_dir;
 
-/// Copy a picture into the profile and show it on `keys`.
-pub fn import_into(state: &State, path: &Path, keys: &[u8]) -> bool {
+/// Copy a picture into the profile and show it on `keys`. Decoding runs off the UI thread, so a
+/// huge photo never freezes the window; `done` gets whether it worked.
+pub fn import_into(state: &State, path: &Path, keys: &[u8], done: impl FnOnce(bool) + 'static) {
     if keys.is_empty() {
-        return false;
+        done(false);
+        return;
     }
-    match import_image(path, &profile_dir(state)) {
-        Ok(rel) => {
-            state.edit(|e| e.set_field(keys, Field::Source(ImageSource::Image { path: rel })));
-            true
-        }
-        Err(e) => {
-            crate::ui::toast(state, &e.to_string());
-            false
-        }
-    }
+    let (path, dir, keys) = (path.to_path_buf(), profile_dir(state), keys.to_vec());
+    let state = state.clone();
+    crate::runtime::run(
+        async move { tokio::task::spawn_blocking(move || import_image(&path, &dir)).await },
+        move |r| match r {
+            Ok(Ok(rel)) => {
+                state.edit(|e| e.set_field(&keys, Field::Source(ImageSource::Image { path: rel })));
+                done(true);
+            }
+            Ok(Err(e)) => {
+                crate::ui::toast(&state, &e.to_string());
+                done(false);
+            }
+            Err(_) => done(false),
+        },
+    );
 }
 
 /// What a grid cell shows.
@@ -552,10 +560,13 @@ pub fn open_at(state: &State, parent: &impl IsA<gtk::Widget>, tab: Option<&str>)
             let window = b.root().and_downcast::<gtk::Window>();
             let (state, keys, dialog) = (state.clone(), keys.clone(), dialog.clone());
             fd.open(window.as_ref(), None::<&gio::Cancellable>, move |res| {
-                if let Some(path) = res.ok().and_then(|f| f.path())
-                    && import_into(&state, &path, &keys)
-                {
-                    dialog.close();
+                if let Some(path) = res.ok().and_then(|f| f.path()) {
+                    let dialog = dialog.clone();
+                    import_into(&state, &path, &keys, move |ok| {
+                        if ok {
+                            dialog.close();
+                        }
+                    });
                 }
             });
         });

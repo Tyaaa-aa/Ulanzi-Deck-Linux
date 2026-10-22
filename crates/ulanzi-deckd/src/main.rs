@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use ulanzi_core::store::Store;
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals, reload};
-use ulanzi_deckd::deck::{DeckEvent, DeckMsg, spawn_deck};
+use ulanzi_deckd::deck::{DeckEvent, DeckMsg, start_deck};
 use ulanzi_deckd::screen::Sampler;
 use ulanzi_deckd::transport::{DeviceState, Hidraw, probe, watch_dev};
 
@@ -47,21 +47,15 @@ async fn main() -> ExitCode {
     };
     let _log_guard = init_logging(store.state_dir());
 
-    // Take the bus name first so a second instance exits before touching anything.
+    // Connect, publish the API, then take the bus name, so a call that D-Bus activation queued for
+    // us never arrives before the object exists. A second instance exits at the name request,
+    // before it touches the deck or the configuration.
     let conn = match zbus::connection::Builder::session()
-        .and_then(|b| b.name(BUS_NAME))
-        .map(|b| {
-            // A frozen media player must not stall the deck: every D-Bus call gets a time limit.
-            b.allow_name_replacements(true)
-                .replace_existing_names(replace)
-                .method_timeout(std::time::Duration::from_secs(2))
-        }) {
+        // A frozen media player must not stall the deck: every D-Bus call gets a time limit.
+        .map(|b| b.method_timeout(std::time::Duration::from_secs(2)))
+    {
         Ok(b) => match b.build().await {
             Ok(c) => c,
-            Err(zbus::Error::NameTaken) => {
-                eprintln!("ulanzi-deckd is already running (use --replace to take over)");
-                return ExitCode::from(EXIT_ALREADY_RUNNING);
-            }
             Err(e) => {
                 eprintln!("ulanzi-deckd: cannot connect to the session bus: {e}");
                 return ExitCode::FAILURE;
@@ -72,22 +66,9 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    tracing::info!("ulanzi-deckd {} starting", env!("CARGO_PKG_VERSION"));
 
-    first_run(&store);
-    let settings = store.load_settings().unwrap_or_else(|e| {
-        tracing::error!("settings unreadable, using defaults: {e}");
-        Default::default()
-    });
-
-    let executor = Arc::new(Executor::new(Some(conn.clone())));
-    {
-        let ex = executor.clone();
-        tokio::task::spawn_blocking(move || ex.prepare_keyboard());
-    }
-    let media = executor.media().cloned();
-    let (tx, events) = spawn_deck(store.clone(), settings, executor);
-
+    // Calls that arrive before the deck starts wait in this channel.
+    let (tx, rx) = mpsc::channel(256);
     if let Err(e) = conn
         .object_server()
         .at(OBJECT_PATH, DeckService::new(tx.clone(), store.clone()))
@@ -96,6 +77,36 @@ async fn main() -> ExitCode {
         tracing::error!("cannot publish the D-Bus API: {e}");
         return ExitCode::FAILURE;
     }
+    let mut flags = zbus::fdo::RequestNameFlags::AllowReplacement | zbus::fdo::RequestNameFlags::DoNotQueue;
+    if replace {
+        flags |= zbus::fdo::RequestNameFlags::ReplaceExisting;
+    }
+    match conn.request_name_with_flags(BUS_NAME, flags).await {
+        Ok(zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner) => {}
+        Ok(_) | Err(zbus::Error::NameTaken) => {
+            eprintln!("ulanzi-deckd is already running (use --replace to take over)");
+            return ExitCode::from(EXIT_ALREADY_RUNNING);
+        }
+        Err(e) => {
+            eprintln!("ulanzi-deckd: cannot take the bus name: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    tracing::info!("ulanzi-deckd {} starting", env!("CARGO_PKG_VERSION"));
+
+    first_run(&store);
+    let settings = store.load_settings().unwrap_or_else(|e| {
+        tracing::error!("settings unreadable, using defaults: {e}");
+        Default::default()
+    });
+    let executor = Arc::new(Executor::new(Some(conn.clone())));
+    {
+        let ex = executor.clone();
+        tokio::task::spawn_blocking(move || ex.prepare_keyboard());
+    }
+    let media = executor.media().cloned();
+    let events = start_deck(store.clone(), settings, executor, rx);
+
     tokio::spawn(forward_signals(conn.clone(), events.resubscribe()));
     let quit = Arc::new(tokio::sync::Notify::new());
     tokio::spawn(ulanzi_deckd::tray::run(
