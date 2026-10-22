@@ -30,7 +30,11 @@ pub struct Rendered {
 /// Draw a key at [`KEY_PX`]². `None` means there is nothing to draw (no image and a black background),
 /// so the device should show the key empty.
 pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
-    if look.source == ImageSource::None && look.background == Color::BLACK {
+    let own_label = look
+        .label
+        .position
+        .filter(|_| look.label.visible && !look.label.text.trim().is_empty());
+    if look.source == ImageSource::None && look.background == Color::BLACK && own_label.is_none() {
         return None;
     }
     let mut pix = Pixmap::new(KEY_PX, KEY_PX)?;
@@ -81,6 +85,11 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
                 None => warnings.push(format!("Steam has no artwork for game {appid} on this computer")),
             }
         }
+    }
+    if let Some(pos) = own_label
+        && let Err(e) = super::text::draw_label(&mut pix, &look.label.text, pos)
+    {
+        warnings.push(format!("label: {e}"));
     }
     let png = pix.encode_png().ok()?;
     Some(Rendered { png, warnings })

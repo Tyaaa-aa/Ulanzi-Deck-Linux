@@ -34,6 +34,30 @@ impl Default for KeyLook {
 pub struct Label {
     pub text: String,
     pub visible: bool,
+    /// Where this key's label goes; `None` uses the position from Preferences (drawn by the deck).
+    /// A key with its own position has its label drawn into the image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<LabelPosition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelPosition {
+    Top,
+    Middle,
+    Bottom,
+}
+
+impl LabelPosition {
+    pub const ALL: [LabelPosition; 3] = [LabelPosition::Top, LabelPosition::Middle, LabelPosition::Bottom];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            LabelPosition::Top => "Top",
+            LabelPosition::Middle => "Middle",
+            LabelPosition::Bottom => "Bottom",
+        }
+    }
 }
 
 impl Default for Label {
@@ -41,6 +65,7 @@ impl Default for Label {
         Self {
             text: String::new(),
             visible: true,
+            position: None,
         }
     }
 }

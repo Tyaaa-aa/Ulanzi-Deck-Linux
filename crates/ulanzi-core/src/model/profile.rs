@@ -173,6 +173,14 @@ pub struct Key {
 }
 
 impl Profile {
+    /// Every key back to the label settings from Preferences: shown, at the default position.
+    pub fn clear_label_overrides(&mut self) {
+        for key in self.pages.iter_mut().flat_map(|p| p.keys.values_mut()) {
+            key.look.label.position = None;
+            key.look.label.visible = true;
+        }
+    }
+
     /// A profile with one page "Main" and the small buttons flipping pages.
     pub fn new_default(name: &str, model: Model) -> Profile {
         Profile {

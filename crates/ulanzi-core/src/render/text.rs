@@ -6,6 +6,7 @@ use resvg::tiny_skia::Pixmap;
 
 use super::fonts::{Fonts, TextStyle};
 use crate::Color;
+use crate::model::LabelPosition;
 
 /// One font system for the process (loading system fonts is slow).
 fn fonts() -> &'static Mutex<Fonts> {
@@ -63,5 +64,54 @@ pub fn draw_emoji(pix: &mut Pixmap, ch: &str) -> Result<(), String> {
     let w = f.measure_emoji(ch, size);
     let y = (side - size * 1.2) / 2.0;
     f.draw_emoji(pix, ch, ((side - w) / 2.0, y), &style);
+    Ok(())
+}
+
+/// Draw a key label at `position`: bold white with a dark outline so it reads on any image, shrunk
+/// to fit one line.
+pub fn draw_label(pix: &mut Pixmap, text: &str, position: LabelPosition) -> Result<(), String> {
+    let mut f = fonts().lock().map_err(|_| "font lock poisoned")?;
+    let side = pix.width() as f32;
+    let max_w = side * 0.92;
+    let mut size = 30.0;
+    while size > 16.0 && f.measure(text, size, true) > max_w {
+        size -= 2.0;
+    }
+    let line = f
+        .wrap(text, size, true, max_w, 1)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let w = f.measure(&line, size, true);
+    let h = size * 1.2;
+    let y = match position {
+        LabelPosition::Top => side * 0.05,
+        LabelPosition::Middle => (side - h) / 2.0,
+        LabelPosition::Bottom => side * 0.95 - h,
+    };
+    let x = (side - w) / 2.0;
+    let shadow = TextStyle {
+        size,
+        bold: true,
+        rgb: [0, 0, 0],
+    };
+    for (dx, dy) in [
+        (-2.0, 0.0),
+        (2.0, 0.0),
+        (0.0, -2.0),
+        (0.0, 2.0),
+        (1.5, 1.5),
+        (-1.5, 1.5),
+        (1.5, -1.5),
+        (-1.5, -1.5),
+    ] {
+        f.draw(pix, &line, (x + dx, y + dy), &shadow);
+    }
+    let style = TextStyle {
+        size,
+        bold: true,
+        rgb: [255, 255, 255],
+    };
+    f.draw(pix, &line, (x, y), &style);
     Ok(())
 }

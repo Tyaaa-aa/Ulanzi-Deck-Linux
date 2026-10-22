@@ -125,6 +125,7 @@ fn profile_roundtrip_all_action_variants() {
         label: Label {
             text: "screen off".into(),
             visible: true,
+            position: None,
         },
         dynamic: true,
     };
@@ -275,4 +276,22 @@ fn clock_style_defaults_and_roundtrips() {
     let text = toml::to_string(&new).expect("toml");
     assert_eq!(toml::from_str::<ScreenConfig>(&text).expect("back"), new);
     assert_eq!(ClockStyle::ALL.len(), 5);
+}
+
+#[test]
+fn label_position_override_is_optional_and_clearable() {
+    use ulanzi_core::model::{LabelPosition, Model, Profile};
+    // Old files have no position.
+    let l: ulanzi_core::model::Label = toml::from_str("text = \"Hi\"\nvisible = false").expect("parse");
+    assert_eq!(l.position, None);
+    let mut p = Profile::new_default("P", Model::D200X);
+    let mut key = ulanzi_core::model::Key::default();
+    key.look.label.position = Some(LabelPosition::Top);
+    key.look.label.visible = false;
+    p.pages[0].keys.insert(0, key);
+    let text = toml::to_string(&p).expect("ser");
+    assert!(text.contains("position = \"top\""), "{text}");
+    p.clear_label_overrides();
+    let l = &p.pages[0].keys[&0].look.label;
+    assert_eq!((l.position, l.visible), (None, true));
 }

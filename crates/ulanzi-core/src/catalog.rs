@@ -422,6 +422,7 @@ pub fn default_look(a: &Action) -> KeyLook {
             label: Label {
                 text: name,
                 visible: true,
+                position: None,
             },
             ..KeyLook::default()
         };
@@ -436,6 +437,7 @@ pub fn default_look(a: &Action) -> KeyLook {
         label: Label {
             text: spec.title.into(),
             visible: true,
+            position: None,
         },
         ..KeyLook::default()
     }

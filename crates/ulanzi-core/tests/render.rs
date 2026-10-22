@@ -204,3 +204,25 @@ fn small_icon_for_pickers() {
     }
     assert!(lib.icon_png(IconSet::Lucide, "no-such-icon", 48, red).is_none());
 }
+
+#[test]
+fn label_with_own_position_is_drawn_into_the_key() {
+    use ulanzi_core::model::{Label, LabelPosition};
+    let dir = tempfile::tempdir().expect("dir");
+    let rows_with_text = |pos| {
+        let look = KeyLook {
+            label: Label {
+                text: "HELLO".into(),
+                visible: true,
+                position: Some(pos),
+            },
+            ..KeyLook::default()
+        };
+        let img = decode(&render_key(&look, &ctx(dir.path())).expect("drawn").png);
+        let lit = |y0: u32, y1: u32| (y0..y1).any(|y| (0..KEY_PX).any(|x| img.get_pixel(x, y).0[0] > 200));
+        (lit(0, 60), lit(68, 128), lit(136, KEY_PX))
+    };
+    assert_eq!(rows_with_text(LabelPosition::Top), (true, false, false));
+    assert_eq!(rows_with_text(LabelPosition::Middle), (false, true, false));
+    assert_eq!(rows_with_text(LabelPosition::Bottom), (false, false, true));
+}

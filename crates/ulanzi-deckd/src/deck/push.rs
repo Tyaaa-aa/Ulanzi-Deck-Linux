@@ -101,7 +101,12 @@ pub fn build_page(
     for i in 0..SCREEN_INDEX {
         let mut entry = ButtonEntry::default();
         if let Some(key) = keys.and_then(|k| k.get(&i)) {
-            let look = live_look(&key.look, &key.tap, dynamic);
+            let mut look = live_look(&key.look, &key.tap, dynamic);
+            // A key with its own label position gets the label drawn into its picture.
+            let own_label = look.label.position.is_some();
+            if own_label {
+                look.label.text = resolve_vars(&look.label.text, &dynamic.vars);
+            }
             let lh = look_hash(&look, ctx.profile_dir);
             let png = cache.images.entry(lh).or_insert_with(|| {
                 render_key(&look, ctx).map(|r| {
@@ -121,7 +126,7 @@ pub fn build_page(
                     png: png.clone(),
                 });
             }
-            if look.label.visible && !look.label.text.is_empty() {
+            if !own_label && look.label.visible && !look.label.text.is_empty() {
                 entry.text = Some(resolve_vars(&look.label.text, &dynamic.vars));
             }
             lh.hash(&mut h);
@@ -315,5 +320,21 @@ mod tests {
         assert_eq!(imgs.len(), 1);
         assert_eq!(imgs[0].name, "k6_abc_01_u7.png");
         assert_eq!(imgs[0].png, vec![1, 2, 3]);
+    }
+    #[test]
+    fn label_with_own_position_goes_into_the_image() {
+        let mut p = profile();
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.label.position = Some(ulanzi_core::model::LabelPosition::Top);
+        let mut d = DynamicState::default();
+        d.vars.insert("cpu".into(), "12".into());
+        let mut cache = RenderCache::default();
+        let a = build_page(&p, 0, &ctx(), &d, &mut cache);
+        // No firmware text: the label is part of the picture.
+        assert_eq!(a.entries[&6].text, None);
+        d.vars.insert("cpu".into(), "13".into());
+        let b = build_page(&p, 0, &ctx(), &d, &mut cache);
+        // A new value means a new picture.
+        assert_ne!(a.entries[&6].icon, b.entries[&6].icon);
     }
 }
