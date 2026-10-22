@@ -23,6 +23,7 @@ uuid.workspace = true
 zbus.workspace = true
 evdev.workspace = true
 serde_json.workspace = true
+ureq = "3"
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -19,6 +19,7 @@ tracing.workspace = true
 resvg.workspace = true
 image.workspace = true
 include_dir.workspace = true
+cosmic-text.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

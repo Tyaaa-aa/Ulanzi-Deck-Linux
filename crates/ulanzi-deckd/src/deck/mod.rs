@@ -328,7 +328,12 @@ impl Deck {
             profile_dir: &dir,
             icons: IconLibrary::bundled(),
         };
-        let built = build_page(profile, self.nav.page, &ctx, &self.dynamic, &mut self.cache);
+        let mut dynamic = self.dynamic.clone();
+        dynamic
+            .vars
+            .insert("page".into(), (self.nav.page + 1).to_string());
+        dynamic.vars.insert("profile".into(), profile.name.clone());
+        let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
         if !force && self.last_page_hash == Some(built.hash) {
             return;
         }
