@@ -148,7 +148,9 @@ impl ActionRunner for Executor {
             | Action::SwitchProfile { .. }
             | Action::AutoProfile
             | Action::Brightness { .. }
-            | Action::SleepNow => Err(ActionError::Failed(
+            | Action::SleepNow
+            | Action::ScreenNext
+            | Action::Timer { .. } => Err(ActionError::Failed(
                 "this action only works from the deck itself".into(),
             )),
         }

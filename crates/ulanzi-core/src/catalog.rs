@@ -391,6 +391,46 @@ static CATALOG: &[ActionSpec] = &[
         Action::SleepNow,
         Action::SleepNow
     ),
+    spec!(
+        "screen_next",
+        "Next Widget",
+        Device,
+        "panel-bottom",
+        Action::ScreenNext,
+        Action::ScreenNext
+    ),
+    spec!(
+        "timer_start",
+        "Timer Start / Pause",
+        Device,
+        "timer",
+        Action::Timer {
+            op: TimerOp::StartPause
+        },
+        Action::Timer {
+            op: TimerOp::StartPause
+        }
+    ),
+    spec!(
+        "timer_reset",
+        "Timer Reset",
+        Device,
+        "timer-reset",
+        Action::Timer { op: TimerOp::Reset },
+        Action::Timer { op: TimerOp::Reset }
+    ),
+    spec!(
+        "timer_add",
+        "Add Time",
+        Device,
+        "alarm-clock-plus",
+        Action::Timer {
+            op: TimerOp::Add { minutes: 5 }
+        },
+        Action::Timer {
+            op: TimerOp::Add { .. }
+        }
+    ),
 ];
 
 pub fn catalog() -> &'static [ActionSpec] {

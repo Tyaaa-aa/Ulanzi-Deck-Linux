@@ -838,10 +838,57 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         Action::SwitchProfile { profile } => vec![profile_combo(&ed, state, *profile)],
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
         Action::Obs(o) => obs_rows(&ed, o),
-        Action::NextPage | Action::PrevPage | Action::Back | Action::AutoProfile | Action::SleepNow => {
-            Vec::new()
-        }
+        Action::Timer { op } => timer_rows(&ed, *op),
+        Action::NextPage
+        | Action::PrevPage
+        | Action::Back
+        | Action::AutoProfile
+        | Action::SleepNow
+        | Action::ScreenNext => Vec::new(),
     }
+}
+
+fn timer_rows(ed: &Ed, op: TimerOp) -> Vec<gtk::Widget> {
+    let i = match op {
+        TimerOp::StartPause => 0,
+        TimerOp::Reset => 1,
+        TimerOp::Add { .. } => 2,
+    };
+    let mut rows = vec![
+        combo_row(
+            ed,
+            "Do",
+            &["Start / Pause", "Reset", "Add Time"],
+            i,
+            How::Structure,
+            |a, i| {
+                if let Action::Timer { op } = a {
+                    *op = match i {
+                        0 => TimerOp::StartPause,
+                        1 => TimerOp::Reset,
+                        _ => TimerOp::Add { minutes: 5 },
+                    };
+                }
+            },
+        )
+        .upcast(),
+    ];
+    if let TimerOp::Add { minutes } = op {
+        rows.push(spin_row(
+            ed,
+            "Minutes",
+            "",
+            (1.0, 120.0, 1.0),
+            minutes as f64,
+            "timer-add",
+            |a, v| {
+                if let Action::Timer { op } = a {
+                    *op = TimerOp::Add { minutes: v as u32 };
+                }
+            },
+        ));
+    }
+    rows
 }
 
 fn obs_rows(ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {

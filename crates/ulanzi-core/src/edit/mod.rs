@@ -234,13 +234,7 @@ impl Editor {
             }
             Slot::Screen => match &mut p.screen {
                 ScreenConfig::Custom { tap, .. } => *tap = Some(action),
-                other => {
-                    *other = ScreenConfig::Custom {
-                        widgets: vec![Widget::NowPlaying],
-                        tap: Some(action),
-                        hold: None,
-                    }
-                }
+                other => *other = ScreenConfig::custom(vec![Widget::now_playing()], Some(action), None),
             },
         });
     }

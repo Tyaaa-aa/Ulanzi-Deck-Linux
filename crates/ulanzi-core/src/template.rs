@@ -272,11 +272,11 @@ fn track_dial() -> Dial {
 }
 
 fn now_playing() -> ScreenConfig {
-    ScreenConfig::Custom {
-        widgets: vec![Widget::NowPlaying],
-        tap: Some(media(MediaControl::PlayPause)),
-        hold: Some(media(MediaControl::Next)),
-    }
+    ScreenConfig::custom(
+        vec![Widget::now_playing()],
+        Some(media(MediaControl::PlayPause)),
+        Some(media(MediaControl::Next)),
+    )
 }
 
 // ---- the templates ----

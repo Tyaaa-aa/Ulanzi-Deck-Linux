@@ -401,7 +401,9 @@ fn screen_texture(state: &State) -> Option<gdk::Texture> {
     }
     let screen = state.editor.borrow().profile().screen.clone();
     let png = match screen {
-        ScreenConfig::Custom { widgets, .. } if widgets.first() == Some(&Widget::NowPlaying) => {
+        ScreenConfig::Custom { widgets, .. }
+            if matches!(widgets.first(), Some(Widget::NowPlaying { .. })) =>
+        {
             FONTS.with(|f| {
                 let mut f = f.borrow_mut();
                 let fonts = f.get_or_insert_with(Fonts::system);

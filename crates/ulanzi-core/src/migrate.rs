@@ -104,19 +104,15 @@ pub fn migrate_legacy(yaml: &Path, store: &Store, force: bool) -> Result<Migrati
     let clock_mode = root.get("clock_mode").and_then(Value::as_u64).unwrap_or(1);
     profile.screen = match clock_mode {
         0 => ScreenConfig::FirmwareStats,
-        2 => ScreenConfig::Custom {
-            widgets: vec![Widget::Blank],
-            tap: screen_tap.take(),
-            hold: None,
-        },
-        3 => ScreenConfig::Custom {
-            widgets: vec![Widget::NowPlaying],
-            tap: screen_tap.take().or(Some(Action::Media {
+        2 => ScreenConfig::custom(vec![Widget::Blank], screen_tap.take(), None),
+        3 => ScreenConfig::custom(
+            vec![Widget::now_playing()],
+            screen_tap.take().or(Some(Action::Media {
                 control: MediaControl::PlayPause,
                 player: None,
             })),
-            hold: None,
-        },
+            None,
+        ),
         _ => ScreenConfig::default(),
     };
     if screen_tap.is_some() {

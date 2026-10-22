@@ -942,7 +942,7 @@ fn screen_mode_index(s: &ScreenConfig) -> usize {
         ScreenConfig::FirmwareClock { style } => ClockStyle::ALL.iter().position(|c| c == style).unwrap_or(0),
         ScreenConfig::FirmwareStats => 5,
         ScreenConfig::Custom { widgets, .. } => match widgets.first() {
-            Some(Widget::NowPlaying) => 6,
+            Some(Widget::NowPlaying { .. }) => 6,
             _ => 7,
         },
     }
@@ -958,16 +958,8 @@ fn screen_for_mode(i: usize, old: &ScreenConfig) -> ScreenConfig {
             style: ClockStyle::ALL[i],
         },
         5 => ScreenConfig::FirmwareStats,
-        6 => ScreenConfig::Custom {
-            widgets: vec![Widget::NowPlaying],
-            tap,
-            hold,
-        },
-        _ => ScreenConfig::Custom {
-            widgets: vec![Widget::Blank],
-            tap,
-            hold,
-        },
+        6 => ScreenConfig::custom(vec![Widget::now_playing()], tap, hold),
+        _ => ScreenConfig::custom(vec![Widget::Blank], tap, hold),
     }
 }
 
@@ -1048,11 +1040,7 @@ mod tests {
 
     #[test]
     fn screen_modes_round_trip() {
-        let old = ScreenConfig::Custom {
-            widgets: vec![Widget::NowPlaying],
-            tap: Some(Action::NextPage),
-            hold: None,
-        };
+        let old = ScreenConfig::custom(vec![Widget::now_playing()], Some(Action::NextPage), None);
         for i in 0..SCREEN_MODES.len() {
             assert_eq!(screen_mode_index(&screen_for_mode(i, &old)), i);
         }

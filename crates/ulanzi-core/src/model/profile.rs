@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{Action, KeyLook};
+use super::{Action, Background, KeyLook, Rotation, Widget};
 use crate::Color;
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -78,12 +78,33 @@ pub enum ScreenConfig {
     },
     FirmwareStats,
     Custom {
+        #[serde(deserialize_with = "super::screen::widgets_compat")]
         widgets: Vec<Widget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tap: Option<Action>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hold: Option<Action>,
+        #[serde(default)]
+        rotate: Rotation,
+        #[serde(default)]
+        background: Background,
+        #[serde(default = "super::screen::default_accent")]
+        accent: Color,
     },
+}
+
+impl ScreenConfig {
+    /// Widget mode with the default rotation, background and accent.
+    pub fn custom(widgets: Vec<Widget>, tap: Option<Action>, hold: Option<Action>) -> ScreenConfig {
+        ScreenConfig::Custom {
+            widgets,
+            tap,
+            hold,
+            rotate: Rotation::Off,
+            background: Background::Theme,
+            accent: super::screen::default_accent(),
+        }
+    }
 }
 
 impl Default for ScreenConfig {
@@ -125,13 +146,6 @@ impl ClockStyle {
             ClockStyle::Large => "Large clock",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Widget {
-    Blank,
-    NowPlaying,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

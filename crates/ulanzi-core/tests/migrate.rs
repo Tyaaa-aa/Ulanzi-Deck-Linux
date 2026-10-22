@@ -153,14 +153,14 @@ fn migrates_fixture() {
 
     assert_eq!(
         p.screen,
-        ScreenConfig::Custom {
-            widgets: vec![Widget::NowPlaying],
-            tap: Some(Action::Media {
+        ScreenConfig::custom(
+            vec![Widget::now_playing()],
+            Some(Action::Media {
                 control: MediaControl::PlayPause,
                 player: None
             }),
-            hold: None
-        }
+            None
+        )
     );
     assert_eq!(p.small_buttons.left, Some(Action::PrevPage));
     assert_eq!(p.small_buttons.right, Some(Action::NextPage));
@@ -260,14 +260,7 @@ fn clock_modes_map() {
                 style: ClockStyle::Classic,
             },
         ),
-        (
-            2,
-            ScreenConfig::Custom {
-                widgets: vec![Widget::Blank],
-                tap: None,
-                hold: None,
-            },
-        ),
+        (2, ScreenConfig::custom(vec![Widget::Blank], None, None)),
     ] {
         let e = env();
         let text = std::fs::read_to_string(&e.yaml)

@@ -282,11 +282,7 @@ mod tests {
         let mut p = profile();
         let b = build_page(&p, 0, &ctx(), &d, &mut RenderCache::default());
         assert_eq!(b.entries[&SCREEN_INDEX].icon, None);
-        p.screen = ScreenConfig::Custom {
-            widgets: vec![Widget::NowPlaying],
-            tap: None,
-            hold: None,
-        };
+        p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, None);
         let b = build_page(&p, 0, &ctx(), &d, &mut RenderCache::default());
         assert!(b.entries[&SCREEN_INDEX].icon.is_some());
     }

@@ -84,6 +84,14 @@ fn samples() -> Vec<Action> {
             op: BrightnessOp::Set { percent: 50 },
         },
         Action::SleepNow,
+        Action::ScreenNext,
+        Action::Timer {
+            op: TimerOp::StartPause,
+        },
+        Action::Timer { op: TimerOp::Reset },
+        Action::Timer {
+            op: TimerOp::Add { minutes: 5 },
+        },
         Action::Multi { steps: vec![] },
         Action::Obs(ObsAction::SetScene { scene: "A".into() }),
         Action::Obs(ObsAction::ToggleScenes {

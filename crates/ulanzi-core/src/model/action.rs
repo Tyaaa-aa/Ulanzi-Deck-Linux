@@ -60,6 +60,11 @@ pub enum Action {
         op: BrightnessOp,
     },
     SleepNow,
+    /// Show the next widget on the wide screen.
+    ScreenNext,
+    Timer {
+        op: TimerOp,
+    },
     Multi {
         steps: Vec<Step>,
     },
@@ -80,6 +85,15 @@ pub struct Step {
     pub action: Action,
     #[serde(default)]
     pub delay_ms: u32,
+}
+
+/// What a timer key does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimerOp {
+    StartPause,
+    Reset,
+    Add { minutes: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

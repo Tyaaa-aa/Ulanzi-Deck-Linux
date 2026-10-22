@@ -130,11 +130,7 @@ fn profile_roundtrip_all_action_variants() {
         dynamic: true,
     };
     p.pages[0].dials[1].right = every_action().into_iter().nth(14);
-    p.screen = ScreenConfig::Custom {
-        widgets: vec![Widget::NowPlaying],
-        tap: None,
-        hold: Some(Action::NextPage),
-    };
+    p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, Some(Action::NextPage));
     s.save_profile(&p).expect("save");
     assert_eq!(s.load_profile(p.id).expect("load"), p);
 }
@@ -325,4 +321,107 @@ fn profiles_follow_the_saved_order() {
     assert_eq!(list.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![c, a, b]);
     let s: ulanzi_core::model::Settings = toml::from_str("").expect("defaults");
     assert!(s.profile_order.is_empty());
+}
+
+#[test]
+fn old_widget_strings_still_parse() {
+    use ulanzi_core::model::{ScreenConfig, Widget};
+    let s: ScreenConfig =
+        toml::from_str("mode = \"custom\"\nwidgets = [\"now_playing\", \"blank\"]\n").expect("old form");
+    let ScreenConfig::Custom {
+        widgets,
+        rotate,
+        accent,
+        ..
+    } = s
+    else {
+        panic!("custom");
+    };
+    assert!(matches!(widgets[0], Widget::NowPlaying { .. }));
+    assert_eq!(widgets[1], Widget::Blank);
+    assert_eq!(rotate, ulanzi_core::model::Rotation::Off);
+    assert_eq!(accent, "#62a0ea".parse().expect("colour"));
+}
+
+#[test]
+fn widgets_round_trip_with_options() {
+    use ulanzi_core::model::*;
+    let s = ScreenConfig::Custom {
+        widgets: vec![
+            Widget::Clock {
+                face: ClockFace::Analog,
+                hour24: false,
+                seconds: true,
+                date: true,
+            },
+            Widget::System {
+                stats: vec![Stat::Cpu, Stat::Ram, Stat::Temp],
+                graphs: true,
+            },
+            Widget::Timer {
+                minutes: 25,
+                pomodoro: true,
+            },
+            Widget::Weather {
+                place: "Singapore".into(),
+                fahrenheit: false,
+            },
+            Widget::Command {
+                cmd: "uptime -p".into(),
+                every_s: 30,
+                title: "Uptime".into(),
+            },
+            Widget::Pictures {
+                paths: vec!["icons/a.png".into()],
+                every_s: 10,
+            },
+            Widget::now_playing(),
+        ],
+        tap: None,
+        hold: Some(Action::ScreenNext),
+        rotate: Rotation::Every { secs: 10 },
+        background: Background::Gradient {
+            from: "#1a1a2e".parse().expect("c"),
+            to: "#16213e".parse().expect("c"),
+        },
+        accent: "#ff7b63".parse().expect("c"),
+    };
+    #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+    struct Wrap {
+        screen: ScreenConfig,
+    }
+    let text = toml::to_string(&Wrap { screen: s.clone() }).expect("toml");
+    let back: Wrap = toml::from_str(&text).expect("parse");
+    assert_eq!(back.screen, s, "{text}");
+}
+
+#[test]
+fn widget_defaults_and_actions() {
+    use ulanzi_core::model::*;
+    assert_eq!(
+        Widget::now_playing().default_tap(),
+        Some(Action::Media {
+            control: MediaControl::PlayPause,
+            player: None,
+        })
+    );
+    assert_eq!(
+        Widget::Timer {
+            minutes: 25,
+            pomodoro: false
+        }
+        .default_tap(),
+        Some(Action::Timer {
+            op: TimerOp::StartPause
+        })
+    );
+    assert_eq!(Widget::Blank.title(), "Blank");
+    let t: Action =
+        toml::from_str("type = \"timer\"\nop = { kind = \"add\", minutes = 5 }\n").expect("timer action");
+    assert_eq!(
+        t,
+        Action::Timer {
+            op: TimerOp::Add { minutes: 5 }
+        }
+    );
 }
