@@ -2062,6 +2062,7 @@ dependencies = [
  "ureq",
  "uuid",
  "zbus",
+ "zip",
 ]
 
 [[package]]

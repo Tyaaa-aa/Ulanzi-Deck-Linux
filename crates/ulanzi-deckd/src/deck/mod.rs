@@ -411,10 +411,14 @@ impl Deck {
             .vars
             .insert("page".into(), (self.nav.page + 1).to_string());
         dynamic.vars.insert("profile".into(), profile.name.clone());
-        let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
         let here = (profile.id, self.nav.page);
+        let full = force || self.shown.as_ref().is_none_or(|s| s.at != here);
+        if full {
+            self.cache.generation = self.cache.generation.wrapping_add(1);
+        }
+        let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
         let packets = match &self.shown {
-            Some(shown) if !force && shown.at == here => {
+            Some(shown) if !full => {
                 let changed: BTreeMap<u8, ButtonEntry> = built
                     .entries
                     .iter()
@@ -431,9 +435,19 @@ impl Deck {
                     .filter(|img| names.iter().any(|n| n.ends_with(&img.name)))
                     .cloned()
                     .collect();
+                let keys: Vec<u8> = changed.keys().copied().collect();
+                tracing::info!("partial upload: keys {keys:?}");
                 file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
             }
-            _ => file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images)),
+            _ => {
+                tracing::info!(
+                    "full upload: page {}, {} images, generation {}",
+                    self.nav.page + 1,
+                    built.images.len(),
+                    self.cache.generation
+                );
+                file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images))
+            }
         };
         if self.send(&packets).await {
             self.last_upload = Some(now);

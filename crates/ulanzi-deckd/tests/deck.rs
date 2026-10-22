@@ -470,3 +470,50 @@ async fn full_uploads_respect_the_gap_too() {
         "sent once the gap ended"
     );
 }
+
+/// The manifest of the first full page upload in `packets`.
+fn uploaded_manifest(packets: &[ulanzi_proto::Packet]) -> String {
+    use std::io::Read;
+    let start = packets
+        .iter()
+        .position(|p| p[0] == 0x7c && p[1] == 0x7c && u16::from_be_bytes([p[2], p[3]]) == BUTTONS)
+        .expect("a page upload");
+    let len = u32::from_le_bytes([
+        packets[start][4],
+        packets[start][5],
+        packets[start][6],
+        packets[start][7],
+    ]) as usize;
+    let mut data = packets[start][8..].to_vec();
+    for p in &packets[start + 1..] {
+        if data.len() >= len {
+            break;
+        }
+        data.extend_from_slice(p);
+    }
+    data.truncate(len);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(data)).expect("zip");
+    let mut m = String::new();
+    zip.by_name("manifest.json")
+        .expect("manifest")
+        .read_to_string(&mut m)
+        .expect("read");
+    m
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconnect_uses_fresh_image_names() {
+    let r = rig().await;
+    let first = uploaded_manifest(&r.mock.sent());
+    let (t2, mock2) = MockTransport::new();
+    r.tx.send(DeckMsg::DeviceUp(Box::new(t2), "/dev/mock".into()))
+        .await
+        .expect("up");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let second = uploaded_manifest(&mock2.sent());
+    assert!(first.contains("icons/k0_"), "{first}");
+    assert_ne!(
+        first, second,
+        "the deck caches by file name, so a new full upload must use new names"
+    );
+}

@@ -26,6 +26,10 @@ pub struct DynamicState {
 pub struct RenderCache {
     images: HashMap<u64, Option<Vec<u8>>>,
     warned: HashSet<u64>,
+    /// Bumped for every full upload and put in every image name. The deck caches images by file
+    /// name and can lose the pictures while keeping the names (seen after a reset), so a full upload
+    /// must never reuse a name it may have seen.
+    pub generation: u32,
 }
 
 /// A page ready to upload, with a hash for "did anything change".
@@ -88,7 +92,7 @@ pub fn build_page(
                 })
             });
             if let Some(png) = png {
-                let name = format!("k{i}_{lh:016x}.png");
+                let name = format!("k{i}_{lh:016x}_g{}.png", cache.generation);
                 entry.icon = Some(format!("icons/{name}"));
                 images.push(ButtonImage {
                     name,
@@ -110,7 +114,7 @@ pub fn build_page(
     {
         let mut sh = DefaultHasher::new();
         png.hash(&mut sh);
-        let name = format!("screen_{:016x}.png", sh.finish());
+        let name = format!("screen_{:016x}_g{}.png", sh.finish(), cache.generation);
         screen.icon = Some(format!("icons/{name}"));
         name.hash(&mut h);
         images.push(ButtonImage {
