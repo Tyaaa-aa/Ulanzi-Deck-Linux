@@ -50,6 +50,8 @@ pub struct AppState {
     pub client: RefCell<Option<Client>>,
     /// True while showing built-in demo data (no service).
     pub demo: Cell<bool>,
+    /// True while the inspector applies its own edit (it then refreshes itself without a rebuild).
+    pub inspector_edit: Cell<bool>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -65,6 +67,7 @@ impl AppState {
             status: RefCell::new(Status::Connecting),
             client: RefCell::new(None),
             demo: Cell::new(false),
+            inspector_edit: Cell::new(false),
             listeners: RefCell::new(Vec::new()),
         })
     }
@@ -91,7 +94,21 @@ impl AppState {
 
     /// Apply an edit, save it (debounced) and redraw.
     pub fn edit(&self, f: impl FnOnce(&mut Editor)) {
-        f(&mut self.editor.borrow_mut());
+        {
+            let mut e = self.editor.borrow_mut();
+            e.set_merge(None);
+            f(&mut e);
+        }
+        self.after_edit();
+    }
+
+    /// Like [`AppState::edit`], but consecutive edits with the same `key` share one undo step.
+    pub fn edit_merged(&self, key: &'static str, f: impl FnOnce(&mut Editor)) {
+        {
+            let mut e = self.editor.borrow_mut();
+            e.set_merge(Some(key));
+            f(&mut e);
+        }
         self.after_edit();
     }
 

@@ -1,5 +1,6 @@
 //! The GTK user interface.
 
+pub mod action_editor;
 pub mod canvas;
 pub mod inspector;
 pub mod sidebar;

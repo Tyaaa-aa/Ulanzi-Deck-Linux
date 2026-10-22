@@ -64,6 +64,9 @@ pub struct Editor {
     clipboard: Option<Clip>,
     /// Edits since the profile was last sent to the daemon.
     dirty: bool,
+    /// Consecutive edits with the same key share one undo step (typing in a field).
+    merge: Option<&'static str>,
+    last_merge: Option<&'static str>,
 }
 
 impl Editor {
@@ -75,6 +78,8 @@ impl Editor {
             redo: Vec::new(),
             clipboard: None,
             dirty: false,
+            merge: None,
+            last_merge: None,
         }
     }
 
@@ -115,6 +120,14 @@ impl Editor {
         !self.redo.is_empty()
     }
 
+    /// Merge the following edits into one undo step while `key` stays the same (`None` ends it).
+    pub fn set_merge(&mut self, key: Option<&'static str>) {
+        self.merge = key;
+        if key.is_none() {
+            self.last_merge = None;
+        }
+    }
+
     /// Record the current profile as an undo step, then run `f` on it.
     fn edit(&mut self, f: impl FnOnce(&mut Profile, usize)) {
         let before = self.profile.clone();
@@ -122,15 +135,21 @@ impl Editor {
         if self.profile == before {
             return;
         }
+        self.dirty = true;
+        self.redo.clear();
+        let merging = self.merge.is_some() && self.merge == self.last_merge && !self.undo.is_empty();
+        self.last_merge = self.merge;
+        if merging {
+            return;
+        }
         self.undo.push(before);
         if self.undo.len() > HISTORY_LIMIT {
             self.undo.remove(0);
         }
-        self.redo.clear();
-        self.dirty = true;
     }
 
     pub fn undo(&mut self) -> bool {
+        self.last_merge = None;
         let Some(prev) = self.undo.pop() else {
             return false;
         };
@@ -141,6 +160,7 @@ impl Editor {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.last_merge = None;
         let Some(next) = self.redo.pop() else {
             return false;
         };

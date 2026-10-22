@@ -213,3 +213,41 @@ fn dirty_tracking() {
     e.undo();
     assert!(e.is_dirty());
 }
+
+#[test]
+fn typing_coalesces_into_one_undo_step() {
+    let mut e = editor_with_keys();
+    let before = key(&e, 0).look.label.text.clone();
+    for t in ["H", "He", "Hel", "Hello"] {
+        e.set_merge(Some("label"));
+        e.set_field(&[0], Field::LabelText(t.into()));
+    }
+    e.set_merge(None);
+    assert_eq!(key(&e, 0).look.label.text, "Hello");
+    assert!(e.undo());
+    assert_eq!(key(&e, 0).look.label.text, before);
+}
+
+#[test]
+fn different_merge_keys_are_separate_steps() {
+    let mut e = editor_with_keys();
+    e.set_merge(Some("label"));
+    e.set_field(&[0], Field::LabelText("A".into()));
+    e.set_merge(Some("cmd"));
+    e.set_field(&[0], Field::LabelText("B".into()));
+    e.set_merge(None);
+    assert!(e.undo());
+    assert_eq!(key(&e, 0).look.label.text, "A");
+}
+
+#[test]
+fn ending_a_merge_starts_a_new_step() {
+    let mut e = editor_with_keys();
+    e.set_merge(Some("label"));
+    e.set_field(&[0], Field::LabelText("A".into()));
+    e.set_merge(None);
+    e.set_merge(Some("label"));
+    e.set_field(&[1], Field::LabelText("B".into()));
+    assert!(e.undo());
+    assert_eq!(key(&e, 0).look.label.text, "A");
+}
