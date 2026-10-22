@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="64" y1="8" x2="64" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffa04a"/>
+      <stop offset="0.5" stop-color="#e2337a"/>
+      <stop offset="1" stop-color="#5b2a9e"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="64" y1="26" x2="64" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f0eaf8"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="50" y1="40" x2="80" y2="78" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a3d"/>
+      <stop offset="1" stop-color="#8a3bd1"/>
+    </linearGradient>
+  </defs>
+  <title>ulanzi-deck-logos</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M36 12 L92 12 C107.464 12 120 24.536 120 40 L120 96 C120 111.464 107.464 124 92 124 L36 124 C20.536 124 8 111.464 8 96 L8 40 C8 24.536 20.536 12 36 12 Z" fill="#3a1a66"/>
+    <path id="c5_tile" data-name="c5 tile" d="M36 8 L92 8 C107.464 8 120 20.536 120 36 L120 92 C120 107.464 107.464 120 92 120 L36 120 C20.536 120 8 107.464 8 92 L8 36 C8 20.536 20.536 8 36 8 Z" fill="url(#linear-gradient-1)"/>
+    <path d="M47 36 L81 36 C91.493 36 100 44.507 100 55 L100 85 C100 95.493 91.493 104 81 104 L47 104 C36.507 104 28 95.493 28 85 L28 55 C28 44.507 36.507 36 47 36 Z" fill="#2a1450" opacity="0.35"/>
+    <path id="c5_key_side" data-name="c5 key side" d="M47 32 L81 32 C91.493 32 100 40.507 100 51 L100 79 C100 89.493 91.493 98 81 98 L47 98 C36.507 98 28 89.493 28 79 L28 51 C28 40.507 36.507 32 47 32 Z" fill="#d8cdea"/>
+    <path id="c5_key_face" data-name="c5 key face" d="M47 26 L81 26 C91.493 26 100 34.507 100 45 L100 71 C100 81.493 91.493 90 81 90 L47 90 C36.507 90 28 81.493 28 71 L28 45 C28 34.507 36.507 26 47 26 Z" fill="url(#linear-gradient-2)"/>
+    <path id="c5_spark" data-name="c5 spark" d="M64 38 C66.5 52 70 55.5 84 58 C70 60.5 66.5 64 64 78 C61.5 64 58 60.5 44 58 C58 55.5 61.5 52 64 38 Z" fill="url(#linear-gradient-3)"/>
+    <path id="c5_spark_small" data-name="c5 spark small" d="M83 34 C84 39 85 40 90 41 C85 42 84 43 83 48 C82 43 81 42 76 41 C81 40 82 39 83 34 Z" fill="#e2337a"/>
+  </g>
+</svg>

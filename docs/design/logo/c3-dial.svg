@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="64" y1="8" x2="64" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2e2e35"/>
+      <stop offset="1" stop-color="#121215"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="20" y1="94" x2="108" y2="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2ec2b3"/>
+      <stop offset="0.5" stop-color="#3584e4"/>
+      <stop offset="1" stop-color="#c061cb"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="64" y1="31" x2="64" y2="97" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5f5f6a"/>
+      <stop offset="1" stop-color="#2a2a31"/>
+    </linearGradient>
+  </defs>
+  <title>ulanzi-deck-logos</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M8 66 C8 35.072 33.072 10 64 10 C94.928 10 120 35.072 120 66 C120 96.928 94.928 122 64 122 C33.072 122 8 96.928 8 66 Z" fill="#000000" opacity="0.22"/>
+    <path id="c3_base" data-name="c3 base" d="M8 64 C8 33.072 33.072 8 64 8 C94.928 8 120 33.072 120 64 C120 94.928 94.928 120 64 120 C33.072 120 8 94.928 8 64 Z" fill="url(#linear-gradient-1)"/>
+    <path id="c3_track" data-name="c3 track" d="M32.89 95.11 C20.305 82.527 16.539 63.601 23.349 47.158 C30.158 30.716 46.203 19.995 64 19.995 C81.797 19.995 97.842 30.716 104.651 47.158 C111.461 63.601 107.695 82.527 95.11 95.11" fill="none" stroke="#ffffff" stroke-width="9" stroke-linecap="round" stroke-miterlimit="10" opacity="0.13"/>
+    <path id="c3_level" data-name="c3 level" d="M32.89 95.11 C21.183 83.412 17.03 66.133 22.143 50.393 C27.256 34.652 40.769 23.112 57.116 20.526 C73.463 17.94 89.878 24.746 99.6 38.14" fill="none" stroke="url(#linear-gradient-2)" stroke-width="9" stroke-linecap="round" stroke-miterlimit="10"/>
+    <path id="c3_knob" data-name="c3 knob" d="M31 64 C31 45.775 45.775 31 64 31 C82.225 31 97 45.775 97 64 C97 82.225 82.225 97 64 97 C45.775 97 31 82.225 31 64 Z" fill="url(#linear-gradient-3)"/>
+    <path id="c3_knob_rim" data-name="c3 knob rim" d="M31.5 64 C31.5 46.051 46.051 31.5 64 31.5 C81.949 31.5 96.5 46.051 96.5 64 C96.5 81.949 81.949 96.5 64 96.5 C46.051 96.5 31.5 81.949 31.5 64 Z" fill="none" stroke="#ffffff" stroke-miterlimit="10" opacity="0.2"/>
+    <path id="c3_pointer" data-name="c3 pointer" d="M78.56 53.42 L86.65 47.54" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-miterlimit="10"/>
+  </g>
+</svg>

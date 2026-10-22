@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="linear-gradient-1" x1="64" y1="8" x2="64" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6e4e0"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="0" y1="17" x2="0" y2="43" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4d4857"/>
+      <stop offset="1" stop-color="#2a2631"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="0" y1="51" x2="0" y2="77" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4d4857"/>
+      <stop offset="1" stop-color="#2a2631"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-4" x1="51" y1="51" x2="77" y2="77" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffb347"/>
+      <stop offset="0.55" stop-color="#ff7800"/>
+      <stop offset="1" stop-color="#e01b6b"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-5" x1="0" y1="85" x2="0" y2="111" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4d4857"/>
+      <stop offset="1" stop-color="#2a2631"/>
+    </linearGradient>
+  </defs>
+  <title>ulanzi-deck-logos</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path id="c2_depth" data-name="c2 depth" d="M36 12 L92 12 C107.464 12 120 24.536 120 40 L120 96 C120 111.464 107.464 124 92 124 L36 124 C20.536 124 8 111.464 8 96 L8 40 C8 24.536 20.536 12 36 12 Z" fill="#b8b6b2"/>
+    <path id="c2_tile" data-name="c2 tile" d="M36 8 L92 8 C107.464 8 120 20.536 120 36 L120 92 C120 107.464 107.464 120 92 120 L36 120 C20.536 120 8 107.464 8 92 L8 36 C8 20.536 20.536 8 36 8 Z" fill="url(#linear-gradient-1)"/>
+    <path id="c2_halo2" data-name="c2 halo2" d="M56 41 L72 41 C80.284 41 87 47.716 87 56 L87 72 C87 80.284 80.284 87 72 87 L56 87 C47.716 87 41 80.284 41 72 L41 56 C41 47.716 47.716 41 56 41 Z" fill="#ff7800" opacity="0.14"/>
+    <path id="c2_halo1" data-name="c2 halo1" d="M57 45 L71 45 C77.627 45 83 50.373 83 57 L83 71 C83 77.627 77.627 83 71 83 L57 83 C50.373 83 45 77.627 45 71 L45 57 C45 50.373 50.373 45 57 45 Z" fill="#ff7800" opacity="0.28"/>
+    <path id="c2_k00" data-name="c2 k00" d="M25 17 L35 17 C39.418 17 43 20.582 43 25 L43 35 C43 39.418 39.418 43 35 43 L25 43 C20.582 43 17 39.418 17 35 L17 25 C17 20.582 20.582 17 25 17 Z" fill="url(#linear-gradient-2)"/>
+    <path id="c2_k01" data-name="c2 k01" d="M59 17 L69 17 C73.418 17 77 20.582 77 25 L77 35 C77 39.418 73.418 43 69 43 L59 43 C54.582 43 51 39.418 51 35 L51 25 C51 20.582 54.582 17 59 17 Z" fill="url(#linear-gradient-2)"/>
+    <path id="c2_k02" data-name="c2 k02" d="M93 17 L103 17 C107.418 17 111 20.582 111 25 L111 35 C111 39.418 107.418 43 103 43 L93 43 C88.582 43 85 39.418 85 35 L85 25 C85 20.582 88.582 17 93 17 Z" fill="url(#linear-gradient-2)"/>
+    <path id="c2_k10" data-name="c2 k10" d="M25 51 L35 51 C39.418 51 43 54.582 43 59 L43 69 C43 73.418 39.418 77 35 77 L25 77 C20.582 77 17 73.418 17 69 L17 59 C17 54.582 20.582 51 25 51 Z" fill="url(#linear-gradient-3)"/>
+    <path id="c2_lit" data-name="c2 lit" d="M59 51 L69 51 C73.418 51 77 54.582 77 59 L77 69 C77 73.418 73.418 77 69 77 L59 77 C54.582 77 51 73.418 51 69 L51 59 C51 54.582 54.582 51 59 51 Z" fill="url(#linear-gradient-4)"/>
+    <path id="c2_k12" data-name="c2 k12" d="M93 51 L103 51 C107.418 51 111 54.582 111 59 L111 69 C111 73.418 107.418 77 103 77 L93 77 C88.582 77 85 73.418 85 69 L85 59 C85 54.582 88.582 51 93 51 Z" fill="url(#linear-gradient-3)"/>
+    <path id="c2_k20" data-name="c2 k20" d="M25 85 L35 85 C39.418 85 43 88.582 43 93 L43 103 C43 107.418 39.418 111 35 111 L25 111 C20.582 111 17 107.418 17 103 L17 93 C17 88.582 20.582 85 25 85 Z" fill="url(#linear-gradient-5)"/>
+    <path id="c2_wide" data-name="c2 wide" d="M59 85 L103 85 C107.418 85 111 88.582 111 93 L111 103 C111 107.418 107.418 111 103 111 L59 111 C54.582 111 51 107.418 51 103 L51 93 C51 88.582 54.582 85 59 85 Z" fill="url(#linear-gradient-5)"/>
+  </g>
+</svg>
