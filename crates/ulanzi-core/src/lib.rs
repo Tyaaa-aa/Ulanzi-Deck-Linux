@@ -1,5 +1,6 @@
 //! Ulanzi Deck core: profile model, storage, migration from the Python version, key rendering.
 
+pub mod catalog;
 mod color;
 mod error;
 pub mod migrate;
