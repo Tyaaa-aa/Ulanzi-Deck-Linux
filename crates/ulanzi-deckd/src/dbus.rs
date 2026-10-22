@@ -13,7 +13,7 @@ use zbus::{Connection, interface};
 
 use crate::deck::{DeckEvent, DeckMsg, DeckSnapshot};
 
-pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck";
+pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck.Service";
 pub const OBJECT_PATH: &str = "/io/github/tyaaa_aa/UlanziDeck";
 pub const INTERFACE: &str = "io.github.tyaaa_aa.UlanziDeck1";
 pub const API_VERSION: u32 = 1;

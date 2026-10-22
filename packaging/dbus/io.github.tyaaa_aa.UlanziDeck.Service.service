@@ -1,4 +1,4 @@
 [D-BUS Service]
-Name=io.github.tyaaa_aa.UlanziDeck
+Name=io.github.tyaaa_aa.UlanziDeck.Service
 Exec=/bin/false
 SystemdService=ulanzi-deckd.service

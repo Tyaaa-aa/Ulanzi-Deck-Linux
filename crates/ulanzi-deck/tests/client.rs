@@ -193,3 +193,11 @@ async fn settings_through_the_client() {
     c.apply_settings(&s).await.expect("apply");
     assert_eq!(r.store.load_settings().expect("load").brightness, 33);
 }
+
+/// The window's GApplication ID and the service's bus name must differ, or the window takes the
+/// service for a running copy of itself and exits.
+#[test]
+fn app_id_differs_from_service_bus_name() {
+    assert_ne!(ulanzi_deck::APP_ID, ulanzi_deck::client::BUS_NAME);
+    assert_eq!(ulanzi_deckd::dbus::BUS_NAME, ulanzi_deck::client::BUS_NAME);
+}

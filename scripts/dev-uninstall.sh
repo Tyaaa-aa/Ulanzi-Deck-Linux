@@ -5,7 +5,7 @@ systemctl --user disable --now ulanzi-deckd 2>/dev/null || true
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 for f in "$HOME/.local/bin/ulanzi-deckd" "$HOME/.local/bin/ulanzictl" "$HOME/.local/bin/ulanzi-deck" \
          "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/ulanzi-deckd.service" \
-         "$data/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.service" \
+         "$data/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.Service.service" \
          "$data/applications/io.github.tyaaa_aa.UlanziDeck.desktop" \
          "$data/metainfo/io.github.tyaaa_aa.UlanziDeck.metainfo.xml" \
          "$data/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg" \

@@ -9,7 +9,7 @@ use ulanzi_core::model::{Model, Profile};
 use ulanzi_deck::state::AppState;
 use ulanzi_deck::ui;
 
-const APP_ID: &str = "io.github.tyaaa_aa.UlanziDeck";
+use ulanzi_deck::APP_ID;
 
 /// `--screenshot` options: render the window to a PNG and exit (used to check the UI without a person
 /// at the screen).

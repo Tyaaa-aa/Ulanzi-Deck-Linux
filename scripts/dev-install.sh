@@ -21,7 +21,9 @@ install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck-symbolic.svg" "$icons/
 update-desktop-database -q "$data/applications" 2>/dev/null || true
 gtk-update-icon-cache -q -t "$icons" 2>/dev/null || true
 install -m 0644 packaging/systemd/ulanzi-deckd.service "$units/"
-install -m 0644 packaging/dbus/io.github.tyaaa_aa.UlanziDeck.service "$dbus/"
+install -m 0644 packaging/dbus/io.github.tyaaa_aa.UlanziDeck.Service.service "$dbus/"
+# The service used the app's own name before; that stopped the window from opening.
+rm -f "$dbus/io.github.tyaaa_aa.UlanziDeck.service"
 systemctl --user daemon-reload
 # Let the session bus see the (new) activation file.
 busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true

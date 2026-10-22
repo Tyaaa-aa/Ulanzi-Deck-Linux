@@ -72,8 +72,9 @@ struct DeckTray {
     view: View,
 }
 
+/// Start the app in its own scope (so it outlives a service restart) and reap it when it exits.
 fn open_app() {
-    if let Err(e) = std::process::Command::new("ulanzi-deck").spawn() {
+    if let Err(e) = crate::actions::command::spawn_detached(&["ulanzi-deck".to_string()]) {
         tracing::warn!("cannot start ulanzi-deck: {e}");
     }
 }

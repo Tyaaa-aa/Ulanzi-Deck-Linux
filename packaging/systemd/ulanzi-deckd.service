@@ -6,7 +6,7 @@ After=graphical-session.target
 
 [Service]
 Type=dbus
-BusName=io.github.tyaaa_aa.UlanziDeck
+BusName=io.github.tyaaa_aa.UlanziDeck.Service
 ExecStart=%h/.local/bin/ulanzi-deckd
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure

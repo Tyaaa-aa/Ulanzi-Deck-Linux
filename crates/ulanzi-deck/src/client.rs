@@ -12,7 +12,7 @@ use ulanzi_core::store::parse_profile;
 use uuid::Uuid;
 use zbus::Connection;
 
-pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck";
+pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck.Service";
 pub const OBJECT_PATH: &str = "/io/github/tyaaa_aa/UlanziDeck";
 pub const INTERFACE: &str = "io.github.tyaaa_aa.UlanziDeck1";
 /// Edits are saved once nothing changed for this long.
