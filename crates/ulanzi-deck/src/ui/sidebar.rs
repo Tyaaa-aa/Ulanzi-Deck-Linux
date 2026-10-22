@@ -194,8 +194,16 @@ pub fn build(state: &State) -> gtk::Box {
                 }
                 let current = state.profile_id();
                 let list = state.profiles.borrow().clone();
+                crate::ui::autoswitch::load_rules(&state);
+                let default = state.settings.borrow().default_profile;
                 for (i, (id, name)) in list.iter().enumerate() {
-                    let row = profile_row(name, "Always", *id == current);
+                    let rule = if *id == current {
+                        Some(state.editor.borrow().profile().r#match.clone())
+                    } else {
+                        state.rules.borrow().get(id).cloned()
+                    };
+                    let sub = crate::ui::autoswitch::summary(rule.as_ref(), default == Some(*id));
+                    let row = profile_row(name, &sub, *id == current);
                     attach_profile_menu(&state, &row, *id, name, i, list.len());
                     let st = state.clone();
                     reorderable(&row, "profile", i, move |from, to| move_profile(&st, from, to));
@@ -292,6 +300,23 @@ fn attach_profile_menu(
     {
         let st = state.clone();
         add_move_buttons(&menu, index, count, move |from, to| move_profile(&st, from, to));
+    }
+    let auto = gtk::Button::builder()
+        .label("Auto-Switch…")
+        .css_classes(["flat"])
+        .build();
+    menu.append(&auto);
+    {
+        let (state, name) = (state.clone(), name.to_string());
+        auto.connect_clicked(move |b| {
+            if let Some(pop) = b
+                .ancestor(gtk::Popover::static_type())
+                .and_downcast::<gtk::Popover>()
+            {
+                pop.popdown();
+            }
+            crate::ui::autoswitch::open(&state, b, id, &name);
+        });
     }
     let rename = gtk::Button::builder()
         .label("Rename…")

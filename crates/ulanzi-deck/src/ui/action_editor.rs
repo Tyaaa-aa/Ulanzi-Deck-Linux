@@ -410,32 +410,27 @@ fn profile_combo(ed: &Ed, state: &State, current: Uuid) -> gtk::Widget {
 
 fn app_combo(ed: &Ed, desktop_id: Option<&str>, exec: Option<&str>) -> Vec<gtk::Widget> {
     let apps = installed_apps();
-    let mut ids: Vec<Option<String>> = Vec::new();
-    let mut labels: Vec<String> = Vec::new();
-    let known = desktop_id.is_some_and(|d| apps.iter().any(|a| a.desktop_id == d));
-    if !known {
-        ids.push(None);
-        labels.push(match (desktop_id, exec) {
-            (Some(d), _) => format!("{d} (not installed)"),
-            (None, Some(_)) => "Custom command".into(),
-            _ => "Choose an app…".into(),
-        });
-    }
-    for a in apps.iter() {
-        ids.push(Some(a.desktop_id.clone()));
-        labels.push(a.name.clone());
-    }
-    let selected = ids.iter().position(|i| i.as_deref() == desktop_id).unwrap_or(0);
-    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
-    let row = combo_row(ed, "App", &refs, selected, How::Structure, move |a, i| {
-        if let Some(Some(id)) = ids.get(i)
-            && let Action::LaunchApp { desktop_id, exec } = a
-        {
-            *desktop_id = Some(id.clone());
-            *exec = None;
-        }
+    let app = desktop_id.and_then(|d| apps.iter().find(|a| a.desktop_id == d));
+    let row = adw::ActionRow::builder().title("App").build();
+    let face: gtk::Widget = match (app, desktop_id) {
+        (Some(a), _) => crate::ui::app_picker::app_label(Some(&a.desktop_id), &a.name, 20).upcast(),
+        (None, Some(d)) => gtk::Label::new(Some(&format!(
+            "{} (not installed)",
+            d.trim_end_matches(".desktop")
+        )))
+        .upcast(),
+        (None, None) => gtk::Label::new(Some("Choose an App…")).upcast(),
+    };
+    let ed2 = ed.clone();
+    let picker = crate::ui::app_picker::button(&face, desktop_id.map(String::from), Vec::new(), move |a| {
+        ed2.apply(How::Structure, |act| {
+            if let Action::LaunchApp { desktop_id, exec } = act {
+                *desktop_id = Some(a.desktop_id.clone());
+                *exec = None;
+            }
+        })
     });
-    row.set_enable_search(true);
+    row.add_suffix(&picker);
     let mut rows = vec![row.upcast()];
     if desktop_id.is_none() {
         rows.push(entry_row(
@@ -951,8 +946,6 @@ pub fn picker_button(
     let specs: Vec<&'static catalog::ActionSpec> = catalog::catalog()
         .iter()
         .filter(|s| allow_multi || s.id != "multi")
-        // Per-app switching arrives later; until then the action would do nothing useful.
-        .filter(|s| s.id != "auto_profile")
         .collect();
     let mut index: Vec<Option<usize>> = Vec::new();
     for cat in Category::ALL {

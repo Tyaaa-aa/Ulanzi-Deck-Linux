@@ -309,6 +309,11 @@ impl Editor {
         self.edit(|p, _| p.clear_label_overrides());
     }
 
+    /// Which apps bring this profile to the front (auto profile switching).
+    pub fn set_match(&mut self, rule: MatchRule) {
+        self.edit(|p, _| p.r#match = rule);
+    }
+
     pub fn set_model(&mut self, model: Model) {
         self.edit(|p, _| p.model = model);
     }

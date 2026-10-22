@@ -21,8 +21,13 @@ const LEVELS: [u8; 4] = [25, 50, 75, 100];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     Header(String),
-    Profiles { names: Vec<String>, selected: usize },
+    Profiles {
+        names: Vec<String>,
+        selected: usize,
+    },
     Brightness(Vec<u8>),
+    /// Auto profile switching, with whether it is on.
+    AutoSwitch(bool),
     Open,
     Separator,
     Quit,
@@ -40,7 +45,13 @@ fn state_text(state: &str, model: &str) -> String {
 }
 
 /// Build the menu for the current profiles, active profile and device state.
-pub fn menu_model(profiles: &[(Uuid, String)], active: Uuid, state: &str, model: &str) -> Vec<Entry> {
+pub fn menu_model(
+    profiles: &[(Uuid, String)],
+    active: Uuid,
+    state: &str,
+    model: &str,
+    auto_switch: bool,
+) -> Vec<Entry> {
     vec![
         Entry::Header(state_text(state, model)),
         Entry::Separator,
@@ -51,6 +62,7 @@ pub fn menu_model(profiles: &[(Uuid, String)], active: Uuid, state: &str, model:
                 .position(|(id, _)| *id == active)
                 .unwrap_or(usize::MAX),
         },
+        Entry::AutoSwitch(auto_switch),
         Entry::Separator,
         Entry::Brightness(LEVELS.to_vec()),
         Entry::Open,
@@ -66,6 +78,7 @@ struct View {
     active: Uuid,
     state: String,
     model: String,
+    auto_switch: bool,
 }
 
 struct DeckTray {
@@ -104,7 +117,7 @@ impl ksni::Tray for DeckTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
         let v = &self.view;
-        menu_model(&v.profiles, v.active, &v.state, &v.model)
+        menu_model(&v.profiles, v.active, &v.state, &v.model, v.auto_switch)
             .into_iter()
             .map(|e| match e {
                 Entry::Header(text) => StandardItem {
@@ -152,6 +165,16 @@ impl ksni::Tray for DeckTray {
                     ..Default::default()
                 }
                 .into(),
+                Entry::AutoSwitch(on) => CheckmarkItem {
+                    label: "Switch Profiles by App".into(),
+                    checked: on,
+                    activate: Box::new(|this: &mut Self| {
+                        this.view.auto_switch = !this.view.auto_switch;
+                        let _ = this.tx.try_send(DeckMsg::ToggleAutoSwitch);
+                    }),
+                    ..Default::default()
+                }
+                .into(),
                 Entry::Open => StandardItem {
                     label: "Open Ulanzi Deck".into(),
                     icon_name: APP_ICON.into(),
@@ -180,6 +203,7 @@ async fn snapshot(tx: &mpsc::Sender<DeckMsg>) -> Option<View> {
         active: s.profile,
         state: s.device.code().into(),
         model: format!("{:?}", s.model),
+        auto_switch: s.auto_switch,
     })
 }
 
@@ -243,17 +267,18 @@ mod tests {
         let a = Uuid::from_u128(1);
         let b = Uuid::from_u128(2);
         let profiles = vec![(a, "Default".to_string()), (b, "Gaming".to_string())];
-        let m = menu_model(&profiles, b, "ready", "D200X");
+        let m = menu_model(&profiles, b, "ready", "D200X", true);
         assert_eq!(m[0], Entry::Header("D200X · Connected".into()));
         assert!(m.contains(&Entry::Profiles {
             names: vec!["Default".into(), "Gaming".into()],
             selected: 1,
         }));
         assert!(m.contains(&Entry::Brightness(vec![25, 50, 75, 100])));
+        assert!(m.contains(&Entry::AutoSwitch(true)));
         assert!(m.contains(&Entry::Open));
         assert_eq!(m.last(), Some(&Entry::Quit));
 
-        let m = menu_model(&profiles, Uuid::from_u128(9), "not_found", "");
+        let m = menu_model(&profiles, Uuid::from_u128(9), "not_found", "", false);
         assert_eq!(m[0], Entry::Header("Deck not connected".into()));
         // An unknown active profile selects nothing rather than the wrong one.
         assert!(m.contains(&Entry::Profiles {

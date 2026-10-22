@@ -72,6 +72,10 @@ pub enum DeckMsg {
     Brightness(BrightnessOp),
     Dynamic(DynamicState),
     Query(oneshot::Sender<DeckSnapshot>),
+    /// The desktop says another window is in front (auto profile switching).
+    Focus(ulanzi_core::autoswitch::Window),
+    /// Turn auto profile switching on or off (tray).
+    ToggleAutoSwitch,
     Shutdown,
 }
 
@@ -93,6 +97,8 @@ pub struct DeckSnapshot {
     pub profile_name: String,
     pub page: usize,
     pub profiles: Vec<(Uuid, String)>,
+    /// Auto profile switching is on.
+    pub auto_switch: bool,
     /// Firmware version the deck reported, once it answered the info request.
     pub firmware: Option<String>,
 }
@@ -151,6 +157,8 @@ struct Deck {
     firmware: Option<String>,
     /// Counts partial uploads, for fresh image names.
     upload_seq: u32,
+    /// The window in front, as last reported by the desktop.
+    focused: Option<ulanzi_core::autoswitch::Window>,
 }
 
 impl Deck {
@@ -204,6 +212,7 @@ impl Deck {
             last_unlock: now,
             firmware: None,
             upload_seq: 0,
+            focused: None,
         }
     }
 
@@ -349,7 +358,15 @@ impl Deck {
                         list
                     },
                     firmware: self.firmware.clone(),
+                    auto_switch: self.settings.auto_switch,
                 });
+            }
+            DeckMsg::ToggleAutoSwitch => {
+                self.internal(&Action::AutoProfile).await;
+            }
+            DeckMsg::Focus(w) => {
+                self.focused = Some(w);
+                self.auto_switch().await;
             }
             DeckMsg::Shutdown => {}
         }
@@ -711,9 +728,16 @@ impl Deck {
                 return true;
             }
             Action::AutoProfile => {
-                if let Some(id) = self.settings.default_profile {
-                    self.switch_profile(id).await;
+                // Turn switching by the app in front on or off.
+                self.settings.auto_switch = !self.settings.auto_switch;
+                if let Err(e) = self.store.save_settings(&self.settings) {
+                    tracing::warn!("could not save settings: {e}");
                 }
+                tracing::info!(
+                    "auto profile switching {}",
+                    if self.settings.auto_switch { "on" } else { "off" }
+                );
+                self.auto_switch().await;
                 return true;
             }
             Action::Brightness { op } => {
@@ -746,6 +770,54 @@ impl Deck {
             message: format!("that {what} no longer exists in this profile"),
         });
         true
+    }
+
+    /// Switch to the profile that belongs to the window in front, if any profile claims apps.
+    async fn auto_switch(&mut self) {
+        use ulanzi_core::autoswitch::{Rule, aliases, pick_profile};
+        let Some(w) = self.focused.clone() else { return };
+        if !self.settings.auto_switch {
+            return;
+        }
+        let mut order: Vec<(Uuid, ())> = self.profiles.iter().map(|p| (p.id, ())).collect();
+        ulanzi_core::model::order_profiles(&mut order, &self.settings.profile_order);
+        let rules: Vec<Rule> = order
+            .iter()
+            .filter_map(|(id, _)| self.profiles.iter().find(|p| p.id == *id))
+            .filter(|p| !p.r#match.apps.is_empty())
+            .map(|p| Rule {
+                profile: p.id,
+                apps: p
+                    .r#match
+                    .apps
+                    .iter()
+                    .map(|a| aliases(a, ulanzi_core::apps::lookup(a).as_ref()))
+                    .collect(),
+                priority: p.r#match.priority,
+            })
+            .collect();
+        if rules.is_empty() {
+            return;
+        }
+        let fallback = self
+            .settings
+            .default_profile
+            .filter(|d| self.profiles.iter().any(|p| p.id == *d))
+            .or_else(|| order.first().map(|(id, _)| *id));
+        let Some(fallback) = fallback else { return };
+        if let Some(target) = pick_profile(&rules, &w, fallback)
+            && target != self.profile().id
+        {
+            tracing::info!(
+                "{} is in front: switching profile",
+                if w.class.is_empty() {
+                    &w.desktop_id
+                } else {
+                    &w.class
+                }
+            );
+            self.switch_profile(target).await;
+        }
     }
 
     async fn switch_profile(&mut self, id: Uuid) {

@@ -40,6 +40,8 @@ pub struct DeckService {
     tx: mpsc::Sender<DeckMsg>,
     store: Store,
     revisions: Mutex<HashMap<Uuid, u64>>,
+    /// The window in front, for the app's "add the app in front" button.
+    focused: Mutex<ulanzi_core::autoswitch::Window>,
 }
 
 impl DeckService {
@@ -48,6 +50,7 @@ impl DeckService {
             tx,
             store,
             revisions: Mutex::default(),
+            focused: Mutex::default(),
         }
     }
 
@@ -180,6 +183,25 @@ impl DeckService {
     async fn reload(&self) -> Result<()> {
         reload(&self.tx, &self.store).await;
         Ok(())
+    }
+
+    /// Called by the desktop's window manager script when another window comes to the front.
+    async fn window_activated(&self, class: String, desktop_id: String, title: String) -> Result<()> {
+        let w = ulanzi_core::autoswitch::Window {
+            class,
+            desktop_id,
+            title,
+        };
+        if let Ok(mut f) = self.focused.lock() {
+            *f = w.clone();
+        }
+        self.send(DeckMsg::Focus(w)).await
+    }
+
+    /// The window in front: (class, desktop id, title).
+    async fn focused_window(&self) -> Result<(String, String, String)> {
+        let w = self.focused.lock().map(|f| f.clone()).unwrap_or_default();
+        Ok((w.class, w.desktop_id, w.title))
     }
 
     /// Import the old Python config. Returns (profile id, keys, warnings).

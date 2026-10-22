@@ -116,6 +116,10 @@ async fn main() -> ExitCode {
         quit.clone(),
     ));
     tokio::spawn(hotplug(tx.clone(), events));
+    tokio::spawn(ulanzi_deckd::focus::run(
+        conn.clone(),
+        store.state_dir().to_path_buf(),
+    ));
     tokio::spawn(sample_loop(
         tx.clone(),
         Sampler::new(media, store.cache_dir().to_path_buf()),
@@ -144,6 +148,7 @@ async fn main() -> ExitCode {
         }
     }
     tracing::info!("stopping");
+    ulanzi_deckd::focus::unload(&conn).await;
     let _ = tx.send(DeckMsg::Shutdown).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     ExitCode::SUCCESS

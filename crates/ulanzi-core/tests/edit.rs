@@ -403,3 +403,15 @@ fn moving_a_page_keeps_the_page_you_are_on() {
     // Still on "Main".
     assert_eq!(e.profile().pages[e.page()].name, "Main");
 }
+
+#[test]
+fn match_rule_is_an_undoable_edit() {
+    let mut e = editor_with_keys();
+    e.set_match(MatchRule {
+        apps: vec!["org.blender.Blender.desktop".into()],
+        priority: 2,
+    });
+    assert_eq!(e.profile().r#match.apps, ["org.blender.Blender.desktop"]);
+    assert!(e.undo());
+    assert!(e.profile().r#match.apps.is_empty());
+}

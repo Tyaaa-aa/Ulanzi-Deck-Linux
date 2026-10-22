@@ -30,6 +30,8 @@ pub struct Settings {
     pub obs: ObsSettings,
     pub autostart: bool,
     pub tray: bool,
+    /// Switch profiles by the app in front (each profile's `match` apps).
+    pub auto_switch: bool,
     /// The order profiles are listed in (ids not listed come after, in their own order).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub profile_order: Vec<Uuid>,
@@ -55,6 +57,7 @@ impl Default for Settings {
             obs: ObsSettings::default(),
             autostart: true,
             tray: true,
+            auto_switch: true,
             profile_order: Vec::new(),
         }
     }

@@ -15,6 +15,78 @@ pub struct AppEntry {
     /// `Exec=` split into argv, field codes removed.
     pub exec: Vec<String>,
     pub keywords: Vec<String>,
+    /// `Categories=`, e.g. `Graphics`, `Game`.
+    pub categories: Vec<String>,
+    /// `StartupWMClass=`: the window class, when it differs from the file name.
+    pub wm_class: Option<String>,
+}
+
+/// Friendly sections for app lists, from the freedesktop main categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum AppGroup {
+    Games,
+    Graphics,
+    Video,
+    Development,
+    Internet,
+    Office,
+    Utilities,
+    System,
+    Other,
+}
+
+impl AppGroup {
+    pub const ALL: [AppGroup; 9] = [
+        AppGroup::Games,
+        AppGroup::Graphics,
+        AppGroup::Video,
+        AppGroup::Development,
+        AppGroup::Internet,
+        AppGroup::Office,
+        AppGroup::Utilities,
+        AppGroup::System,
+        AppGroup::Other,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            AppGroup::Games => "Games",
+            AppGroup::Graphics => "Graphics & Design",
+            AppGroup::Video => "Music & Video",
+            AppGroup::Development => "Development",
+            AppGroup::Internet => "Internet",
+            AppGroup::Office => "Office",
+            AppGroup::Utilities => "Utilities",
+            AppGroup::System => "System",
+            AppGroup::Other => "Other",
+        }
+    }
+}
+
+impl AppEntry {
+    /// The section this app is listed under.
+    pub fn group(&self) -> AppGroup {
+        let has = |c: &str| self.categories.iter().any(|x| x == c);
+        if has("Game") {
+            AppGroup::Games
+        } else if has("Graphics") {
+            AppGroup::Graphics
+        } else if has("AudioVideo") || has("Audio") || has("Video") {
+            AppGroup::Video
+        } else if has("Development") {
+            AppGroup::Development
+        } else if has("Network") {
+            AppGroup::Internet
+        } else if has("Office") || has("Education") || has("Science") {
+            AppGroup::Office
+        } else if has("Utility") || has("Accessories") {
+            AppGroup::Utilities
+        } else if has("System") || has("Settings") {
+            AppGroup::System
+        } else {
+            AppGroup::Other
+        }
+    }
 }
 
 thread_local! {
@@ -133,6 +205,16 @@ fn parse(desktop_id: &str, text: &str) -> Option<AppEntry> {
         return None;
     }
     let exec = split_exec(e.get("Exec")?);
+    let list = |k: &str| -> Vec<String> {
+        e.get(k)
+            .map(|v| {
+                v.split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     if exec.is_empty() {
         return None;
     }
@@ -144,15 +226,9 @@ fn parse(desktop_id: &str, text: &str) -> Option<AppEntry> {
             .unwrap_or_else(|| desktop_id.trim_end_matches(".desktop").into()),
         icon: e.get("Icon").filter(|i| !i.is_empty()).cloned(),
         exec,
-        keywords: e
-            .get("Keywords")
-            .map(|k| {
-                k.split(';')
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        keywords: list("Keywords"),
+        categories: list("Categories"),
+        wm_class: e.get("StartupWMClass").filter(|c| !c.is_empty()).cloned(),
     })
 }
 

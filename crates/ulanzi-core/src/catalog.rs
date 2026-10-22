@@ -133,7 +133,7 @@ static CATALOG: &[ActionSpec] = &[
     ),
     spec!(
         "auto_profile",
-        "Automatic Profile",
+        "Auto-Switch On/Off",
         Navigation,
         "refresh-cw",
         Action::AutoProfile,

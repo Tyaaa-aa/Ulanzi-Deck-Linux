@@ -56,6 +56,8 @@ pub struct AppState {
     pub demo: Cell<bool>,
     /// True while the inspector applies its own edit (it then refreshes itself without a rebuild).
     pub inspector_edit: Cell<bool>,
+    /// Each profile's auto-switch apps (for the sidebar), by profile.
+    pub rules: RefCell<std::collections::HashMap<Uuid, ulanzi_core::model::MatchRule>>,
     /// An action from the library is being dragged (the dials show their drop zones).
     pub dragging_action: Cell<bool>,
     /// An appearance change shown on the selected keys before it is applied (hovering a colour).
@@ -96,6 +98,7 @@ impl AppState {
             inspector_edit: Cell::new(false),
             preview: RefCell::new(None),
             dragging_action: Cell::new(false),
+            rules: RefCell::new(std::collections::HashMap::new()),
             expanded: RefCell::new(std::collections::HashSet::new()),
             listeners: RefCell::new(Vec::new()),
         })

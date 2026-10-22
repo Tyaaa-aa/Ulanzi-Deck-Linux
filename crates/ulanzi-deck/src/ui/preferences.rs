@@ -168,6 +168,19 @@ fn general_page(state: &State) -> adw::PreferencesPage {
         });
     }
     bg.add(&tray);
+    let auto = adw::SwitchRow::builder()
+        .title("Switch Profiles by App")
+        .subtitle("Right-click a profile → Auto-Switch… to choose its apps (KDE Plasma)")
+        .active(s.auto_switch)
+        .build();
+    {
+        let state = state.clone();
+        auto.connect_active_notify(move |r| {
+            let v = r.is_active();
+            change(&state, |s| s.auto_switch = v)
+        });
+    }
+    bg.add(&auto);
     page.add(&bg);
 
     let keys = adw::PreferencesGroup::builder().title("Keys").build();

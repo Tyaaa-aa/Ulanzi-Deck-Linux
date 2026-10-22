@@ -262,3 +262,8 @@ row.drop-target {
   background-color: #0b0b0d;
   border: 1px solid alpha(white, 0.14);
 }
+
+.app-section {
+  margin: 10px 4px 2px 4px;
+  color: alpha(@window_fg_color, 0.6);
+}

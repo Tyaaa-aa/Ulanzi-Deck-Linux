@@ -107,10 +107,17 @@ async fn settle() {
 }
 
 async fn rig_with(settings: Settings) -> Rig {
+    rig_full(settings, Vec::new()).await
+}
+
+async fn rig_full(settings: Settings, extra: Vec<Profile>) -> Rig {
     let dir = tempfile::tempdir().expect("tmp");
     let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
     let p = profile();
     store.save_profile(&p).expect("save");
+    for x in &extra {
+        store.save_profile(x).expect("save extra");
+    }
     let settings = Settings {
         default_profile: Some(p.id),
         ..settings
@@ -622,4 +629,57 @@ async fn no_busy_loop_when_the_deck_goes_away_with_an_upload_pending() {
         used < 30,
         "the deck loop used {used} ticks of CPU in 1 s while unplugged"
     );
+}
+
+async fn active_profile(r: &Rig) -> uuid::Uuid {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    r.tx.send(DeckMsg::Query(tx)).await.expect("send");
+    rx.await.expect("snapshot").profile
+}
+
+fn focus(class: &str) -> DeckMsg {
+    DeckMsg::Focus(ulanzi_core::autoswitch::Window {
+        class: class.into(),
+        desktop_id: String::new(),
+        title: String::new(),
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn profiles_follow_the_app_in_front() {
+    let mut coding = Profile::new_default("Coding", Model::D200X);
+    coding.r#match.apps = vec!["code.desktop".into()];
+    let coding_id = coding.id;
+    let r = rig_full(Settings::default(), vec![coding]).await;
+    let default = active_profile(&r).await;
+    assert_ne!(default, coding_id);
+
+    r.tx.send(focus("code")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, coding_id);
+
+    // The desktop shell doesn't count.
+    r.tx.send(focus("plasmashell")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, coding_id);
+
+    // Any other app goes back to the default profile.
+    r.tx.send(focus("firefox")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, default);
+}
+
+#[tokio::test(start_paused = true)]
+async fn auto_switch_can_be_turned_off() {
+    let mut coding = Profile::new_default("Coding", Model::D200X);
+    coding.r#match.apps = vec!["code.desktop".into()];
+    let settings = Settings {
+        auto_switch: false,
+        ..Settings::default()
+    };
+    let r = rig_full(settings, vec![coding]).await;
+    let before = active_profile(&r).await;
+    r.tx.send(focus("code")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, before);
 }

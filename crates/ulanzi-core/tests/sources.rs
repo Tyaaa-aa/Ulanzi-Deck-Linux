@@ -205,3 +205,31 @@ fn brand_icon_tinted() {
 fn temp_env(data: &Path, f: impl FnOnce()) {
     apps::with_data_dirs_override(vec![data.to_path_buf()], f);
 }
+
+#[test]
+fn apps_have_groups_and_window_class() {
+    let d = tempfile::tempdir().expect("tmp");
+    let a = d.path().join("applications");
+    write(
+        &a.join("org.blender.Blender.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Blender\nExec=blender\nCategories=Graphics;3DGraphics;\nStartupWMClass=Blender\n",
+    );
+    write(
+        &a.join("hades.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Hades\nExec=steam steam://rungameid/1145360\nCategories=Game;\n",
+    );
+    write(
+        &a.join("misc.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Misc\nExec=misc\n",
+    );
+    let list = apps::scan(&[a]);
+    let get = |n: &str| list.iter().find(|x| x.name == n).expect(n).clone();
+    let blender = get("Blender");
+    assert_eq!(blender.wm_class.as_deref(), Some("Blender"));
+    assert_eq!(blender.group(), apps::AppGroup::Graphics);
+    assert_eq!(get("Hades").group(), apps::AppGroup::Games);
+    assert_eq!(get("Misc").group(), apps::AppGroup::Other);
+    // Groups have names and a fixed order for section headers.
+    assert_eq!(apps::AppGroup::Games.title(), "Games");
+    assert!(apps::AppGroup::ALL.contains(&apps::AppGroup::Other));
+}

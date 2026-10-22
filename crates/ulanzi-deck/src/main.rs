@@ -223,6 +223,11 @@ fn main() -> glib::ExitCode {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
+                Some("apps") => ui::app_picker::preview_dialog(&window),
+                Some("autoswitch") => {
+                    let name = state2.editor.borrow().profile().name.clone();
+                    ui::autoswitch::open(&state2, &window, state2.profile_id(), &name)
+                }
                 Some(o) if o.starts_with("color") => {
                     // Open the first colour button's popover (after the inspector is built).
                     let (window, custom) = (window.clone(), o.ends_with(":custom"));

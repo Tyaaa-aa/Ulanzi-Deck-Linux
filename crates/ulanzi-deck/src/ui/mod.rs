@@ -1,6 +1,8 @@
 //! The GTK user interface.
 
 pub mod action_editor;
+pub mod app_picker;
+pub mod autoswitch;
 pub mod canvas;
 pub mod color_popover;
 pub mod how_it_works;
