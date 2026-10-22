@@ -478,12 +478,141 @@ fn reset_label_overrides(state: &State, near: &impl IsA<gtk::Widget>) {
     dialog.present(Some(near));
 }
 
+/// "Thu 23 Oct, 01:01" in local time, from RFC 3339.
+fn local_time(rfc3339: &str) -> String {
+    glib::DateTime::from_iso8601(rfc3339, None)
+        .and_then(|d| d.to_local())
+        .and_then(|d| d.format("%a %e %b, %H:%M"))
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| rfc3339.to_string())
+}
+
+fn backups_page(state: &State) -> adw::PreferencesPage {
+    use crate::ui::bundle_dialogs::{reason_words, restore, toast_with};
+    let page = adw::PreferencesPage::builder()
+        .title("Backups")
+        .name("backups")
+        .icon_name("document-revert-symbolic")
+        .build();
+    let top = adw::PreferencesGroup::builder()
+        .description(
+            "Everything is backed up once a day and before imports, restores and deleting a \
+             profile. The newest 20 are kept.",
+        )
+        .build();
+    let now = adw::ButtonRow::builder()
+        .title("Back Up Now")
+        .start_icon_name("document-save-symbolic")
+        .build();
+    top.add(&now);
+    let folder = adw::ButtonRow::builder()
+        .title("Open Backups Folder")
+        .start_icon_name("folder-open-symbolic")
+        .build();
+    folder.connect_activated(|b| {
+        if let Ok(store) = ulanzi_core::store::Store::xdg() {
+            let dir = store.state_dir().join("snapshots");
+            let _ = std::fs::create_dir_all(&dir);
+            let launcher = gtk::FileLauncher::new(Some(&gtk::gio::File::for_path(dir)));
+            let window = b.root().and_downcast::<gtk::Window>();
+            launcher.launch(window.as_ref(), None::<&gtk::gio::Cancellable>, |_| {});
+        }
+    });
+    top.add(&folder);
+    page.add(&top);
+
+    let list = adw::PreferencesGroup::builder().title("Backups").build();
+    page.add(&list);
+    let rows: std::rc::Rc<RefCell<Vec<adw::ActionRow>>> = std::rc::Rc::default();
+    let fill: std::rc::Rc<dyn Fn()> = {
+        let (state, list, rows) = (state.clone(), list.downgrade(), rows.clone());
+        std::rc::Rc::new(move || {
+            let (st, list, rows) = (state.clone(), list.clone(), rows.clone());
+            crate::ui::bundle_dialogs::list(&state, move |snaps| {
+                let Some(list) = list.upgrade() else { return };
+                for r in rows.borrow_mut().drain(..) {
+                    list.remove(&r);
+                }
+                if snaps.is_empty() {
+                    let r = adw::ActionRow::builder().title("No backups yet").build();
+                    list.add(&r);
+                    rows.borrow_mut().push(r);
+                }
+                for snap in snaps {
+                    let r = adw::ActionRow::builder()
+                        .title(local_time(&snap.created))
+                        .subtitle(format!(
+                            "{} · {}",
+                            reason_words(&snap.reason),
+                            snap.profiles.join(", ")
+                        ))
+                        .build();
+                    let button = gtk::Button::builder()
+                        .label("Restore…")
+                        .valign(gtk::Align::Center)
+                        .build();
+                    let (st, name, when) = (st.clone(), snap.name.clone(), local_time(&snap.created));
+                    button.connect_clicked(move |b| {
+                        let dialog = adw::AlertDialog::builder()
+                            .heading("Restore This Backup?")
+                            .body(format!(
+                                "Your profiles and settings go back to how they were on {when}. \
+                                 What you have now is backed up first, so you can undo this."
+                            ))
+                            .default_response("cancel")
+                            .close_response("cancel")
+                            .build();
+                        dialog.add_response("cancel", "Cancel");
+                        dialog.add_response("restore", "Restore");
+                        dialog.set_response_appearance("restore", adw::ResponseAppearance::Destructive);
+                        let (st, name) = (st.clone(), name.clone());
+                        dialog.connect_response(Some("restore"), move |_, _| {
+                            let st2 = st.clone();
+                            restore(&st, &name, move |before| {
+                                if let Some(before) = before {
+                                    let st3 = st2.clone();
+                                    toast_with("Backup restored", "Undo", move || {
+                                        restore(&st3, &before, |_| {})
+                                    });
+                                }
+                            });
+                        });
+                        dialog.present(Some(b));
+                    });
+                    r.add_suffix(&button);
+                    list.add(&r);
+                    rows.borrow_mut().push(r);
+                }
+            });
+        })
+    };
+    fill();
+    {
+        let (state, fill) = (state.clone(), fill.clone());
+        now.connect_activated(move |_| {
+            let Some(c) = state.client.borrow().clone() else {
+                return;
+            };
+            let (st, fill) = (state.clone(), fill.clone());
+            runtime::run(async move { c.take_snapshot("manual").await }, move |r| match r {
+                Ok(_) => {
+                    crate::ui::toast(&st, "Backed up");
+                    fill();
+                }
+                Err(e) => crate::ui::toast(&st, &format!("Backup failed: {e}")),
+            });
+        });
+    }
+    page
+}
+
 /// Open the preferences dialog.
 pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
     let dialog = adw::PreferencesDialog::builder().search_enabled(true).build();
     dialog.add(&general_page(state));
     dialog.add(&device_page(state));
     dialog.add(&integrations_page(state));
+    dialog.add(&backups_page(state));
     dialog.present(Some(parent));
 }
 

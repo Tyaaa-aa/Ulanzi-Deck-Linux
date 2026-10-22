@@ -266,6 +266,12 @@ fn main() -> glib::ExitCode {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
+                Some("backups") => {
+                    ui::preferences::open(&state2, &window);
+                    if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {
+                        d.set_visible_page_name("backups");
+                    }
+                }
                 Some("apps") => ui::app_picker::preview_dialog(&window),
                 Some("templates") => ui::templates::open(&state2, &window),
                 Some("export") => ui::bundle_dialogs::open_export(&state2, &window, None),
