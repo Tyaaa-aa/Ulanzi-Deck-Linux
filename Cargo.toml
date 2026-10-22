@@ -39,6 +39,9 @@ rustix = { version = "1", features = ["fs", "process", "std"] }
 inotify = "0.11"
 futures-util = "0.3"
 tracing = "0.1"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_6"] }
+async-channel = "2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

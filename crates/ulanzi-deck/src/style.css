@@ -1,0 +1,195 @@
+/* Ulanzi Deck. Only libadwaita named colours, except the device itself, which is physically dark. */
+
+.canvas-area {
+  background-color: mix(@window_bg_color, @view_bg_color, 0.5);
+}
+
+/* The device */
+.deck-body {
+  background-image: linear-gradient(to bottom, #2b2b30, #16161a);
+  border-radius: 34px;
+  padding: 28px;
+  border: 1px solid alpha(white, 0.13);
+  box-shadow: 0 18px 44px alpha(black, 0.38), inset 0 1px alpha(white, 0.06);
+}
+
+.deck-key,
+.deck-screen {
+  padding: 6px;
+  border-radius: 14px;
+  background-color: #0c0c0e;
+  border: 1px solid alpha(white, 0.08);
+  box-shadow: none;
+  transition: border-color 150ms, outline-color 150ms, background-color 250ms;
+  outline: 2.5px solid transparent;
+  outline-offset: 3px;
+}
+
+.deck-key:hover,
+.deck-screen:hover {
+  border-color: alpha(white, 0.28);
+  background-color: #141417;
+}
+
+.deck-key.selected,
+.deck-screen.selected,
+.deck-small.selected,
+.deck-dial.selected {
+  outline-color: @accent_bg_color;
+}
+
+.deck-key.flash,
+.deck-screen.flash,
+.deck-small.flash,
+.deck-dial.flash {
+  background-color: alpha(@accent_bg_color, 0.55);
+}
+
+.deck-key.drop-target {
+  outline-color: alpha(@accent_bg_color, 0.7);
+  outline-style: dashed;
+}
+
+.deck-key picture,
+.deck-screen picture {
+  border-radius: 9px;
+}
+
+.deck-key-label {
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px black;
+  margin-bottom: 4px;
+}
+
+.deck-key-empty {
+  color: alpha(white, 0.18);
+}
+
+.deck-small {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  background-color: #0e0e11;
+  border: 1px solid alpha(white, 0.12);
+  color: alpha(white, 0.55);
+  outline: 2.5px solid transparent;
+  outline-offset: 3px;
+}
+
+.deck-dial {
+  min-width: 76px;
+  min-height: 76px;
+  padding: 0;
+  border-radius: 999px;
+  background-image: radial-gradient(circle, #24242a 0%, #1a1a1f 62%, #0f0f12 64%, #101013 100%);
+  border: 1px solid alpha(white, 0.13);
+  color: alpha(white, 0.5);
+  outline: 2.5px solid transparent;
+  outline-offset: 3px;
+}
+
+.deck-small:hover,
+.deck-dial:hover {
+  border-color: alpha(white, 0.3);
+}
+
+.page-dot {
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 99px;
+  background-color: alpha(@window_fg_color, 0.25);
+}
+
+.page-dot.current {
+  background-color: @accent_bg_color;
+  min-width: 9px;
+  min-height: 9px;
+}
+
+.hint {
+  color: alpha(@window_fg_color, 0.6);
+  font-size: smaller;
+}
+
+/* Header status pill */
+.status-pill {
+  border-radius: 99px;
+  padding: 2px 12px;
+  min-height: 0;
+}
+
+.status-dot {
+  min-width: 9px;
+  min-height: 9px;
+  border-radius: 99px;
+  background-color: alpha(@window_fg_color, 0.35);
+}
+
+.status-dot.ok {
+  background-color: @success_color;
+}
+
+.status-dot.warn {
+  background-color: @warning_color;
+}
+
+.status-dot.bad {
+  background-color: @error_color;
+}
+
+/* Sidebar */
+.sidebar-heading {
+  font-weight: 700;
+  font-size: smaller;
+  color: alpha(@window_fg_color, 0.65);
+  margin: 12px 14px 4px 14px;
+}
+
+.page-number {
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 6px;
+  background-color: alpha(@window_fg_color, 0.08);
+  font-weight: 700;
+  font-size: smaller;
+}
+
+row:selected .page-number {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+
+.app-badge {
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 8px;
+  background-color: alpha(@window_fg_color, 0.08);
+}
+
+/* Inspector */
+.key-preview {
+  border-radius: 18px;
+  padding: 7px;
+  background-color: #0c0c0e;
+}
+
+.action-chip {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 10px;
+}
+
+/* Action library */
+.action-card {
+  padding: 8px 10px;
+  border-radius: 10px;
+}
+
+.action-card .chip {
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 7px;
+}
