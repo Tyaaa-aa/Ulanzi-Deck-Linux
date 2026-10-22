@@ -95,7 +95,10 @@ fn main() -> glib::ExitCode {
         .application_id(APP_ID)
         .flags(flags)
         .build();
-    app.connect_startup(|_| load_css());
+    app.connect_startup(|_| {
+        gtk::Window::set_default_icon_name(APP_ID);
+        load_css();
+    });
     app.connect_activate(move |app| {
         if let Some(w) = app.active_window() {
             w.present();

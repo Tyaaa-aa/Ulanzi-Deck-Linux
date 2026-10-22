@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Ulanzi Deck
+GenericName=Stream Deck Configuration
+Comment=Set up the keys, dials and screen of an Ulanzi D200 or D200X
+Exec=ulanzi-deck
+Icon=io.github.tyaaa_aa.UlanziDeck
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=stream;deck;macro;keypad;shortcut;ulanzi;d200;obs;
+StartupNotify=true
+SingleMainWindow=true

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.tyaaa_aa.UlanziDeck</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Ulanzi Deck</name>
+  <summary>Set up your Ulanzi D200 stream deck</summary>
+  <developer id="io.github.tyaaa_aa">
+    <name>Tyaaa-aa</name>
+  </developer>
+  <description>
+    <p>
+      Ulanzi Deck configures the Ulanzi D200 and D200X stream decks on Linux. Drag actions onto keys,
+      pick icons, logos, app icons or your own pictures, and see every change on the deck right away.
+    </p>
+    <ul>
+      <li>Keys, dials, small buttons and the wide screen, with tap and hold actions</li>
+      <li>Media, volume, shortcuts, typing, commands, apps, websites and OBS Studio</li>
+      <li>Profiles and pages, edit many keys at once, undo and redo</li>
+      <li>Clock styles, system stats and Now Playing on the wide screen</li>
+      <li>A small background service runs the deck with the window closed</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.tyaaa_aa.UlanziDeck.desktop</launchable>
+  <url type="homepage">https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux</url>
+  <url type="bugtracker">https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues</url>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <provides>
+    <binary>ulanzi-deck</binary>
+    <binary>ulanzi-deckd</binary>
+    <binary>ulanzictl</binary>
+  </provides>
+  <releases>
+    <release version="2.0.0~alpha1" date="2026-10-22">
+      <description>
+        <p>A full rewrite in Rust with a new GTK interface.</p>
+      </description>
+    </release>
+  </releases>
+</component>
