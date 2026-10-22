@@ -3,12 +3,14 @@
 //! Pure functions only; no I/O.
 
 mod commands;
+mod input;
 mod json;
 mod manifest;
 mod packet;
 mod zipper;
 
 pub use commands::*;
+pub use input::*;
 pub use manifest::*;
 pub use packet::*;
 pub use zipper::*;
