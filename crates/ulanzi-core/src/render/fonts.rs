@@ -14,6 +14,8 @@ pub struct Fonts {
     system: FontSystem,
     cache: SwashCache,
     family: String,
+    /// A colour emoji family, if one is installed.
+    emoji: Option<String>,
 }
 
 const PREFERRED: [&str; 4] = ["Adwaita Sans", "Cantarell", "Noto Sans", "DejaVu Sans"];
@@ -32,20 +34,45 @@ impl Fonts {
             })
             .map(|f| f.to_string())
             .unwrap_or_else(|| "sans-serif".into());
+        let emoji = [
+            "Noto Color Emoji",
+            "Twemoji",
+            "JoyPixels",
+            "Apple Color Emoji",
+            "Segoe UI Emoji",
+        ]
+        .iter()
+        .find(|f| {
+            system
+                .db()
+                .faces()
+                .any(|face| face.families.iter().any(|(n, _)| n == *f))
+        })
+        .map(|f| f.to_string());
         Fonts {
             system,
             cache: SwashCache::new(),
             family,
+            emoji,
         }
     }
 
+    pub fn has_color_emoji(&self) -> bool {
+        self.emoji.is_some()
+    }
+
     fn buffer(&mut self, text: &str, size: f32, bold: bool) -> Buffer {
+        let family = self.family.clone();
+        self.buffer_in(&family, text, size, bold)
+    }
+
+    fn buffer_in(&mut self, family: &str, text: &str, size: f32, bold: bool) -> Buffer {
         let mut b = Buffer::new(&mut self.system, Metrics::new(size, size * 1.2));
         let attrs = Attrs::new()
-            .family(if self.family == "sans-serif" {
+            .family(if family == "sans-serif" {
                 Family::SansSerif
             } else {
-                Family::Name(&self.family)
+                Family::Name(family)
             })
             .weight(if bold { Weight::BOLD } else { Weight::NORMAL });
         b.set_size(None, None);
@@ -92,9 +119,29 @@ impl Fonts {
     }
 
     /// Draw one line of text with its top-left at `(x, y)`. Returns the line height.
-    pub fn draw(&mut self, pix: &mut Pixmap, text: &str, (x, y): (f32, f32), style: &TextStyle) -> f32 {
-        let TextStyle { size, bold, rgb } = *style;
-        let mut b = self.buffer(text, size, bold);
+    pub fn draw(&mut self, pix: &mut Pixmap, text: &str, at: (f32, f32), style: &TextStyle) -> f32 {
+        let b = self.buffer(text, style.size, style.bold);
+        self.paint(b, pix, at, style)
+    }
+
+    pub fn measure_emoji(&mut self, text: &str, size: f32) -> f32 {
+        let family = self.emoji.clone().unwrap_or_else(|| self.family.clone());
+        let b = self.buffer_in(&family, text, size, false);
+        b.layout_runs().map(|r| r.line_w).fold(0.0, f32::max)
+    }
+
+    /// Draw text in the colour emoji font (glyph colours come from the font).
+    pub fn draw_emoji(&mut self, pix: &mut Pixmap, text: &str, at: (f32, f32), style: &TextStyle) -> f32 {
+        let family = self.emoji.clone().unwrap_or_else(|| self.family.clone());
+        let b = self.buffer_in(&family, text, style.size, false);
+        self.paint(b, pix, at, style)
+    }
+
+    fn paint(&mut self, mut b: Buffer, pix: &mut Pixmap, (x, y): (f32, f32), style: &TextStyle) -> f32 {
+        // Glyph pixels are whole pixels: a fractional origin would smear each one over four
+        // and leave the text dim and blurry.
+        let (x, y) = (x.round(), y.round());
+        let rgb = style.rgb;
         let color = cosmic_text::Color::rgb(rgb[0], rgb[1], rgb[2]);
         let mut paint = Paint::default();
         b.draw(&mut self.system, &mut self.cache, color, |gx, gy, w, h, c| {
@@ -106,6 +153,6 @@ impl Fonts {
                 pix.fill_rect(r, &paint, Transform::identity(), None);
             }
         });
-        size * 1.2
+        style.size * 1.2
     }
 }

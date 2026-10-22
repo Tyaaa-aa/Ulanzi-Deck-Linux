@@ -49,15 +49,37 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
         },
         ImageSource::Image { path } => {
             let full = ctx.profile_dir.join(path);
-            if let Err(e) = draw_image(&mut pix, &full) {
+            if let Err(e) = draw_file(&mut pix, &full, Fit::Cover) {
                 warnings.push(format!("image {}: {e}", full.display()));
             }
         }
-        ImageSource::Text { .. }
-        | ImageSource::App { .. }
-        | ImageSource::Steam { .. }
-        | ImageSource::Emoji { .. } => {
-            warnings.push("this image source arrives with the GUI (M2)".into());
+        ImageSource::Text { content } => {
+            if let Err(e) = super::text::draw_text(&mut pix, content, look.foreground) {
+                warnings.push(format!("text: {e}"));
+            }
+        }
+        ImageSource::Emoji { ch } => {
+            if let Err(e) = super::text::draw_emoji(&mut pix, ch) {
+                warnings.push(e);
+            }
+        }
+        ImageSource::App { desktop_id } => match crate::apps::app_icon(desktop_id) {
+            Some(path) => {
+                if let Err(e) = draw_file(&mut pix, &path, Fit::Contain(look.icon_scale)) {
+                    warnings.push(format!("icon of {desktop_id}: {e}"));
+                }
+            }
+            None => warnings.push(format!("no icon found for app {desktop_id}")),
+        },
+        ImageSource::Steam { appid } => {
+            match crate::steam::default_root().and_then(|r| crate::steam::art_for(&r, *appid)) {
+                Some(path) => {
+                    if let Err(e) = draw_file(&mut pix, &path, Fit::Cover) {
+                        warnings.push(format!("Steam art for {appid}: {e}"));
+                    }
+                }
+                None => warnings.push(format!("Steam has no artwork for game {appid} on this computer")),
+            }
         }
     }
     let png = pix.encode_png().ok()?;
@@ -65,6 +87,12 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
 }
 
 fn draw_svg(pix: &mut Pixmap, svg: &str, fg: Color, scale: f32) -> Result<(), String> {
+    // Simple Icons have no colour; give the root a fill so they take the foreground colour.
+    let svg = if svg.contains("currentColor") {
+        svg.to_string()
+    } else {
+        svg.replacen("<svg ", "<svg fill=\"currentColor\" ", 1)
+    };
     let svg = svg.replace(
         "currentColor",
         &format!("#{:02x}{:02x}{:02x}", fg.0[0], fg.0[1], fg.0[2]),
@@ -97,7 +125,46 @@ fn draw_svg(pix: &mut Pixmap, svg: &str, fg: Color, scale: f32) -> Result<(), St
     Ok(())
 }
 
-fn draw_image(pix: &mut Pixmap, path: &Path) -> Result<(), String> {
+/// How a picture fills the key.
+#[derive(Debug, Clone, Copy)]
+enum Fit {
+    /// Fill the whole key, cropping the overflow.
+    Cover,
+    /// Fit inside a centred box of this share of the key.
+    Contain(f32),
+}
+
+/// Draw an SVG or raster file.
+fn draw_file(pix: &mut Pixmap, path: &Path, fit: Fit) -> Result<(), String> {
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+        let data = std::fs::read(path).map_err(|e| e.to_string())?;
+        let opts = usvg::Options {
+            resources_dir: path.parent().map(Path::to_path_buf),
+            ..usvg::Options::default()
+        };
+        let tree = usvg::Tree::from_data(&data, &opts).map_err(|e| e.to_string())?;
+        let share = match fit {
+            Fit::Cover => 1.0,
+            Fit::Contain(s) => s.clamp(0.05, 1.0),
+        };
+        let size = tree.size();
+        let box_px = KEY_PX as f32 * share;
+        let k = box_px / size.width().max(size.height());
+        let (ox, oy) = (
+            (KEY_PX as f32 - size.width() * k) / 2.0,
+            (KEY_PX as f32 - size.height() * k) / 2.0,
+        );
+        resvg::render(
+            &tree,
+            Transform::from_scale(k, k).post_translate(ox, oy),
+            &mut pix.as_mut(),
+        );
+        return Ok(());
+    }
+    draw_image(pix, path, fit)
+}
+
+fn draw_image(pix: &mut Pixmap, path: &Path, fit: Fit) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -108,9 +175,21 @@ fn draw_image(pix: &mut Pixmap, path: &Path) -> Result<(), String> {
     limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
     let img = reader.decode().map_err(|e| e.to_string())?;
-    let fitted = img
-        .resize_to_fill(KEY_PX, KEY_PX, image::imageops::FilterType::Lanczos3)
-        .to_rgba8();
+    let fitted = match fit {
+        Fit::Cover => img
+            .resize_to_fill(KEY_PX, KEY_PX, image::imageops::FilterType::Lanczos3)
+            .to_rgba8(),
+        Fit::Contain(share) => {
+            let side = ((KEY_PX as f32) * share.clamp(0.05, 1.0)) as u32;
+            let small = img
+                .resize(side, side, image::imageops::FilterType::Lanczos3)
+                .to_rgba8();
+            let mut canvas = image::RgbaImage::new(KEY_PX, KEY_PX);
+            let (x, y) = ((KEY_PX - small.width()) / 2, (KEY_PX - small.height()) / 2);
+            image::imageops::overlay(&mut canvas, &small, x as i64, y as i64);
+            canvas
+        }
+    };
     let mut layer = Pixmap::new(KEY_PX, KEY_PX).ok_or("no layer")?;
     for (dst, src) in layer.pixels_mut().iter_mut().zip(fitted.pixels()) {
         let [r, g, b, a] = src.0;
