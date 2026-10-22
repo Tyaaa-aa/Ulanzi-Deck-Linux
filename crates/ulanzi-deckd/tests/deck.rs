@@ -121,7 +121,7 @@ async fn rig_with(settings: Settings) -> Rig {
         .await
         .expect("send");
     // Let the connect upload's spacing window pass so each test starts from a quiet deck.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    tokio::time::sleep(Duration::from_millis(2100)).await;
     Rig {
         _dir: dir,
         tx,
@@ -377,9 +377,11 @@ async fn rapid_page_flips_are_coalesced() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn live_changes_use_partial_updates() {
+async fn live_changes_reupload_the_whole_page() {
+    // Partial updates (0x0d) crashed the deck after a page with photos, so live changes send the
+    // whole page, like the Python version did for months.
     let r = rig().await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
     r.mock.clear();
     let playing = DynamicState {
         playing: Some(true),
@@ -388,8 +390,8 @@ async fn live_changes_use_partial_updates() {
     r.tx.send(DeckMsg::Dynamic(playing)).await.expect("send");
     tokio::time::sleep(Duration::from_millis(100)).await;
     let cmds = r.mock.commands();
-    assert!(cmds.contains(&PARTIAL), "{cmds:?}");
-    assert!(!cmds.contains(&BUTTONS), "{cmds:?}");
+    assert!(cmds.contains(&BUTTONS), "{cmds:?}");
+    assert!(!cmds.contains(&PARTIAL), "{cmds:?}");
 }
 
 fn info_frame() -> Vec<u8> {
@@ -560,9 +562,8 @@ async fn page_is_sent_anyway_when_the_deck_never_answers() {
 }
 
 #[test]
-fn cooldown_grows_with_upload_size() {
+fn uploads_are_two_seconds_apart() {
     use ulanzi_deckd::deck::upload_cooldown;
-    assert_eq!(upload_cooldown(0), Duration::from_secs(1));
-    assert!(upload_cooldown(300 * 1024) >= Duration::from_secs(2));
-    assert!(upload_cooldown(300 * 1024) <= Duration::from_secs(3));
+    assert_eq!(upload_cooldown(0), Duration::from_secs(2));
+    assert_eq!(upload_cooldown(300 * 1024), Duration::from_secs(2));
 }

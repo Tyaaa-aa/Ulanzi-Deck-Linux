@@ -16,9 +16,9 @@ use ulanzi_core::model::{Action, BrightnessOp, Model, Profile, ScreenConfig, Set
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_proto::{
-    ButtonEntry, ButtonImage, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow,
-    brightness, button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time,
-    small_window, unlock,
+    ButtonEntry, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow, brightness,
+    button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time, small_window,
+    unlock,
 };
 use uuid::Uuid;
 
@@ -35,16 +35,16 @@ use crate::transport::{DeviceState, Transport};
 const TICK: Duration = Duration::from_secs(1);
 /// Re-send unlock this often, in case the deck locked anyway.
 const UNLOCK_EVERY: Duration = Duration::from_secs(30);
-/// Minimum time between uploads: the deck shows garbage, or reboots, when uploads arrive while it is
-/// still unpacking the previous one.
-const MIN_UPLOAD_GAP: Duration = Duration::from_secs(1);
+/// Minimum time between page uploads. Measured on hardware: full pages with photos every 2 s are
+/// fine; uploads arriving back to back blank the deck.
+const MIN_UPLOAD_GAP: Duration = Duration::from_secs(2);
 /// How long to wait for the device-info reply (the deck's "ready") before uploading anyway.
 const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Time the deck needs after an upload of `bytes` before it can take another: one second plus about
-/// 4 ms per KB (a typical 300 KB page waits ~2.2 s).
-pub fn upload_cooldown(bytes: usize) -> Duration {
-    MIN_UPLOAD_GAP + Duration::from_millis(bytes as u64 * 4 / 1024)
+/// Time the deck needs after an upload before it can take another. Size made no measurable
+/// difference on hardware, so it is flat.
+pub fn upload_cooldown(_bytes: usize) -> Duration {
+    MIN_UPLOAD_GAP
 }
 
 /// The page last uploaded: (profile, page index) and its manifest entries.
@@ -436,43 +436,26 @@ impl Deck {
             .insert("page".into(), (self.nav.page + 1).to_string());
         dynamic.vars.insert("profile".into(), profile.name.clone());
         let here = (profile.id, self.nav.page);
-        let full = force || self.shown.as_ref().is_none_or(|s| s.at != here);
-        if full {
-            self.cache.generation = self.cache.generation.wrapping_add(1);
-        }
+        // Built with the current generation, so an unchanged page compares equal to what is shown.
         let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
-        let packets = match &self.shown {
-            Some(shown) if !full => {
-                let changed: BTreeMap<u8, ButtonEntry> = built
-                    .entries
-                    .iter()
-                    .filter(|(i, e)| shown.entries.get(i) != Some(e))
-                    .map(|(i, e)| (*i, e.clone()))
-                    .collect();
-                if changed.is_empty() {
-                    return;
-                }
-                let names: Vec<&str> = changed.values().filter_map(|e| e.icon.as_deref()).collect();
-                let images: Vec<ButtonImage> = built
-                    .images
-                    .iter()
-                    .filter(|img| names.iter().any(|n| n.ends_with(&img.name)))
-                    .cloned()
-                    .collect();
-                let keys: Vec<u8> = changed.keys().copied().collect();
-                tracing::info!("partial upload: keys {keys:?}");
-                file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
-            }
-            _ => {
-                tracing::info!(
-                    "full upload: page {}, {} images, generation {}",
-                    self.nav.page + 1,
-                    built.images.len(),
-                    self.cache.generation
-                );
-                file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images))
-            }
-        };
+        let unchanged = self
+            .shown
+            .as_ref()
+            .is_some_and(|s| s.at == here && s.entries == built.entries);
+        if !force && unchanged {
+            return;
+        }
+        // Always the whole page: partial updates (0x0d) crashed the deck after pages with photos.
+        // A fresh generation gives every image a name the deck has not cached.
+        self.cache.generation = self.cache.generation.wrapping_add(1);
+        let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
+        tracing::info!(
+            "upload: page {}, {} images, generation {}",
+            self.nav.page + 1,
+            built.images.len(),
+            self.cache.generation
+        );
+        let packets = file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images));
         let bytes = packets.len() * ulanzi_proto::PACKET_SIZE;
         if self.send(&packets).await {
             let done = Instant::now();

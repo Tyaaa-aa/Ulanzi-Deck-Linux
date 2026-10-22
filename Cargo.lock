@@ -2089,6 +2089,7 @@ dependencies = [
  "ulanzi-deckd",
  "ulanzi-proto",
  "zbus",
+ "zip",
 ]
 
 [[package]]

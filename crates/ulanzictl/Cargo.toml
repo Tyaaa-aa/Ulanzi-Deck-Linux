@@ -19,6 +19,7 @@ futures-util.workspace = true
 serde_json.workspace = true
 resvg.workspace = true
 image.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

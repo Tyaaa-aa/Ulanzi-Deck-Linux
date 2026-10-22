@@ -31,6 +31,8 @@ pub enum Probe {
     Omit,
     /// Try each wide-screen mode, re-sending the image after each one.
     Modes,
+    /// Upload realistic full pages 2 s apart and report if the deck reboots (USB disconnect); no user needed.
+    Crash,
 }
 
 pub async fn run(what: Probe) -> Result<(), String> {
@@ -42,6 +44,7 @@ pub async fn run(what: Probe) -> Result<(), String> {
         Probe::Info => info(&mut dev).await,
         Probe::Omit => omit(&mut dev).await,
         Probe::Modes => modes(&mut dev).await,
+        Probe::Crash => crash(&mut dev).await,
     }
 }
 
@@ -182,6 +185,31 @@ fn solid(rgb: [u8; 3]) -> Vec<u8> {
     out
 }
 
+/// Same content as `button_zip`, but `manifest.json` first and fast compression (homedeck's layout).
+fn manifest_first_zip(entries: &BTreeMap<u8, ButtonEntry>, images: &[ButtonImage]) -> Vec<u8> {
+    use std::io::Write;
+    let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .compression_level(Some(1));
+    zw.start_file("manifest.json", opts).expect("zip");
+    zw.write_all(ulanzi_proto::manifest_json(entries).as_bytes())
+        .expect("zip");
+    for img in images {
+        zw.start_file(format!("icons/{}", img.name), opts).expect("zip");
+        zw.write_all(&img.png).expect("zip");
+    }
+    zw.finish().expect("zip").into_inner()
+}
+
+fn zip_for(entries: &BTreeMap<u8, ButtonEntry>, images: &[ButtonImage]) -> Vec<u8> {
+    if std::env::var("ULANZI_ZIP").as_deref() == Ok("manifest-first") {
+        manifest_first_zip(entries, images)
+    } else {
+        button_zip(entries, images)
+    }
+}
+
 fn unique() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -208,7 +236,7 @@ fn page(keys: &[(u8, Vec<u8>)]) -> Vec<ulanzi_proto::Packet> {
             png: data.clone(),
         });
     }
-    file_packets(Command::SetButtons, &button_zip(&entries, &images))
+    file_packets(Command::SetButtons, &zip_for(&entries, &images))
 }
 
 async fn screen(dev: &mut Hidraw) -> Result<(), String> {
@@ -343,5 +371,96 @@ async fn modes(dev: &mut Hidraw) -> Result<(), String> {
         ));
     }
     println!("\nDone. All mode tests finished.");
+    Ok(())
+}
+
+/// Send, then watch the deck for `secs`: Err if it dropped off USB (read/write error).
+async fn survives(dev: &mut Hidraw, packets: &[ulanzi_proto::Packet], secs: u64) -> bool {
+    if dev.send(packets).await.is_err() {
+        return false;
+    }
+    let end = Instant::now() + Duration::from_secs(secs);
+    loop {
+        let keepalive = SmallWindow {
+            mode: ScreenMode::Image,
+            cpu: 0,
+            mem: 0,
+            time: "00:00:00".into(),
+            gpu: 0,
+            clock_24h: true,
+            date: String::new(),
+        };
+        if dev.send(&[small_window(&keepalive)]).await.is_err() {
+            return false;
+        }
+        if let Ok(Err(_)) = tokio::time::timeout(Duration::from_millis(500), dev.recv()).await {
+            return false;
+        }
+        if Instant::now() >= end {
+            return true;
+        }
+    }
+}
+
+/// A PNG of random noise: about as large as a photo key image.
+fn noise(w: u32, h: u32, seed: u32) -> Vec<u8> {
+    let mut x = seed.wrapping_mul(2_654_435_761).max(1);
+    let img = image::RgbaImage::from_fn(w, h, |_, _| {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        image::Rgba([x as u8, (x >> 8) as u8, (x >> 16) as u8, 255])
+    });
+    let mut out = Vec::new();
+    let _ =
+        image::DynamicImage::ImageRgba8(img).write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png);
+    out
+}
+
+async fn crash(dev: &mut Hidraw) -> Result<(), String> {
+    send(dev, &[ulanzi_proto::unlock(), brightness(60)]).await?;
+    // Sizes like the real page: three ~60 KB photos, the rest small, plus a ~60 KB wide screen.
+    let photo = |i: u8| noise(110, 110, i as u32 + 1);
+    let page_keys = |seed: u8| -> Vec<(u8, Vec<u8>)> {
+        let mut k: Vec<(u8, Vec<u8>)> = (0..13)
+            .map(|i| {
+                (
+                    i,
+                    if [4u8, 9, 12].contains(&i) {
+                        photo(i + seed)
+                    } else {
+                        solid([30, 60 + i * 10, 120])
+                    },
+                )
+            })
+            .collect();
+        k.push((13, noise(150, 100, seed as u32 + 99)));
+        k
+    };
+    let mut steps: Vec<(String, Vec<ulanzi_proto::Packet>, u64)> =
+        vec![("realistic full page".into(), page(&page_keys(0)), 2)];
+    for n in 1..=5u8 {
+        steps.push((
+            format!("realistic full page #{n}, 2 s later"),
+            page(&page_keys(n * 7)),
+            2,
+        ));
+    }
+    steps.push(("last page, watched for 8 s".into(), page(&page_keys(90)), 8));
+    for (name, packets, wait_after) in steps {
+        let kb = packets.len();
+        let ok = survives(dev, &packets, wait_after).await;
+        println!(
+            "{name:<40} {kb:>4} KB  {}",
+            if ok {
+                "survived"
+            } else {
+                "DECK REBOOTED (the previous wait was too short)"
+            }
+        );
+        if !ok {
+            return Ok(());
+        }
+    }
     Ok(())
 }

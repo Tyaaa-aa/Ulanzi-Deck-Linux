@@ -145,8 +145,8 @@ async fn apply_profile_bumps_revision_and_pushes() {
         .await
         .expect("apply");
     assert_eq!(rev, 2);
-    // Uploads are spaced at least a second apart, and a change on the same page is a partial update.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Uploads are spaced at least 2 s apart.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     let cmds = r.mock.commands();
     assert!(cmds.contains(&0x0001) || cmds.contains(&0x000d), "{cmds:?}");
     let saved: String = p.call("GetProfile", &(prof.id.to_string(),)).await.expect("get");
