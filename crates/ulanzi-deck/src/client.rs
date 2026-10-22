@@ -12,6 +12,37 @@ use ulanzi_core::store::parse_profile;
 use uuid::Uuid;
 use zbus::Connection;
 
+/// What to do with profiles that already exist when importing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportChoice {
+    KeepBoth,
+    Replace,
+    Skip,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundlePreview {
+    pub manifest: ulanzi_core::bundle::Manifest,
+    /// Names of profiles that already exist.
+    pub conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportDone {
+    pub imported: Vec<Uuid>,
+    pub warnings: Vec<String>,
+    /// Restore this snapshot to undo the import.
+    pub undo: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub name: String,
+    pub created: String,
+    pub reason: String,
+    pub profiles: Vec<String>,
+}
+
 pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck.Service";
 pub const OBJECT_PATH: &str = "/io/github/tyaaa_aa/UlanziDeck";
 pub const INTERFACE: &str = "io.github.tyaaa_aa.UlanziDeck1";
@@ -243,6 +274,91 @@ impl Client {
             .proxy
             .call::<_, _, ()>("ApplySettings", &(text,))
             .await?)
+    }
+
+    /// What a `.ulanzideck` file holds, and which of its profiles already exist here.
+    pub async fn preview_bundle(&self, path: &std::path::Path) -> Result<BundlePreview> {
+        let (manifest, conflicts): (String, Vec<String>) = self
+            .inner
+            .proxy
+            .call("PreviewBundle", &(path.to_string_lossy().as_ref(),))
+            .await?;
+        let manifest = toml::from_str(&manifest).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        Ok(BundlePreview { manifest, conflicts })
+    }
+
+    pub async fn import_bundle(
+        &self,
+        path: &std::path::Path,
+        conflict: ImportChoice,
+        keep_rules: bool,
+        settings: bool,
+        switch_to: bool,
+    ) -> Result<ImportDone> {
+        let conflict = match conflict {
+            ImportChoice::KeepBoth => "keep_both",
+            ImportChoice::Replace => "replace",
+            ImportChoice::Skip => "skip",
+        };
+        let (ids, warnings, undo): (Vec<String>, Vec<String>, String) = self
+            .inner
+            .proxy
+            .call(
+                "ImportBundle",
+                &(
+                    path.to_string_lossy().as_ref(),
+                    conflict,
+                    keep_rules,
+                    settings,
+                    switch_to,
+                ),
+            )
+            .await?;
+        Ok(ImportDone {
+            imported: ids.iter().filter_map(|i| Uuid::parse_str(i).ok()).collect(),
+            warnings,
+            undo,
+        })
+    }
+
+    pub async fn export_bundle(
+        &self,
+        path: &std::path::Path,
+        ids: &[Uuid],
+        include_settings: bool,
+    ) -> Result<()> {
+        let ids: Vec<String> = ids.iter().map(Uuid::to_string).collect();
+        Ok(self
+            .inner
+            .proxy
+            .call(
+                "ExportBundle",
+                &(path.to_string_lossy().as_ref(), ids, include_settings),
+            )
+            .await?)
+    }
+
+    pub async fn list_snapshots(&self) -> Result<Vec<Snapshot>> {
+        let list: Vec<(String, String, String, Vec<String>)> =
+            self.inner.proxy.call("ListSnapshots", &()).await?;
+        Ok(list
+            .into_iter()
+            .map(|(name, created, reason, profiles)| Snapshot {
+                name,
+                created,
+                reason,
+                profiles,
+            })
+            .collect())
+    }
+
+    pub async fn take_snapshot(&self, reason: &str) -> Result<String> {
+        Ok(self.inner.proxy.call("TakeSnapshot", &(reason,)).await?)
+    }
+
+    /// Returns the snapshot taken just before (restore it to undo).
+    pub async fn restore_snapshot(&self, name: &str) -> Result<String> {
+        Ok(self.inner.proxy.call("RestoreSnapshot", &(name,)).await?)
     }
 
     pub async fn create_profile(&self, name: &str) -> Result<Uuid> {

@@ -592,6 +592,11 @@ pub fn build(state: &State) -> Canvas {
                 state.edit(|e| e.drop_action(Slot::Key(n), a));
                 state.select(|s| s.click(Slot::Key(n)));
             }
+            Payload::File(path) if path.extension().is_some_and(|e| e == "ulanzideck") => {
+                if let Some(root) = state.toast_root() {
+                    crate::ui::bundle_dialogs::open_import(&state, &root, &path);
+                }
+            }
             Payload::File(path) => {
                 // Dropping on a selected key sets the image on the whole selection.
                 let sel = state.selection.borrow().keys();

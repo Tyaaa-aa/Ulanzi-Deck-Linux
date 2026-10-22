@@ -16,6 +16,9 @@ install -m 0755 target/release/ulanzi-deckd target/release/ulanzictl target/rele
 gui=crates/ulanzi-deck/data
 install -m 0644 "$gui/io.github.tyaaa_aa.UlanziDeck.desktop" "$data/applications/"
 install -m 0644 "$gui/io.github.tyaaa_aa.UlanziDeck.metainfo.xml" "$data/metainfo/"
+mkdir -p "$data/mime/packages"
+install -m 0644 "$gui/io.github.tyaaa_aa.UlanziDeck.mime.xml" "$data/mime/packages/"
+update-mime-database "$data/mime" 2>/dev/null || true
 install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck.svg" "$icons/scalable/apps/"
 install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck-symbolic.svg" "$icons/symbolic/apps/"
 update-desktop-database -q "$data/applications" 2>/dev/null || true

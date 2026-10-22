@@ -318,6 +318,23 @@ fn attach_profile_menu(
             crate::ui::autoswitch::open(&state, b, id, &name);
         });
     }
+    let export = gtk::Button::builder()
+        .label("Export…")
+        .css_classes(["flat"])
+        .build();
+    menu.append(&export);
+    {
+        let state = state.clone();
+        export.connect_clicked(move |b| {
+            if let Some(pop) = b
+                .ancestor(gtk::Popover::static_type())
+                .and_downcast::<gtk::Popover>()
+            {
+                pop.popdown();
+            }
+            crate::ui::bundle_dialogs::open_export(&state, b, Some(id));
+        });
+    }
     let rename = gtk::Button::builder()
         .label("Rename…")
         .css_classes(["flat"])

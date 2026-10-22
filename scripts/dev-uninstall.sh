@@ -8,6 +8,7 @@ for f in "$HOME/.local/bin/ulanzi-deckd" "$HOME/.local/bin/ulanzictl" "$HOME/.lo
          "$data/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.Service.service" \
          "$data/applications/io.github.tyaaa_aa.UlanziDeck.desktop" \
          "$data/metainfo/io.github.tyaaa_aa.UlanziDeck.metainfo.xml" \
+         "$data/mime/packages/io.github.tyaaa_aa.UlanziDeck.mime.xml" \
          "$data/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg" \
          "$data/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-symbolic.svg"; do
     [ -e "$f" ] && rm -f -- "$f"

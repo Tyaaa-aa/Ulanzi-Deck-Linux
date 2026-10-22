@@ -104,6 +104,15 @@ impl AppState {
         })
     }
 
+    /// The main window, for dialogs opened from places without a widget at hand.
+    pub fn toast_root(&self) -> Option<gtk::Widget> {
+        use adw::prelude::*;
+        gtk::Window::list_toplevels()
+            .into_iter()
+            .find_map(|w| w.downcast::<adw::ApplicationWindow>().ok())
+            .map(|w| w.upcast())
+    }
+
     pub fn on(&self, f: impl Fn(Change) + 'static) {
         self.listeners.borrow_mut().push(Box::new(f));
     }

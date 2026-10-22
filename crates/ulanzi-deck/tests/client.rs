@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ulanzi_core::model::{Model, Profile, Settings};
 use ulanzi_core::store::Store;
-use ulanzi_deck::client::{Client, ClientEvent};
+use ulanzi_deck::client::{Client, ClientEvent, ImportChoice};
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals};
 use ulanzi_deckd::deck::spawn_deck;
@@ -200,4 +200,34 @@ async fn settings_through_the_client() {
 fn app_id_differs_from_service_bus_name() {
     assert_ne!(ulanzi_deck::APP_ID, ulanzi_deck::client::BUS_NAME);
     assert_eq!(ulanzi_deckd::dbus::BUS_NAME, ulanzi_deck::client::BUS_NAME);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bundle_round_trip_over_dbus() {
+    let Some(r) = rig().await else { return };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    let file = r._dir.path().join("x.ulanzideck");
+    c.export_bundle(&file, &[r.profile.id], false)
+        .await
+        .expect("export");
+    let preview = c.preview_bundle(&file).await.expect("preview");
+    assert_eq!(preview.manifest.profiles.len(), 1);
+    assert_eq!(preview.conflicts, vec!["Default".to_string()]);
+    let done = c
+        .import_bundle(&file, ImportChoice::KeepBoth, true, false, false)
+        .await
+        .expect("import");
+    assert_eq!(done.imported.len(), 1);
+    let snaps = c.list_snapshots().await.expect("snapshots");
+    assert!(snaps.iter().any(|s| s.name == done.undo));
+    let undone = c.restore_snapshot(&done.undo).await.expect("restore");
+    assert!(!undone.is_empty());
+    let names: Vec<String> = c
+        .profiles()
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect();
+    assert_eq!(names, vec!["Default".to_string()]);
 }

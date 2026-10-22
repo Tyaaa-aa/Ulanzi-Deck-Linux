@@ -11,6 +11,11 @@ use ulanzi_deck::ui;
 
 use ulanzi_deck::APP_ID;
 
+thread_local! {
+    /// The window's state, for files opened while the app runs.
+    static APP: std::cell::RefCell<Option<ulanzi_deck::state::State>> = const { std::cell::RefCell::new(None) };
+}
+
 /// `--screenshot` options: render the window to a PNG and exit (used to check the UI without a person
 /// at the screen).
 #[derive(Debug, Clone, Default)]
@@ -107,7 +112,8 @@ fn main() -> glib::ExitCode {
     let flags = if shot.is_some() {
         gio::ApplicationFlags::NON_UNIQUE
     } else {
-        gio::ApplicationFlags::empty()
+        // Opening a .ulanzideck file (from a file manager) starts an import.
+        gio::ApplicationFlags::HANDLES_OPEN
     };
     let app = adw::Application::builder()
         .application_id(APP_ID)
@@ -117,13 +123,50 @@ fn main() -> glib::ExitCode {
         gtk::Window::set_default_icon_name(APP_ID);
         load_css();
     });
+    app.connect_open(|app, files, _| {
+        app.activate();
+        let paths: Vec<PathBuf> = files.iter().filter_map(|f| f.path()).collect();
+        // Wait until the window has reached the service, then show the import.
+        let tries = std::rc::Rc::new(std::cell::Cell::new(0));
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            tries.set(tries.get() + 1);
+            let ready = APP
+                .with(|a| a.borrow().clone())
+                .filter(|s| s.client.borrow().is_some());
+            match ready {
+                Some(state) => {
+                    if let Some(root) = state.toast_root() {
+                        for p in &paths {
+                            ui::bundle_dialogs::open_import(&state, &root, p);
+                        }
+                    }
+                    glib::ControlFlow::Break
+                }
+                None if tries.get() > 40 => glib::ControlFlow::Break,
+                None => glib::ControlFlow::Continue,
+            }
+        });
+    });
     app.connect_activate(move |app| {
         if let Some(w) = app.active_window() {
             w.present();
             return;
         }
         let state = AppState::new(Profile::new_default("Default", Model::D200X));
+        APP.with(|a| *a.borrow_mut() = Some(state.clone()));
         let win = ui::window::build(app, &state);
+        {
+            let import = gio::SimpleAction::new("import", None);
+            let (st, window) = (state.clone(), win.window.clone());
+            import.connect_activate(move |_, _| ui::bundle_dialogs::choose_and_import(&st, &window));
+            app.add_action(&import);
+            let export = gio::SimpleAction::new("export", None);
+            let (st, window) = (state.clone(), win.window.clone());
+            export.connect_activate(move |_, _| ui::bundle_dialogs::open_export(&st, &window, None));
+            app.add_action(&export);
+            app.set_accels_for_action("app.import", &["<Ctrl>o"]);
+            app.set_accels_for_action("app.export", &["<Ctrl>e"]);
+        }
         if let Some(shot) = shot.clone() {
             if let Some(dark) = shot.dark {
                 adw::StyleManager::default().set_color_scheme(if dark {
@@ -224,6 +267,11 @@ fn main() -> glib::ExitCode {
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
                 Some("apps") => ui::app_picker::preview_dialog(&window),
+                Some("export") => ui::bundle_dialogs::open_export(&state2, &window, None),
+                Some(o) if o.starts_with("import:") => {
+                    let path = PathBuf::from(&o["import:".len()..]);
+                    ui::bundle_dialogs::open_import(&state2, &window, &path)
+                }
                 Some("autoswitch") => {
                     let name = state2.editor.borrow().profile().name.clone();
                     ui::autoswitch::open(&state2, &window, state2.profile_id(), &name)

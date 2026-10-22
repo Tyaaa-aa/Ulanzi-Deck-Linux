@@ -3,6 +3,7 @@
 pub mod action_editor;
 pub mod app_picker;
 pub mod autoswitch;
+pub mod bundle_dialogs;
 pub mod canvas;
 pub mod color_popover;
 pub mod how_it_works;
@@ -26,6 +27,15 @@ thread_local! {
 /// Where toasts appear (set once by the window).
 pub fn set_toast_overlay(o: &adw::ToastOverlay) {
     TOASTS.with(|t| *t.borrow_mut() = Some(o.clone()));
+}
+
+/// Show a ready-made toast (e.g. one with an Undo button).
+pub fn add_toast(t: adw::Toast) {
+    TOASTS.with(|o| {
+        if let Some(o) = o.borrow().as_ref() {
+            o.add_toast(t);
+        }
+    });
 }
 
 /// Show a short message at the bottom of the window.

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-ulanzideck">
+    <comment>Ulanzi Deck profiles</comment>
+    <sub-class-of type="application/zip"/>
+    <generic-icon name="io.github.tyaaa_aa.UlanziDeck"/>
+    <glob pattern="*.ulanzideck"/>
+  </mime-type>
+</mime-info>
