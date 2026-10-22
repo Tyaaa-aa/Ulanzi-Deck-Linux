@@ -175,6 +175,28 @@ fn migrates_fixture() {
 }
 
 #[test]
+fn generated_icon_files_become_icons() {
+    let e = env();
+    let r = migrate_legacy(&e.yaml, &e.store, false).expect("migrate");
+    let p = e.store.load_profile(r.profile_id).expect("profile");
+    let k = key(&p, 6);
+    assert_eq!(
+        k.look.source,
+        ImageSource::Icon {
+            set: IconSet::Lucide,
+            name: "play".into()
+        }
+    );
+    assert_eq!(k.look.background, "#000000".parse::<Color>().expect("c"));
+    assert_eq!(k.look.foreground, "#3498db".parse::<Color>().expect("c"));
+    assert!(
+        !r.warnings.iter().any(|w| w.contains("key 6")),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
 fn copies_custom_images() {
     let e = env();
     let r = migrate_legacy(&e.yaml, &e.store, false).expect("migrate");

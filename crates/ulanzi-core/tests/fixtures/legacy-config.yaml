@@ -56,6 +56,7 @@ buttons:
     control: previous
     player: ''
 - action: media
+  image: /home/someone/.local/share/ulanzi/icons/play_bg_000000_fg_3498db.png
   params:
     control: play_pause
     player: ''

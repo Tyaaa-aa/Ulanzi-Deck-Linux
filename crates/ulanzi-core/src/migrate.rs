@@ -153,6 +153,18 @@ fn non_empty(s: Option<&str>) -> Option<String> {
     s.filter(|s| !s.is_empty()).map(str::to_string)
 }
 
+/// The old icon picker saved Lucide icons as `<name>_bg_<rrggbb>_fg_<rrggbb>.png`; turn those back into
+/// icons (sharper, and play/pause can swap live).
+fn generated_icon(path: &str) -> Option<(String, Color, Color)> {
+    let stem = Path::new(path).file_stem()?.to_str()?;
+    let (rest, fg) = stem.rsplit_once("_fg_")?;
+    let (name, bg) = rest.rsplit_once("_bg_")?;
+    let bg: Color = format!("#{bg}").parse().ok()?;
+    let fg: Color = format!("#{fg}").parse().ok()?;
+    crate::render::IconLibrary::bundled().svg(IconSet::Lucide, name)?;
+    Some((name.to_string(), bg, fg))
+}
+
 /// `pw-play '/path'` and friends, as written by the old Soundboard picker.
 fn sound_path(cmd: &str) -> Option<String> {
     let cmd = cmd.trim();
@@ -179,7 +191,17 @@ impl Migrator {
         if let Some(spec) = b.get("icon_spec").filter(|s| s.is_mapping()) {
             self.icon_spec(&ctx, spec, &mut look);
         } else if let Some(img) = non_empty(str_of(b, "image")) {
-            look.source = self.copy_image(&ctx, &img, base, icons_dir);
+            match generated_icon(&img) {
+                Some((name, bg, fg)) => {
+                    look.source = ImageSource::Icon {
+                        set: IconSet::Lucide,
+                        name,
+                    };
+                    look.background = bg;
+                    look.foreground = fg;
+                }
+                None => look.source = self.copy_image(&ctx, &img, base, icons_dir),
+            }
         }
         Key {
             look,
