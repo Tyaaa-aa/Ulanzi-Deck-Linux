@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 use ulanzi_core::edit::Slot;
 use ulanzi_core::model::{KeyLook, ScreenConfig, Widget};
 use ulanzi_core::render::{
@@ -164,7 +164,119 @@ fn label_valign(align: &str) -> gtk::Align {
     }
 }
 
-const HINT: &str = "The ‹ › buttons flip pages on the deck. Drop an image on a key to use it.";
+/// The icons drawn on a dial.
+struct DialFace {
+    overlay: gtk::Overlay,
+    press: gtk::Image,
+    left: (gtk::Box, gtk::Image),
+    right: (gtk::Box, gtk::Image),
+}
+
+fn dial_face(zones: &gtk::DrawingArea) -> DialFace {
+    let overlay = gtk::Overlay::builder().child(zones).build();
+    let press = gtk::Image::builder()
+        .pixel_size(22)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .can_target(false)
+        .build();
+    overlay.add_overlay(&press);
+    let badge = |h: gtk::Align| {
+        let img = gtk::Image::builder().pixel_size(12).build();
+        let b = gtk::Box::builder()
+            .css_classes(["dial-badge"])
+            .halign(h)
+            .valign(gtk::Align::End)
+            .can_target(false)
+            .build();
+        b.append(&img);
+        overlay.add_overlay(&b);
+        (b, img)
+    };
+    let left = badge(gtk::Align::Start);
+    let right = badge(gtk::Align::End);
+    DialFace {
+        overlay,
+        press,
+        left,
+        right,
+    }
+}
+
+impl DialFace {
+    fn show(&self, d: &ulanzi_core::model::Dial) {
+        let set = |img: &gtk::Image, a: &Option<ulanzi_core::model::Action>, px: i32| match a
+            .as_ref()
+            .and_then(|a| action_icon(a, px))
+        {
+            Some(t) => {
+                img.set_paintable(Some(&t));
+                true
+            }
+            None => {
+                img.set_paintable(None::<&gdk::Paintable>);
+                false
+            }
+        };
+        set(&self.press, &d.press, 22);
+        self.left.0.set_visible(set(&self.left.1, &d.left, 12));
+        self.right.0.set_visible(set(&self.right.1, &d.right, 12));
+    }
+
+    fn set_icons_visible(&self, v: bool) {
+        let o = if v { 1.0 } else { 0.0 };
+        self.press.set_opacity(o);
+        self.left.0.set_opacity(o);
+        self.right.0.set_opacity(o);
+    }
+}
+
+type IconKey = (String, i32);
+
+thread_local! {
+    static ACTION_ICONS: RefCell<HashMap<IconKey, Option<gdk::Texture>>> = RefCell::new(HashMap::new());
+}
+
+/// An action's icon in its category colour, for small places like the dials.
+pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Texture> {
+    let spec = ulanzi_core::catalog::spec_for(a)?;
+    ACTION_ICONS.with(|m| {
+        m.borrow_mut()
+            .entry((spec.icon.to_string(), px))
+            .or_insert_with(|| {
+                ulanzi_core::render::IconLibrary::bundled()
+                    .icon_png(
+                        ulanzi_core::model::IconSet::Lucide,
+                        spec.icon,
+                        (px * 2) as u32,
+                        spec.category.color(),
+                    )
+                    .and_then(|png| texture(&png))
+            })
+            .clone()
+    })
+}
+
+/// "Turn left: …" lines for a dial's tooltip.
+fn dial_tooltip(n: usize, d: &ulanzi_core::model::Dial) -> String {
+    let line = |what: &str, a: &Option<ulanzi_core::model::Action>| {
+        let text = a
+            .as_ref()
+            .map(ulanzi_core::catalog::describe)
+            .unwrap_or_else(|| "Nothing".into());
+        format!("{what}: {}", glib::markup_escape_text(&text))
+    };
+    format!(
+        "<b>Dial {}</b>\n{}\n{}\n{}\n{}",
+        n + 1,
+        line("Turn left", &d.left),
+        line("Press", &d.press),
+        line("Turn right", &d.right),
+        line("Hold", &d.hold),
+    )
+}
+
+const HINT: &str = "Right-click a key to copy or paste it. The ‹ › buttons flip pages on the deck.";
 
 /// The three drop zones of a dial: left third, middle, right third (as [`hit_zone`]).
 fn draw_dial_zones(cr: &gtk::cairo::Context, w: f64, h: f64, hover: Option<DialZone>) {
@@ -366,6 +478,8 @@ pub fn build(state: &State) -> Canvas {
             })
             .collect(),
     );
+    // At a glance: the press action in the middle, turn left / right as badges on the rim.
+    let faces: Rc<Vec<DialFace>> = Rc::new((0..3).map(|n| dial_face(&zone_areas[n])).collect());
     let dials: Rc<Vec<gtk::Button>> = Rc::new(
         (0..3)
             .map(|n| {
@@ -373,7 +487,7 @@ pub fn build(state: &State) -> Canvas {
                     .css_classes(["deck-dial"])
                     .tooltip_text(format!("Dial {}", n + 1))
                     .valign(gtk::Align::Center)
-                    .child(&zone_areas[n])
+                    .child(&faces[n].overlay)
                     .build()
             })
             .collect(),
@@ -547,6 +661,41 @@ pub fn build(state: &State) -> Canvas {
         });
     }
 
+    // Right-click a key: copy, paste and clear, with their shortcuts shown.
+    let key_menu = {
+        let m = gio::Menu::new();
+        let keys_section = gio::Menu::new();
+        keys_section.append(Some("Copy Key"), Some("win.copy"));
+        keys_section.append(Some("Paste Key"), Some("win.paste"));
+        m.append_section(None, &keys_section);
+        let style = gio::Menu::new();
+        style.append(Some("Copy Style"), Some("win.copy-style"));
+        style.append(Some("Paste Style"), Some("win.paste-style"));
+        m.append_section(Some("Colours, image and label only"), &style);
+        let clear = gio::Menu::new();
+        clear.append(Some("Clear Key"), Some("win.clear"));
+        m.append_section(None, &clear);
+        m
+    };
+    for (n, k) in keys.iter().enumerate() {
+        let pop = gtk::PopoverMenu::from_model(Some(&key_menu));
+        pop.set_has_arrow(true);
+        pop.set_parent(&k.button);
+        let right = gtk::GestureClick::builder().button(3).build();
+        let state = state.clone();
+        right.connect_pressed(move |g, _, x, y| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            // Act on the key under the pointer (keep a multi-selection that includes it).
+            let slot = Slot::Key(n as u8);
+            if !state.selection.borrow().contains(slot) {
+                state.select(|s| s.click(slot));
+            }
+            pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            pop.popup();
+        });
+        k.button.add_controller(right);
+    }
+
     // Clicking the background clears the selection.
     {
         let state = state.clone();
@@ -562,13 +711,14 @@ pub fn build(state: &State) -> Canvas {
 
     // Redraw.
     let redraw = {
-        let (state, keys, screen, small, dials, dots) = (
+        let (state, keys, screen, small, dials, dots, faces) = (
             state.clone(),
             keys.clone(),
             screen.clone(),
             small.clone(),
             dials.clone(),
             dots.clone(),
+            faces.clone(),
         );
         move |c: Change| match c {
             Change::Profile | Change::Page | Change::Settings | Change::Preview => {
@@ -626,6 +776,12 @@ pub fn build(state: &State) -> Canvas {
                         }
                     }
                 }
+                // Dials of this page.
+                for (n, (face, button)) in faces.iter().zip(dials.iter()).enumerate() {
+                    let d = &e.dials()[n];
+                    face.show(d);
+                    button.set_tooltip_markup(Some(&dial_tooltip(n, d)));
+                }
                 drop(e);
                 screen
                     .0
@@ -654,6 +810,10 @@ pub fn build(state: &State) -> Canvas {
             Change::Drag => {
                 for a in zone_areas.iter() {
                     a.queue_draw();
+                }
+                // The zones replace the icons while dragging.
+                for f in faces.iter() {
+                    f.set_icons_visible(!state.dragging_action.get());
                 }
                 hint.set_label(if state.dragging_action.get() {
                     "Drop on a key, or on a dial: left side = turn left, middle = press, right side = turn right"

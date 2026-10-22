@@ -146,7 +146,7 @@ fn main_menu() -> gio::Menu {
     let app = gio::Menu::new();
     app.append(Some("Preferences"), Some("app.preferences"));
     app.append(Some("Set Up Deck…"), Some("app.onboarding"));
-    app.append(Some("Keyboard Shortcuts"), Some("win.show-help-overlay"));
+    app.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
     app.append(Some("About Ulanzi Deck"), Some("app.about"));
     menu.append_section(None, &app);
     menu
@@ -200,6 +200,13 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .tooltip_text("Actions (Ctrl+L)")
         .build();
     header.pack_end(&library_toggle);
+    {
+        let a = gio::SimpleAction::new("library", None);
+        let t = library_toggle.clone();
+        a.connect_activate(move |_, _| t.set_active(!t.is_active()));
+        window.add_action(&a);
+        app.set_accels_for_action("win.library", &["<Ctrl>l"]);
+    }
     let redo = gtk::Button::builder()
         .icon_name("edit-redo-symbolic")
         .tooltip_text("Redo (Ctrl+Shift+Z)")
@@ -393,6 +400,10 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
         });
         window.add_action(&pick);
     }
+    {
+        let w = window.clone();
+        action("shortcuts", Box::new(move || crate::ui::shortcuts::open(&w)));
+    }
     let s = state.clone();
     action(
         "deselect",
@@ -402,6 +413,7 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
     );
     if let Some(app) = window.application() {
         app.set_accels_for_action("win.undo", &["<Ctrl>z"]);
+        app.set_accels_for_action("win.shortcuts", &["<Ctrl>question"]);
         app.set_accels_for_action("win.redo", &["<Ctrl><Shift>z", "<Ctrl>y"]);
         app.set_accels_for_action("win.select-all", &["<Ctrl>a"]);
         app.set_accels_for_action("win.copy", &["<Ctrl>c"]);

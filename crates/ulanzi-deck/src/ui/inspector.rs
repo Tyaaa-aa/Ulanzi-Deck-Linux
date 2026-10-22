@@ -570,9 +570,23 @@ fn appearance_group(ctx: &C, keys: Vec<u8>) -> adw::PreferencesGroup {
     }
     group.add(&show);
 
+    // Say what "Default" means right now (the position set in Preferences).
+    let default_position = format!(
+        "Default ({})",
+        match state.settings.borrow().label_style.align.as_str() {
+            "top" => "Top",
+            "center" => "Middle",
+            _ => "Bottom",
+        }
+    );
     let position = adw::ComboRow::builder()
         .title("Label Position")
-        .model(&gtk::StringList::new(&["Default", "Top", "Middle", "Bottom"]))
+        .model(&gtk::StringList::new(&[
+            default_position.as_str(),
+            "Top",
+            "Middle",
+            "Bottom",
+        ]))
         .selected(match pos {
             Mixed::One(Some(p)) => 1 + LabelPosition::ALL.iter().position(|x| *x == p).unwrap_or(0) as u32,
             _ => 0,
@@ -580,12 +594,12 @@ fn appearance_group(ctx: &C, keys: Vec<u8>) -> adw::PreferencesGroup {
         .build();
     position.set_subtitle(match pos {
         Mixed::Mixed => "Mixed",
-        _ => "Default follows Preferences",
+        _ => "Default is set in Preferences",
     });
     {
         let set = set.clone();
         position.connect_selected_notify(move |r| {
-            r.set_subtitle("Default follows Preferences");
+            r.set_subtitle("Default is set in Preferences");
             let p = match r.selected() {
                 0 => None,
                 i => LabelPosition::ALL.get(i as usize - 1).copied(),

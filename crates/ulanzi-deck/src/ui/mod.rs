@@ -9,6 +9,7 @@ pub mod inspector;
 pub mod library;
 pub mod onboarding;
 pub mod preferences;
+pub mod shortcuts;
 pub mod sidebar;
 pub mod window;
 

@@ -13,6 +13,8 @@ use uuid::Uuid;
 use crate::deck::{DeckEvent, DeckMsg};
 
 const APP_ICON: &str = "io.github.tyaaa_aa.UlanziDeck";
+/// One colour, so the panel can tint it to match (KDE and GNOME both recolour it).
+const TRAY_ICON: &str = "io.github.tyaaa_aa.UlanziDeck-symbolic";
 const LEVELS: [u8; 4] = [25, 50, 75, 100];
 
 /// The tray menu, independent of the toolkit.
@@ -87,7 +89,7 @@ impl ksni::Tray for DeckTray {
         "Ulanzi Deck".into()
     }
     fn icon_name(&self) -> String {
-        APP_ICON.into()
+        TRAY_ICON.into()
     }
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
