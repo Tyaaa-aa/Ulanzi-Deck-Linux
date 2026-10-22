@@ -152,6 +152,39 @@ pub fn build_page(
     }
 }
 
+/// The keys of a partial update with their images under new names (suffix `_u{seq}`), and only
+/// those images. The deck removes a key's previous image after unpacking a partial update, so
+/// re-sending an image under its old name (when only the label changed) left the key black.
+pub fn with_fresh_names(
+    changed: &BTreeMap<u8, ButtonEntry>,
+    images: &[ButtonImage],
+    seq: u32,
+) -> (BTreeMap<u8, ButtonEntry>, Vec<ButtonImage>) {
+    let mut out_images = Vec::new();
+    let entries = changed
+        .iter()
+        .map(|(i, e)| {
+            let mut e = e.clone();
+            if let Some(icon) = e.icon.take() {
+                let old = icon.strip_prefix("icons/").unwrap_or(&icon).to_string();
+                let new = match old.strip_suffix(".png") {
+                    Some(stem) => format!("{stem}_u{seq}.png"),
+                    None => format!("{old}_u{seq}"),
+                };
+                if let Some(img) = images.iter().find(|img| img.name == old) {
+                    out_images.push(ButtonImage {
+                        name: new.clone(),
+                        png: img.png.clone(),
+                    });
+                }
+                e.icon = Some(format!("icons/{new}"));
+            }
+            (*i, e)
+        })
+        .collect();
+    (entries, out_images)
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -251,5 +284,36 @@ mod tests {
         };
         let b = build_page(&p, 0, &ctx(), &d, &mut RenderCache::default());
         assert!(b.entries[&SCREEN_INDEX].icon.is_some());
+    }
+    #[test]
+    fn partial_updates_use_fresh_image_names() {
+        let mut changed = BTreeMap::new();
+        changed.insert(
+            6u8,
+            ButtonEntry {
+                state: 0,
+                text: Some("CPU 12%".into()),
+                icon: Some("icons/k6_abc_01.png".into()),
+            },
+        );
+        changed.insert(13u8, ButtonEntry::default());
+        let images = vec![
+            ButtonImage {
+                name: "k6_abc_01.png".into(),
+                png: vec![1, 2, 3],
+            },
+            ButtonImage {
+                name: "k7_def_01.png".into(),
+                png: vec![4],
+            },
+        ];
+        let (entries, imgs) = with_fresh_names(&changed, &images, 7);
+        assert_eq!(entries[&6].icon.as_deref(), Some("icons/k6_abc_01_u7.png"));
+        assert_eq!(entries[&6].text.as_deref(), Some("CPU 12%"));
+        assert_eq!(entries[&13].icon, None);
+        // Only the images the changed keys use, renamed to match.
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0].name, "k6_abc_01_u7.png");
+        assert_eq!(imgs[0].png, vec![1, 2, 3]);
     }
 }

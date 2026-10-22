@@ -16,9 +16,9 @@ use ulanzi_core::model::{Action, BrightnessOp, ClockStyle, Model, Profile, Scree
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_proto::{
-    ButtonEntry, ButtonImage, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow,
-    brightness, button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time,
-    small_window, unlock,
+    ButtonEntry, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow, brightness,
+    button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time, small_window,
+    unlock,
 };
 use uuid::Uuid;
 
@@ -149,6 +149,8 @@ struct Deck {
     pending_full: bool,
     last_unlock: Instant,
     firmware: Option<String>,
+    /// Counts partial uploads, for fresh image names.
+    upload_seq: u32,
 }
 
 impl Deck {
@@ -201,6 +203,7 @@ impl Deck {
             pending_full: false,
             last_unlock: now,
             firmware: None,
+            upload_seq: 0,
         }
     }
 
@@ -493,13 +496,8 @@ impl Deck {
                 if changed.is_empty() {
                     return;
                 }
-                let names: Vec<&str> = changed.values().filter_map(|e| e.icon.as_deref()).collect();
-                let images: Vec<ButtonImage> = built
-                    .images
-                    .iter()
-                    .filter(|img| names.iter().any(|n| n.ends_with(&img.name)))
-                    .cloned()
-                    .collect();
+                self.upload_seq = self.upload_seq.wrapping_add(1);
+                let (changed, images) = push::with_fresh_names(&changed, &built.images, self.upload_seq);
                 tracing::info!("partial upload: keys {:?}", changed.keys().collect::<Vec<_>>());
                 file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
             }
