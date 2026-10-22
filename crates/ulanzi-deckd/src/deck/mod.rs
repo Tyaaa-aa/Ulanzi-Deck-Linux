@@ -6,7 +6,7 @@ mod press;
 mod push;
 mod sleep;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,8 +16,9 @@ use ulanzi_core::model::{Action, BrightnessOp, Model, Profile, ScreenConfig, Set
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_proto::{
-    Command, Control, InputEvent, InputKind, ScreenMode, SmallWindow, brightness, button_zip, file_packets,
-    label_style, parse_input, small_window,
+    ButtonEntry, ButtonImage, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow,
+    brightness, button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time,
+    small_window, unlock,
 };
 use uuid::Uuid;
 
@@ -29,8 +30,19 @@ pub use sleep::SleepTimer;
 use crate::actions::ActionRunner;
 use crate::transport::{DeviceState, Transport};
 
-const TICK: Duration = Duration::from_secs(2);
-const KEEPALIVE: Duration = Duration::from_secs(60);
+/// The wide-screen update goes out this often; like Ulanzi Studio's, it also keeps the deck from
+/// locking itself (it locks after ~2 minutes without host traffic).
+const TICK: Duration = Duration::from_secs(1);
+/// Re-send unlock this often, in case the deck locked anyway.
+const UNLOCK_EVERY: Duration = Duration::from_secs(30);
+/// Minimum time between uploads: the deck shows garbage when uploads arrive back to back.
+const MIN_UPLOAD_GAP: Duration = Duration::from_secs(1);
+
+/// The page last uploaded: (profile, page index) and its manifest entries.
+struct Shown {
+    at: (Uuid, usize),
+    entries: BTreeMap<u8, ButtonEntry>,
+}
 
 /// Commands for the deck.
 pub enum DeckMsg {
@@ -71,6 +83,8 @@ pub struct DeckSnapshot {
     pub profile_name: String,
     pub page: usize,
     pub profiles: Vec<(Uuid, String)>,
+    /// Firmware version the deck reported, once it answered the info request.
+    pub firmware: Option<String>,
 }
 
 /// Start the deck. Profiles are read from `store`; if there are none a default one is created.
@@ -103,8 +117,12 @@ struct Deck {
     swallowed: Vec<Control>,
     dynamic: DynamicState,
     cache: RenderCache,
-    last_page_hash: Option<u64>,
-    last_keepalive: Instant,
+    /// What the deck shows now, for partial updates.
+    shown: Option<Shown>,
+    last_upload: Option<Instant>,
+    upload_pending: bool,
+    last_unlock: Instant,
+    firmware: Option<String>,
 }
 
 impl Deck {
@@ -150,8 +168,11 @@ impl Deck {
             swallowed: Vec::new(),
             dynamic: DynamicState::default(),
             cache: RenderCache::default(),
-            last_page_hash: None,
-            last_keepalive: now,
+            shown: None,
+            last_upload: None,
+            upload_pending: false,
+            last_unlock: now,
+            firmware: None,
         }
     }
 
@@ -168,6 +189,10 @@ impl Deck {
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let hold_deadline = self.press.next_deadline();
+            let upload_at = match (self.upload_pending, self.last_upload) {
+                (true, Some(t)) => Some(t + MIN_UPLOAD_GAP),
+                _ => None,
+            };
             let transport = self.transport.as_mut();
             tokio::select! {
                 msg = rx.recv() => match msg {
@@ -180,11 +205,7 @@ impl Deck {
                         None => std::future::pending().await,
                     }
                 } => match report {
-                    Ok(buf) => {
-                        if let Some(ev) = parse_input(&buf) {
-                            self.on_input(ev).await;
-                        }
-                    }
+                    Ok(buf) => self.on_report(parse_report(&buf)).await,
                     Err(e) => self.lost(&e).await,
                 },
                 _ = async {
@@ -197,6 +218,12 @@ impl Deck {
                         self.gesture(c, Gesture::Hold).await;
                     }
                 },
+                _ = async {
+                    match upload_at {
+                        Some(d) => tokio::time::sleep_until(d).await,
+                        None => std::future::pending().await,
+                    }
+                } => self.push_page(false).await,
                 _ = tick.tick() => self.on_tick().await,
             }
         }
@@ -265,6 +292,7 @@ impl Deck {
                     profile_name: p.name.clone(),
                     page: self.nav.page,
                     profiles: self.profiles.iter().map(|p| (p.id, p.name.clone())).collect(),
+                    firmware: self.firmware.clone(),
                 });
             }
             DeckMsg::Shutdown => {}
@@ -278,15 +306,43 @@ impl Deck {
         }
     }
 
-    /// Full setup after connecting: brightness, label style, wide screen, page.
+    /// Full setup after connecting, in Ulanzi Studio's order: unlock (a locked deck reports no keys),
+    /// label style, device info request, brightness, sleep time, page, wide screen.
     async fn configure(&mut self) {
-        self.last_page_hash = None;
-        if !self.send(&[brightness(self.settings.brightness)]).await {
+        self.shown = None;
+        self.last_unlock = Instant::now();
+        if !self.send(&[unlock()]).await {
             return;
         }
         self.send_label_style().await;
-        self.send_window().await;
+        // Dimming is done by our own sleep timer, so the deck's built-in sleep stays off.
+        self.send(&[
+            request_device_info(),
+            brightness(self.settings.brightness),
+            sleep_time(0),
+        ])
+        .await;
         self.push_page(true).await;
+        self.send_window().await;
+    }
+
+    async fn on_report(&mut self, r: DeviceReport) {
+        match r {
+            DeviceReport::Input(ev) => self.on_input(ev).await,
+            DeviceReport::LabelStyleRequest => self.send_label_style().await,
+            DeviceReport::DeviceInfo(json) => {
+                let v: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+                let fw = v.get("Dversion").and_then(|f| f.as_str()).map(str::to_string);
+                tracing::info!("deck info: {}", json.trim());
+                let restarted = self.firmware.is_some();
+                self.firmware = fw;
+                // An unasked info frame means the deck restarted: set it up again.
+                if restarted {
+                    self.configure().await;
+                }
+            }
+            DeviceReport::Other(code) => tracing::debug!("unhandled report {code:#06x}"),
+        }
     }
 
     async fn send_label_style(&mut self) {
@@ -298,7 +354,7 @@ impl Deck {
         let mode = match self.profile().screen {
             ScreenConfig::FirmwareClock => ScreenMode::Clock,
             ScreenConfig::FirmwareStats => ScreenMode::Stats,
-            ScreenConfig::Custom { .. } => ScreenMode::Background,
+            ScreenConfig::Custom { .. } => ScreenMode::Image,
         };
         let pct = |k: &str| {
             self.dynamic
@@ -313,15 +369,29 @@ impl Deck {
             mem: pct("ram"),
             time: chrono::Local::now().format("%H:%M:%S").to_string(),
             gpu: pct("gpu"),
+            clock_24h: true,
+            date: String::new(),
         };
         self.send(&[small_window(&w)]).await;
     }
 
-    /// Upload the current page if it changed (or always, with `force`).
+    /// Upload the current page if anything changed: the whole page when the page or profile changed
+    /// (or with `force`), otherwise only the changed keys. Uploads are spaced by [`MIN_UPLOAD_GAP`]:
+    /// a request inside the gap is remembered and sent, with the latest state, when it ends.
     async fn push_page(&mut self, force: bool) {
         if self.transport.is_none() {
             return;
         }
+        let now = Instant::now();
+        if !force
+            && self
+                .last_upload
+                .is_some_and(|t| now.duration_since(t) < MIN_UPLOAD_GAP)
+        {
+            self.upload_pending = true;
+            return;
+        }
+        self.upload_pending = false;
         let profile = &self.profiles[self.active];
         let dir = self.store.profile_dir(profile.id);
         let ctx = RenderCtx {
@@ -334,12 +404,35 @@ impl Deck {
             .insert("page".into(), (self.nav.page + 1).to_string());
         dynamic.vars.insert("profile".into(), profile.name.clone());
         let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
-        if !force && self.last_page_hash == Some(built.hash) {
-            return;
-        }
-        let zip = button_zip(&built.entries, &built.images);
-        if self.send(&file_packets(Command::SetButtons, &zip)).await {
-            self.last_page_hash = Some(built.hash);
+        let here = (profile.id, self.nav.page);
+        let packets = match &self.shown {
+            Some(shown) if !force && shown.at == here => {
+                let changed: BTreeMap<u8, ButtonEntry> = built
+                    .entries
+                    .iter()
+                    .filter(|(i, e)| shown.entries.get(i) != Some(e))
+                    .map(|(i, e)| (*i, e.clone()))
+                    .collect();
+                if changed.is_empty() {
+                    return;
+                }
+                let names: Vec<&str> = changed.values().filter_map(|e| e.icon.as_deref()).collect();
+                let images: Vec<ButtonImage> = built
+                    .images
+                    .iter()
+                    .filter(|img| names.iter().any(|n| n.ends_with(&img.name)))
+                    .cloned()
+                    .collect();
+                file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
+            }
+            _ => file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images)),
+        };
+        if self.send(&packets).await {
+            self.last_upload = Some(now);
+            self.shown = Some(Shown {
+                at: here,
+                entries: built.entries,
+            });
         }
     }
 
@@ -360,7 +453,8 @@ impl Deck {
     async fn lost(&mut self, e: &std::io::Error) {
         tracing::warn!("device connection lost: {e}");
         self.transport = None;
-        self.last_page_hash = None;
+        self.shown = None;
+        self.firmware = None;
         self.set_device(DeviceState::NotFound);
     }
 
@@ -370,14 +464,12 @@ impl Deck {
             self.sleep.sleep();
             tracing::info!("sleeping after inactivity");
             self.send(&[brightness(self.settings.sleep_brightness)]).await;
-        } else if self.sleep.never() && now.duration_since(self.last_keepalive) >= KEEPALIVE {
-            self.last_keepalive = now;
-            self.send(&[brightness(self.settings.brightness)]).await;
         }
-        if matches!(
-            self.profile().screen,
-            ScreenConfig::FirmwareClock | ScreenConfig::FirmwareStats
-        ) {
+        if now.duration_since(self.last_unlock) >= UNLOCK_EVERY {
+            self.last_unlock = now;
+            self.send(&[unlock()]).await;
+        }
+        {
             self.send_window().await;
         }
     }

@@ -97,3 +97,29 @@ fn control_names() {
     assert_eq!(Control::Dial(2).as_str(), "dial:2");
     assert_eq!(Control::Unknown(40).as_str(), "unknown:40");
 }
+
+fn frame(cc: u8, pid: u8, payload: &[u8]) -> Vec<u8> {
+    let mut v = vec![0x7c, 0x7c, cc, pid];
+    v.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    v.extend_from_slice(payload);
+    v.resize(1024, 0);
+    v
+}
+
+#[test]
+fn device_reports() {
+    let info = br#"{ "SerialNumber": "02C51A015U3672946", "Dversion": "5.1.7" }"#;
+    assert_eq!(
+        parse_report(&frame(3, 3, info)),
+        DeviceReport::DeviceInfo(String::from_utf8_lossy(info).into_owned())
+    );
+    assert_eq!(
+        parse_report(&frame(1, 0x0b, b"")),
+        DeviceReport::LabelStyleRequest
+    );
+    assert!(
+        matches!(parse_report(&frame(1, 1, &[0, 7, 1, 1])), DeviceReport::Input(e) if e.control == Control::Key(7))
+    );
+    assert_eq!(parse_report(&frame(9, 9, b"")), DeviceReport::Other(0x0909));
+    assert_eq!(parse_report(&[1, 2]), DeviceReport::Other(0));
+}

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
 
-use proptest::prelude::*;
 use ulanzi_proto::*;
 
 fn sample_entries() -> BTreeMap<u8, ButtonEntry> {
@@ -73,7 +72,7 @@ fn zip_contains_manifest_and_icons() {
     let names: Vec<String> = (0..ar.len())
         .map(|i| ar.by_index(i).expect("entry").name().expect("name").to_string())
         .collect();
-    assert_eq!(names, ["dummy.txt", "icons/a.png", "manifest.json"]);
+    assert_eq!(names, ["icons/a.png", "manifest.json"]);
     let mut m = String::new();
     ar.by_name("manifest.json")
         .expect("manifest")
@@ -95,25 +94,14 @@ fn file_packets_layout() {
 }
 
 #[test]
-fn clean_check_finds_bad_byte() {
-    let mut z = vec![0x55u8; 3000];
-    assert!(zip_is_clean(&z));
-    z[1016 + 1024] = 0x7c;
-    assert!(!zip_is_clean(&z));
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-    #[test]
-    fn zip_is_always_clean(seed in any::<u64>(), n in 1usize..14, len in 200usize..6000) {
-        let mut x = seed | 1;
-        let imgs: Vec<ButtonImage> = (0..n).map(|i| {
-            let png = (0..len).map(|_| { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x as u8 }).collect();
-            ButtonImage { name: format!("k{i}.png"), png }
-        }).collect();
-        let mut e = BTreeMap::new();
-        for i in 0..n as u8 { e.insert(i, ButtonEntry { state: 0, text: None, icon: Some(format!("icons/k{i}.png")) }); }
-        let z = button_zip(&e, &imgs);
-        prop_assert!(zip_is_clean(&z));
-    }
+fn alert_zip_has_only_the_manifest() {
+    let z = alert_zip(7);
+    let mut ar = zip::ZipArchive::new(Cursor::new(z)).expect("zip");
+    assert_eq!(ar.len(), 1);
+    let mut m = String::new();
+    ar.by_name("manifest.json")
+        .expect("manifest")
+        .read_to_string(&mut m)
+        .expect("read");
+    assert_eq!(m, r#"{"2_1":{"KeyType":1,"Progress":100,"State":1}}"#);
 }

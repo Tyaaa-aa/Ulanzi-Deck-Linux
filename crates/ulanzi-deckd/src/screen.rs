@@ -10,8 +10,8 @@ use crate::actions::media::{MediaClient, MediaInfo, PlaybackStatus};
 use crate::deck::DynamicState;
 use crate::sysinfo::SysSampler;
 
-/// Output size of the wide-screen image (confirmed on hardware in M1's hardware session).
-pub const SCREEN_OUT: (u32, u32) = (196, 196);
+/// Output size of the wide-screen image: 458×196 was the only test pattern the deck showed undistorted.
+pub const SCREEN_OUT: (u32, u32) = (458, 196);
 const ART_TIMEOUT_SECS: u64 = 3;
 const ART_MAX_BYTES: u64 = 8 * 1024 * 1024;
 

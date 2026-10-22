@@ -13,6 +13,12 @@ const BRIGHTNESS: u16 = 0x000a;
 const LABEL: u16 = 0x000b;
 const WINDOW: u16 = 0x0006;
 const BUTTONS: u16 = 0x0001;
+const PARTIAL: u16 = 0x000d;
+const UNLOCK: u16 = 0x0005;
+const INFO: u16 = 0x0003;
+const SLEEP_TIME: u16 = 0x001a;
+/// Connect sequence, following Ulanzi Studio (unlock first, so a locked deck reports keys again).
+const CONNECT: [u16; 7] = [UNLOCK, LABEL, INFO, BRIGHTNESS, SLEEP_TIME, BUTTONS, WINDOW];
 
 #[derive(Default, Clone)]
 struct FakeRunner {
@@ -68,6 +74,16 @@ fn profile() -> Profile {
     keys.insert(1, key(Some(cmd("tap")), Some(cmd("hold"))));
     keys.insert(2, key(Some(cmd("only-tap")), None));
     keys.insert(3, key(Some(cmd("fail")), None));
+    keys.insert(
+        5,
+        key(
+            Some(Action::Media {
+                control: MediaControl::PlayPause,
+                player: None,
+            }),
+            None,
+        ),
+    );
     p.dials[0].right = Some(Action::Volume {
         target: AudioTarget::Default,
         op: VolumeOp::Up,
@@ -104,7 +120,8 @@ async fn rig_with(settings: Settings) -> Rig {
     tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
         .await
         .expect("send");
-    settle().await;
+    // Let the connect upload's spacing window pass so each test starts from a quiet deck.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     Rig {
         _dir: dir,
         tx,
@@ -170,7 +187,7 @@ impl Rig {
 #[tokio::test(start_paused = true)]
 async fn connect_sends_brightness_label_window_page() {
     let r = rig().await;
-    assert_eq!(r.mock.commands(), vec![BRIGHTNESS, LABEL, WINDOW, BUTTONS]);
+    assert_eq!(r.mock.commands()[..CONNECT.len()], CONNECT);
 }
 
 #[tokio::test(start_paused = true)]
@@ -258,14 +275,26 @@ async fn sleep_after_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn keepalive_when_never_sleep() {
-    let r = rig_with(Settings {
-        sleep_after_min: 0,
-        ..Settings::default()
-    })
-    .await;
+async fn screen_updates_every_second_and_unlocks_every_30s() {
+    let r = rig().await;
+    r.mock.clear();
     tokio::time::sleep(Duration::from_secs(61)).await;
-    assert!(r.brightness_values().len() >= 2, "{:?}", r.brightness_values());
+    let cmds = r.mock.commands();
+    let windows = cmds.iter().filter(|c| **c == WINDOW).count();
+    let unlocks = cmds.iter().filter(|c| **c == UNLOCK).count();
+    assert!((59..=62).contains(&windows), "{windows} window updates");
+    assert_eq!(unlocks, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn label_style_request_is_answered() {
+    let r = rig().await;
+    r.mock.clear();
+    let mut req = vec![0x7c, 0x7c, 0x01, 0x0b, 0, 0, 0, 0];
+    req.resize(1024, 0);
+    r.mock.inject.send(Ok(req)).await.expect("inject");
+    settle().await;
+    assert_eq!(r.mock.commands(), vec![LABEL]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -296,7 +325,7 @@ async fn unplug_mid_upload_repushes_on_reconnect() {
         .await
         .expect("send");
     settle().await;
-    assert_eq!(mock2.commands(), vec![BRIGHTNESS, LABEL, WINDOW, BUTTONS]);
+    assert_eq!(mock2.commands(), CONNECT.to_vec());
 }
 
 #[tokio::test(start_paused = true)]
@@ -329,4 +358,36 @@ async fn action_error_emits_event_and_continues() {
     assert!(failed.1.contains("boom"));
     r.click(2).await;
     assert_eq!(r.runner.ran(), vec![cmd("fail"), cmd("only-tap")]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn rapid_page_flips_are_coalesced() {
+    let mut r = rig().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    r.pages_seen();
+    r.mock.clear();
+    // Four flips end on page 0, which differs from what the first (immediate) upload showed.
+    for _ in 0..4 {
+        r.click(16).await;
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let uploads = r.mock.commands().iter().filter(|c| **c == BUTTONS).count();
+    assert_eq!(uploads, 2, "first flip immediately, the rest folded into one");
+    assert_eq!(r.pages_seen().last(), Some(&0));
+}
+
+#[tokio::test(start_paused = true)]
+async fn live_changes_use_partial_updates() {
+    let r = rig().await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    r.mock.clear();
+    let playing = DynamicState {
+        playing: Some(true),
+        ..DynamicState::default()
+    };
+    r.tx.send(DeckMsg::Dynamic(playing)).await.expect("send");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let cmds = r.mock.commands();
+    assert!(cmds.contains(&PARTIAL), "{cmds:?}");
+    assert!(!cmds.contains(&BUTTONS), "{cmds:?}");
 }

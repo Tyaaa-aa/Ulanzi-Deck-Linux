@@ -3,16 +3,18 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Cursor};
+
 use std::path::Path;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncBufReadExt;
 
 use clap::Subcommand;
 use resvg::tiny_skia::{self, Paint, Pixmap, Rect, Transform};
 use ulanzi_core::render::{Fonts, TextStyle};
-use ulanzi_deckd::transport::{DeviceState, Hidraw, Transport, find_node, probe};
+use ulanzi_deckd::transport::{DeviceState, Hidraw, Transport, probe};
 use ulanzi_proto::{
-    ButtonEntry, ButtonImage, Command, ScreenMode, SmallWindow, brightness, button_zip, file_packets,
-    parse_input, small_window,
+    ButtonEntry, ButtonImage, Command, LabelStyle, ScreenMode, SmallWindow, brightness, button_zip,
+    file_packets, label_style, parse_input, small_window,
 };
 
 #[derive(Subcommand, Debug, PartialEq)]
@@ -27,6 +29,8 @@ pub enum Probe {
     Info,
     /// Check whether keys left out of an upload keep their image (U5).
     Omit,
+    /// Try each wide-screen mode, re-sending the image after each one.
+    Modes,
 }
 
 pub async fn run(what: Probe) -> Result<(), String> {
@@ -37,6 +41,7 @@ pub async fn run(what: Probe) -> Result<(), String> {
         Probe::Partial => partial(&mut dev).await,
         Probe::Info => info(&mut dev).await,
         Probe::Omit => omit(&mut dev).await,
+        Probe::Modes => modes(&mut dev).await,
     }
 }
 
@@ -70,23 +75,42 @@ async fn send(dev: &mut Hidraw, packets: &[ulanzi_proto::Packet]) -> Result<(), 
 }
 
 async fn input(dev: &mut Hidraw) -> Result<(), String> {
-    println!("press every key, both small buttons, the wide screen; turn and press each dial (30 s)");
-    let end = Instant::now() + Duration::from_secs(30);
-    while let Ok(Ok(buf)) = tokio::time::timeout_at(end.into(), dev.recv()).await {
-        let raw: Vec<String> = buf.iter().take(12).map(|b| format!("{b:02x}")).collect();
-        match parse_input(&buf) {
-            Some(e) => println!(
-                "{:<12} {:<10} index={:<3} b2={} b3={}  [{}]",
-                e.control.as_str(),
-                format!("{:?}", e.kind),
-                e.raw_index,
-                buf[10],
-                buf[11],
-                raw.join(" ")
-            ),
-            None => println!("(other report) [{}]", raw.join(" ")),
+    // The deck may stay silent until the host has talked to it, so greet it like the daemon does.
+    send(dev, &[brightness(60), label_style(&LabelStyle::default())]).await?;
+    send(dev, &[ulanzi_proto::unlock()]).await?;
+    let window = SmallWindow {
+        mode: ScreenMode::Clock,
+        cpu: 0,
+        mem: 0,
+        time: "12:00:00".into(),
+        gpu: 0,
+        clock_24h: true,
+        date: String::new(),
+    };
+    send(dev, &[small_window(&window)]).await?;
+    send(
+        dev,
+        &page(&(0..13).map(|i| (i, solid([40, 70, 120]))).collect::<Vec<_>>()),
+    )
+    .await?;
+    wait_enter("All keys should now be blue. Press Enter here when you are ready to start pressing");
+    println!("RECORDING. Press each control. Press Enter here when you are done.");
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    loop {
+        tokio::select! {
+            _ = stdin.next_line() => break,
+            r = dev.recv() => {
+                let Ok(buf) = r else { break };
+                let raw: Vec<String> = buf.iter().take(12).map(|b| format!("{b:02x}")).collect();
+                match parse_input(&buf) {
+                    Some(e) => println!("{:<12} {:<10} index={:<3} b2={} b3={}  [{}]",
+                        e.control.as_str(), format!("{:?}", e.kind), e.raw_index, buf[10], buf[11], raw.join(" ")),
+                    None => println!("(other report) [{}]", raw.join(" ")),
+                }
+            }
         }
     }
+    println!("stopped.");
     Ok(())
 }
 
@@ -158,11 +182,19 @@ fn solid(rgb: [u8; 3]) -> Vec<u8> {
     out
 }
 
+fn unique() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
 fn page(keys: &[(u8, Vec<u8>)]) -> Vec<ulanzi_proto::Packet> {
     let mut entries = BTreeMap::new();
     let mut images = Vec::new();
     for (i, data) in keys {
-        let name = format!("p{i}.png");
+        // The deck caches images by file name, so every upload gets a fresh one.
+        let name = format!("p{i}_{}.png", unique());
         entries.insert(
             *i,
             ButtonEntry {
@@ -182,20 +214,24 @@ fn page(keys: &[(u8, Vec<u8>)]) -> Vec<ulanzi_proto::Packet> {
 async fn screen(dev: &mut Hidraw) -> Result<(), String> {
     let mut fonts = Fonts::system();
     send(dev, &[brightness(60)]).await?;
+    send(dev, &[ulanzi_proto::unlock()]).await?;
     let window = SmallWindow {
-        mode: ScreenMode::Background,
+        mode: ScreenMode::Image,
         cpu: 0,
         mem: 0,
         time: "00:00:00".into(),
         gpu: 0,
+        clock_24h: true,
+        date: String::new(),
     };
     send(dev, &[small_window(&window)]).await?;
     for (w, h) in [(196, 196), (392, 196), (248, 196), (458, 196)] {
         send(dev, &page(&[(13, pattern(w, h, &mut fonts))])).await?;
         wait_enter(&format!(
-            "showing {w}x{h}: is the circle round and is the red border fully visible?"
+            "\nNOW SHOWING: {w}x{h}. Take a photo, then press Enter for the next one."
         ));
     }
+    println!("\nDone. All screen tests finished.");
     Ok(())
 }
 
@@ -247,25 +283,17 @@ async fn partial(dev: &mut Hidraw) -> Result<(), String> {
 }
 
 async fn info(dev: &mut Hidraw) -> Result<(), String> {
-    println!("listening for 2 s (don't touch the deck)");
+    send(
+        dev,
+        &[ulanzi_proto::unlock(), ulanzi_proto::request_device_info()],
+    )
+    .await?;
     let end = Instant::now() + Duration::from_secs(2);
     while let Ok(Ok(buf)) = tokio::time::timeout_at(end.into(), dev.recv()).await {
-        if buf.len() >= 4 && u16::from_be_bytes([buf[2], buf[3]]) == 0x0303 {
-            let hex: Vec<String> = buf.iter().take(64).map(|b| format!("{b:02x}")).collect();
-            println!(
-                "device info: {}\n  text: {}",
-                hex.join(" "),
-                String::from_utf8_lossy(&buf[8..]).trim_end_matches('\0')
-            );
-        } else {
-            println!("other report: {:02x?}", &buf[..buf.len().min(12)]);
+        match ulanzi_proto::parse_report(&buf) {
+            ulanzi_proto::DeviceReport::DeviceInfo(json) => println!("device info: {json}"),
+            other => println!("other report: {other:?}"),
         }
-    }
-    let node = find_node(Path::new("/sys/class/hidraw"), Path::new("/dev"));
-    if let Some(n) = node.and_then(|n| n.file_name().map(|f| f.to_string_lossy().into_owned())) {
-        let uevent =
-            std::fs::read_to_string(format!("/sys/class/hidraw/{n}/device/uevent")).unwrap_or_default();
-        println!("sysfs:\n{uevent}");
     }
     Ok(())
 }
@@ -279,5 +307,41 @@ async fn omit(dev: &mut Hidraw) -> Result<(), String> {
     wait_enter("all keys should be red now");
     send(dev, &page(&[(0, solid([40, 80, 220]))])).await?;
     wait_enter("key 1 should be blue: are the other keys still red, or blank?");
+    Ok(())
+}
+
+async fn modes(dev: &mut Hidraw) -> Result<(), String> {
+    let mut fonts = Fonts::system();
+    send(dev, &[ulanzi_proto::unlock(), brightness(60)]).await?;
+    send(dev, &page(&[(13, pattern(458, 196, &mut fonts))])).await?;
+    let tests: [(&str, ScreenMode, &str); 7] = [
+        ("1 (picture only, the one we want)", ScreenMode::Image, ""),
+        ("2 (clock)", ScreenMode::Clock, ""),
+        (
+            "3 (clock, date and weekday)",
+            ScreenMode::ClockDateWeekday,
+            "2026-10-22 Thu",
+        ),
+        ("4 (clock and weekday)", ScreenMode::ClockWeekday, "Thu"),
+        ("5 (clock and date)", ScreenMode::ClockDate, "2026-10-22"),
+        ("6 (large clock)", ScreenMode::ClockLarge, ""),
+        ("7 (picture only again, after the clocks)", ScreenMode::Image, ""),
+    ];
+    for (name, mode, date) in tests {
+        let w = SmallWindow {
+            mode,
+            cpu: 11,
+            mem: 22,
+            time: "12:34:56".into(),
+            gpu: 33,
+            clock_24h: true,
+            date: date.into(),
+        };
+        send(dev, &[small_window(&w)]).await?;
+        wait_enter(&format!(
+            "\nTEST {name}: what is on the wide screen? Then press Enter."
+        ));
+    }
+    println!("\nDone. All mode tests finished.");
     Ok(())
 }

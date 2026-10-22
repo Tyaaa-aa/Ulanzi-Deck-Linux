@@ -94,3 +94,34 @@ pub fn parse_input(buf: &[u8]) -> Option<InputEvent> {
         raw_state: state,
     })
 }
+
+/// Anything the deck sends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceReport {
+    Input(InputEvent),
+    /// Reply to [`crate::request_device_info`]: a JSON object (serial number, firmware, ...).
+    DeviceInfo(String),
+    /// The deck asks for the label style; answer with [`crate::label_style`].
+    LabelStyleRequest,
+    /// Unknown report, with its command code and protocol ID as a u16.
+    Other(u16),
+}
+
+pub fn parse_report(buf: &[u8]) -> DeviceReport {
+    if buf.len() < 8 || buf[..2] != [0x7c, 0x7c] {
+        return DeviceReport::Other(0);
+    }
+    let code = u16::from_be_bytes([buf[2], buf[3]]);
+    match code {
+        0x0303 => {
+            let len = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
+            let body = &buf[8..buf.len().min(8 + len)];
+            DeviceReport::DeviceInfo(String::from_utf8_lossy(body).trim_end_matches('\0').to_string())
+        }
+        0x010b => DeviceReport::LabelStyleRequest,
+        _ => match parse_input(buf) {
+            Some(e) => DeviceReport::Input(e),
+            None => DeviceReport::Other(code),
+        },
+    }
+}

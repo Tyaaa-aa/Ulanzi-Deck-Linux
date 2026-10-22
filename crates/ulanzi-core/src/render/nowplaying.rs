@@ -13,14 +13,14 @@ pub struct NowPlaying {
     pub artist: String,
 }
 
-const W: u32 = 392;
+const W: u32 = 458;
 const H: u32 = 196;
 const BG: [u8; 3] = [0x13, 0x1c, 0x2e];
 const ARTIST: [u8; 3] = [0xb4, 0xc8, 0xf0];
 const TEXT_X: f32 = 200.0;
-const TEXT_W: f32 = 180.0;
+const TEXT_W: f32 = 240.0;
 
-/// Draw on a 392×196 canvas, then scale to `out` (w, h) and encode as PNG.
+/// Draw on a 458×196 canvas (the wide screen's real shape), then scale to `out` (w, h) and encode as PNG.
 pub fn render_now_playing(
     info: &NowPlaying,
     art: Option<&Path>,
