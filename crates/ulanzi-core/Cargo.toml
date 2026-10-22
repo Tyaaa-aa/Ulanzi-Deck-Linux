@@ -9,6 +9,8 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+zip.workspace = true
+chrono.workspace = true
 ulanzi-proto.workspace = true
 serde.workspace = true
 serde_norway.workspace = true

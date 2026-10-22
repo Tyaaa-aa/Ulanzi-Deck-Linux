@@ -2,6 +2,7 @@
 
 pub mod apps;
 pub mod autoswitch;
+pub mod bundle;
 pub mod catalog;
 mod color;
 pub mod edit;
