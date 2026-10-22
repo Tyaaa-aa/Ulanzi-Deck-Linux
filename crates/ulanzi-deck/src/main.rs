@@ -21,6 +21,8 @@ struct Shot {
     select: Option<String>,
     /// `library` or `picker:<tab>`.
     open: Option<String>,
+    /// 1-based page to show.
+    page: Option<usize>,
 }
 
 fn parse_size(s: &str) -> Option<(i32, i32)> {
@@ -43,6 +45,7 @@ fn parse_args() -> Option<Shot> {
         dark: get("--theme").map(|t| t == "dark"),
         select: get("--select"),
         open: get("--open"),
+        page: get("--page").and_then(|p| p.parse().ok()),
     })
 }
 
@@ -184,6 +187,9 @@ fn main() -> glib::ExitCode {
                 }
                 return;
             };
+            if let Some(p) = shot.page {
+                state2.set_page(p.saturating_sub(1));
+            }
             if let Some(sel) = &shot.select {
                 state2.select(|s| match sel.split_once(':') {
                     Some(("key", n)) => n

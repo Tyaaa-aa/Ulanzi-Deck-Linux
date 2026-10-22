@@ -233,10 +233,11 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .sidebar_width_fraction(0.3)
         .build();
     let canvas = canvas::build(state);
-    inner_split.set_content(Some(&canvas.widget));
+    content_view.set_content(Some(&canvas.widget));
+    // The right panel runs the full height of the window, beside the canvas and its header.
+    inner_split.set_content(Some(&content_view));
     let panel = inspector::Panel::build(state, &library_toggle);
     inner_split.set_sidebar(Some(&panel.root));
-    content_view.set_content(Some(&inner_split));
     // Window buttons belong to the rightmost header: the inspector's while it is shown beside the
     // canvas, the content header's otherwise.
     let sync_buttons = {
@@ -254,7 +255,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .min_sidebar_width(240.0)
         .max_sidebar_width(300.0)
         .sidebar(&side_view)
-        .content(&content_view)
+        .content(&inner_split)
         .build();
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&outer_split));

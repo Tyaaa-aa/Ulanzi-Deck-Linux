@@ -347,3 +347,23 @@ fn launch_app_uses_the_apps_icon_and_name() {
     );
     assert_eq!(key(&e, 0).look.label.text, "zz-other");
 }
+
+#[test]
+fn label_position_is_a_bulk_field() {
+    let mut e = editor_with_keys();
+    e.set_field(&[0, 1], Field::LabelPosition(Some(LabelPosition::Top)));
+    assert_eq!(key(&e, 0).look.label.position, Some(LabelPosition::Top));
+    assert_eq!(key(&e, 1).look.label.position, Some(LabelPosition::Top));
+    assert_eq!(key(&e, 2).look.label.position, None);
+}
+
+#[test]
+fn rename_profile_trims_and_ignores_empty() {
+    let mut e = editor_with_keys();
+    e.rename_profile("  Gaming  ");
+    assert_eq!(e.profile().name, "Gaming");
+    e.rename_profile("   ");
+    assert_eq!(e.profile().name, "Gaming");
+    assert!(e.undo());
+    assert_eq!(e.profile().name, "P");
+}

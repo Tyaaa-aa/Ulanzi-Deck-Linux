@@ -222,6 +222,11 @@ impl Client {
     }
 
     /// Send any queued profile now.
+    /// Save a profile other than the one being edited, right away (fetch it with `profile` first).
+    pub async fn apply_now(&self, profile: &Profile) -> Result<()> {
+        self.send_profile(profile).await
+    }
+
     pub async fn flush(&self) {
         self.save_pending().await;
     }

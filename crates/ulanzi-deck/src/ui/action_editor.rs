@@ -635,7 +635,7 @@ fn small_icon_button(icon: &str, tooltip: &str) -> gtk::Button {
         .build()
 }
 
-fn multi_rows(ed: &Ed, state: &State, steps: &[Step]) -> Vec<gtk::Widget> {
+fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Widget> {
     let mut rows: Vec<gtk::Widget> = Vec::new();
     let n = steps.len();
     for (i, step) in steps.iter().enumerate() {
@@ -647,6 +647,8 @@ fn multi_rows(ed: &Ed, state: &State, steps: &[Step]) -> Vec<gtk::Widget> {
             .subtitle(step_subtitle(step))
             .build();
         exp.add_prefix(&action_chip(state, Some(&step.action), 28));
+        let step_path = format!("{path}/step{i}");
+        state.remember_expanded(&exp, &step_path);
         let up = small_icon_button("go-up-symbolic", "Move up");
         let down = small_icon_button("go-down-symbolic", "Move down");
         let remove = small_icon_button("user-trash-symbolic", "Remove step");
@@ -657,7 +659,21 @@ fn multi_rows(ed: &Ed, state: &State, steps: &[Step]) -> Vec<gtk::Widget> {
         }
         let reorder = |delta: isize| {
             let ed = ed.clone();
+            let (state, path) = (state.clone(), path.to_string());
             move |_: &gtk::Button| {
+                // The open/closed state moves with the step.
+                let j = (i as isize + delta) as usize;
+                let (a, b) = (format!("{path}/step{i}"), format!("{path}/step{j}"));
+                {
+                    let mut set = state.expanded.borrow_mut();
+                    let (ha, hb) = (set.remove(&a), set.remove(&b));
+                    if ha {
+                        set.insert(b.clone());
+                    }
+                    if hb {
+                        set.insert(a.clone());
+                    }
+                }
                 ed.apply(How::Structure, |a| {
                     if let Action::Multi { steps } = a {
                         let j = (i as isize + delta) as usize;
@@ -695,7 +711,7 @@ fn multi_rows(ed: &Ed, state: &State, steps: &[Step]) -> Vec<gtk::Widget> {
                 })
             })
         };
-        for r in rows_for(state, &step.action, inner) {
+        for r in rows_for(state, &step_path, &step.action, inner) {
             exp.add_row(&r);
         }
         let delay = {
@@ -746,7 +762,8 @@ fn step_subtitle(s: &Step) -> String {
 }
 
 /// Editor rows for `action`'s parameters (empty for actions without any).
-pub fn rows_for(state: &State, action: &Action, on: OnChange) -> Vec<gtk::Widget> {
+/// `path` names where these rows are (for remembering which rows are open).
+pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec<gtk::Widget> {
     let ed = Ed {
         cur: Rc::new(RefCell::new(action.clone())),
         on,
@@ -824,7 +841,7 @@ pub fn rows_for(state: &State, action: &Action, on: OnChange) -> Vec<gtk::Widget
             vec![page_combo(&ed, state, *page)]
         }
         Action::SwitchProfile { profile } => vec![profile_combo(&ed, state, *profile)],
-        Action::Multi { steps } => multi_rows(&ed, state, steps),
+        Action::Multi { steps } => multi_rows(&ed, state, path, steps),
         Action::Obs(o) => obs_rows(&ed, o),
         Action::NextPage | Action::PrevPage | Action::Back | Action::AutoProfile | Action::SleepNow => {
             Vec::new()

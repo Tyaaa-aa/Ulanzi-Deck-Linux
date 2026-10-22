@@ -23,6 +23,8 @@ pub enum Field {
     LabelText(String),
     Source(ImageSource),
     Dynamic(bool),
+    /// `None` follows Preferences.
+    LabelPosition(Option<LabelPosition>),
 }
 
 /// The common value of a property across a selection.
@@ -34,6 +36,20 @@ pub enum Mixed<T> {
     One(T),
     /// The keys differ.
     Mixed,
+}
+
+/// Set one appearance field on a look (also used for live previews).
+pub fn apply_field(look: &mut KeyLook, field: &Field) {
+    match field {
+        Field::Background(c) => look.background = *c,
+        Field::Foreground(c) => look.foreground = *c,
+        Field::IconScale(s) => look.icon_scale = s.clamp(0.1, 1.0),
+        Field::LabelVisible(v) => look.label.visible = *v,
+        Field::LabelText(t) => look.label.text = t.clone(),
+        Field::Source(s) => look.source = s.clone(),
+        Field::Dynamic(d) => look.dynamic = *d,
+        Field::LabelPosition(p) => look.label.position = *p,
+    }
 }
 
 pub fn shared<T: PartialEq + Clone>(mut values: impl Iterator<Item = T>) -> Mixed<T> {
@@ -195,16 +211,7 @@ impl Editor {
     pub fn set_field(&mut self, keys: &[u8], field: Field) {
         self.edit(|p, page| {
             for &i in keys.iter().filter(|i| **i < KEYS) {
-                let look = &mut p.pages[page].keys.entry(i).or_default().look;
-                match &field {
-                    Field::Background(c) => look.background = *c,
-                    Field::Foreground(c) => look.foreground = *c,
-                    Field::IconScale(s) => look.icon_scale = s.clamp(0.1, 1.0),
-                    Field::LabelVisible(v) => look.label.visible = *v,
-                    Field::LabelText(t) => look.label.text = t.clone(),
-                    Field::Source(s) => look.source = s.clone(),
-                    Field::Dynamic(d) => look.dynamic = *d,
-                }
+                apply_field(&mut p.pages[page].keys.entry(i).or_default().look, &field);
             }
         });
     }
@@ -270,6 +277,14 @@ impl Editor {
                 p.small_buttons.right = action;
             }
         });
+    }
+
+    /// Rename the profile (surrounding spaces dropped; an empty name is ignored).
+    pub fn rename_profile(&mut self, name: &str) {
+        let name = name.trim();
+        if !name.is_empty() {
+            self.edit(|p, _| p.name = name.to_string());
+        }
     }
 
     pub fn set_model(&mut self, model: Model) {

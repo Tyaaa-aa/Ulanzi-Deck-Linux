@@ -25,6 +25,8 @@ pub enum Change {
     Settings,
     /// A physical control was pressed.
     Pressed(Slot),
+    /// A live preview of an appearance change on the selected keys started or ended.
+    Preview,
 }
 
 /// Device / service status shown in the header pill and banner.
@@ -52,12 +54,32 @@ pub struct AppState {
     pub demo: Cell<bool>,
     /// True while the inspector applies its own edit (it then refreshes itself without a rebuild).
     pub inspector_edit: Cell<bool>,
+    /// An appearance change shown on the selected keys before it is applied (hovering a colour).
+    pub preview: RefCell<Option<ulanzi_core::edit::Field>>,
+    /// Expandable rows the user opened, by path, so rebuilding the inspector keeps them open.
+    pub expanded: RefCell<std::collections::HashSet<String>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
 pub type State = Rc<AppState>;
 
 impl AppState {
+    /// Keep `row` open or closed across rebuilds under the name `path`.
+    pub fn remember_expanded(self: &Rc<Self>, row: &adw::ExpanderRow, path: &str) {
+        use adw::prelude::*;
+        row.set_expanded(self.expanded.borrow().contains(path));
+        let (state, path) = (Rc::downgrade(self), path.to_string());
+        row.connect_expanded_notify(move |r| {
+            if let Some(s) = state.upgrade() {
+                if r.is_expanded() {
+                    s.expanded.borrow_mut().insert(path.clone());
+                } else {
+                    s.expanded.borrow_mut().remove(&path);
+                }
+            }
+        });
+    }
+
     pub fn new(profile: Profile) -> State {
         Rc::new(AppState {
             editor: RefCell::new(Editor::new(profile)),
@@ -68,6 +90,8 @@ impl AppState {
             client: RefCell::new(None),
             demo: Cell::new(false),
             inspector_edit: Cell::new(false),
+            preview: RefCell::new(None),
+            expanded: RefCell::new(std::collections::HashSet::new()),
             listeners: RefCell::new(Vec::new()),
         })
     }

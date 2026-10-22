@@ -149,6 +149,21 @@ fn texture(png: &[u8]) -> Option<gdk::Texture> {
     gdk::Texture::from_bytes(&glib::Bytes::from(png)).ok()
 }
 
+/// `tex`, or a transparent stand-in of the same size, so empty keys keep their place in the grid.
+fn or_blank(tex: Option<gdk::Texture>, w: i32, h: i32) -> gdk::Paintable {
+    tex.map(|t| t.upcast())
+        .unwrap_or_else(|| gdk::Paintable::new_empty(w, h))
+}
+
+/// Where the deck draws labels (`label_style.align` from Preferences).
+fn label_valign(align: &str) -> gtk::Align {
+    match align {
+        "top" => gtk::Align::Start,
+        "center" => gtk::Align::Center,
+        _ => gtk::Align::End,
+    }
+}
+
 /// The texture for a key look (cached), or None for an empty key.
 pub fn key_texture(look: &KeyLook, profile_dir: &std::path::Path) -> Option<gdk::Texture> {
     let h = look_hash(look, profile_dir);
@@ -458,19 +473,41 @@ pub fn build(state: &State) -> Canvas {
             dots.clone(),
         );
         move |c: Change| match c {
-            Change::Profile | Change::Page | Change::Settings => {
+            Change::Profile | Change::Page | Change::Settings | Change::Preview => {
                 let dir = profile_dir(&state);
                 let hide = state.settings.borrow().hide_labels;
+                let align = state.settings.borrow().label_style.align.clone();
+                let preview = state.preview.borrow().clone();
+                let sel = state.selection.borrow().clone();
                 let e = state.editor.borrow();
                 let page = &e.profile().pages[e.page()];
                 for (i, k) in keys.iter().enumerate() {
-                    match page.keys.get(&(i as u8)) {
+                    // A hovered colour shows on the selected keys before it is applied.
+                    let previewed = preview.as_ref().filter(|_| sel.contains(Slot::Key(i as u8)));
+                    let owned;
+                    let key = match (page.keys.get(&(i as u8)), previewed) {
+                        (k, Some(f)) => {
+                            let mut key = k.cloned().unwrap_or_default();
+                            ulanzi_core::edit::apply_field(&mut key.look, f);
+                            owned = key;
+                            Some(&owned)
+                        }
+                        (k, None) => k,
+                    };
+                    match key {
                         Some(key) => {
-                            k.picture.set_paintable(key_texture(&key.look, &dir).as_ref());
+                            k.picture.set_paintable(Some(&or_blank(
+                                key_texture(&key.look, &dir),
+                                ulanzi_core::render::KEY_PX as i32,
+                                ulanzi_core::render::KEY_PX as i32,
+                            )));
                             let text = &key.look.label.text;
                             k.label.set_label(text);
+                            // A label with its own position is part of the key image.
+                            let own = key.look.label.position.is_some();
+                            k.label.set_valign(label_valign(&align));
                             k.label
-                                .set_visible(!hide && key.look.label.visible && !text.is_empty());
+                                .set_visible(!hide && !own && key.look.label.visible && !text.is_empty());
                             k.button.set_tooltip_text(
                                 key.tap
                                     .as_ref()
@@ -480,7 +517,11 @@ pub fn build(state: &State) -> Canvas {
                             );
                         }
                         None => {
-                            k.picture.set_paintable(None::<&gdk::Paintable>);
+                            k.picture.set_paintable(Some(&or_blank(
+                                None,
+                                ulanzi_core::render::KEY_PX as i32,
+                                ulanzi_core::render::KEY_PX as i32,
+                            )));
                             k.label.set_visible(false);
                             k.button
                                 .set_tooltip_text(Some("Empty key: drop an action or an image here"));
@@ -488,7 +529,10 @@ pub fn build(state: &State) -> Canvas {
                     }
                 }
                 drop(e);
-                screen.0.picture.set_paintable(screen_texture(&state).as_ref());
+                screen
+                    .0
+                    .picture
+                    .set_paintable(Some(&or_blank(screen_texture(&state), 458, 196)));
                 screen.0.label.set_visible(false);
                 // Page dots.
                 while let Some(c) = dots.first_child() {

@@ -196,6 +196,7 @@ pub fn build(state: &State) -> gtk::Box {
                 let list = state.profiles.borrow().clone();
                 for (id, name) in &list {
                     let row = profile_row(name, "Always", *id == current);
+                    attach_profile_menu(&state, &row, *id, name);
                     profiles.append(&row);
                     if *id == current {
                         profiles.select_row(Some(&row));
@@ -270,4 +271,156 @@ fn new_profile(state: &State) {
             }
         },
     );
+}
+
+/// Right-click (or long-press) a profile for Rename and Delete; double-click renames.
+fn attach_profile_menu(state: &State, row: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) {
+    let menu = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let rename = gtk::Button::builder()
+        .label("Rename…")
+        .css_classes(["flat"])
+        .build();
+    let delete = gtk::Button::builder()
+        .label("Delete…")
+        .css_classes(["flat", "error"])
+        .build();
+    menu.append(&rename);
+    menu.append(&delete);
+    let pop = gtk::Popover::builder().child(&menu).has_arrow(true).build();
+    // Inside the row's own box, so the popover goes away with the row when the list refreshes.
+    if let Some(b) = row.child().and_downcast::<gtk::Box>() {
+        b.append(&pop);
+    }
+    {
+        let (state, pop, name) = (state.clone(), pop.clone(), name.to_string());
+        rename.connect_clicked(move |b| {
+            pop.popdown();
+            rename_dialog(&state, b, id, &name);
+        });
+    }
+    {
+        let (state, pop, name) = (state.clone(), pop.clone(), name.to_string());
+        delete.connect_clicked(move |b| {
+            pop.popdown();
+            delete_dialog(&state, b, id, &name);
+        });
+    }
+    let show = {
+        let pop = pop.clone();
+        move |x: f64, y: f64| {
+            pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            pop.popup();
+        }
+    };
+    let right = gtk::GestureClick::builder().button(3).build();
+    {
+        let show = show.clone();
+        right.connect_pressed(move |_, _, x, y| show(x, y));
+    }
+    row.add_controller(right);
+    let long = gtk::GestureLongPress::new();
+    long.connect_pressed(move |_, x, y| show(x, y));
+    row.add_controller(long);
+    let double = gtk::GestureClick::new();
+    {
+        let (state, row2, name) = (state.clone(), row.clone(), name.to_string());
+        double.connect_pressed(move |_, n, _, _| {
+            if n == 2 {
+                rename_dialog(&state, &row2, id, &name);
+            }
+        });
+    }
+    row.add_controller(double);
+}
+
+fn rename_dialog(state: &State, near: &impl IsA<gtk::Widget>, id: uuid::Uuid, name: &str) {
+    let entry = adw::EntryRow::builder().title("Name").text(name).build();
+    let list = gtk::ListBox::builder()
+        .css_classes(["boxed-list"])
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    list.append(&entry);
+    let dialog = adw::AlertDialog::builder()
+        .heading("Rename Profile")
+        .extra_child(&list)
+        .default_response("rename")
+        .close_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("rename", "Rename");
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    {
+        let dialog = dialog.clone();
+        entry.connect_entry_activated(move |_| {
+            dialog.emit_by_name::<()>("response", &[&"rename"]);
+            dialog.close();
+        });
+    }
+    let state = state.clone();
+    dialog.connect_response(Some("rename"), move |_, _| {
+        let new = entry.text().trim().to_string();
+        if new.is_empty() {
+            return;
+        }
+        if id == state.profile_id() {
+            state.edit(|e| e.rename_profile(&new));
+        } else if let Some(c) = state.client.borrow().clone() {
+            let st = state.clone();
+            crate::runtime::run(
+                async move {
+                    let mut p = c.profile(id).await?;
+                    p.name = new;
+                    c.apply_now(&p).await
+                },
+                move |r| {
+                    if let Err(e) = r {
+                        crate::ui::toast(&st, &format!("Not renamed: {e}"));
+                    }
+                },
+            );
+        }
+        // Show the new name right away; the service confirms it.
+        if let Some(p) = state.profiles.borrow_mut().iter_mut().find(|(i, _)| *i == id) {
+            p.1 = entry.text().trim().to_string();
+        }
+        state.notify(Change::Profiles);
+    });
+    dialog.present(Some(near));
+}
+
+fn delete_dialog(state: &State, near: &impl IsA<gtk::Widget>, id: uuid::Uuid, name: &str) {
+    if state.profiles.borrow().len() <= 1 {
+        crate::ui::toast(state, "The last profile can't be deleted");
+        return;
+    }
+    let dialog = adw::AlertDialog::builder()
+        .heading("Delete Profile?")
+        .body(format!(
+            "“{name}” and its pages will be removed. A copy is kept in the profiles folder."
+        ))
+        .default_response("cancel")
+        .close_response("cancel")
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("delete", "Delete");
+    dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    let state = state.clone();
+    dialog.connect_response(Some("delete"), move |_, _| {
+        let Some(c) = state.client.borrow().clone() else {
+            return;
+        };
+        // Leave the profile first if it is open.
+        if id == state.profile_id()
+            && let Some((other, _)) = state.profiles.borrow().iter().find(|(i, _)| *i != id).cloned()
+        {
+            crate::ui::window::open_profile(&state, other, true);
+        }
+        let st = state.clone();
+        crate::runtime::run(async move { c.delete_profile(id).await }, move |r| {
+            if let Err(e) = r {
+                crate::ui::toast(&st, &format!("Not deleted: {e}"));
+            }
+        });
+    });
+    dialog.present(Some(near));
 }

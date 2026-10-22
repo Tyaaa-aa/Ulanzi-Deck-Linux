@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::glib;
 use ulanzi_core::Color;
 use ulanzi_core::catalog;
 use ulanzi_core::edit::{Editor, Field, Mixed, Slot};
@@ -68,14 +68,6 @@ impl Panel {
         let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
             .build();
-        let empty = adw::StatusPage::builder()
-            .icon_name("input-mouse-symbolic")
-            .title("Nothing Selected")
-            .description("Click a key, dial or button on the deck to edit it")
-            .build();
-        empty.add_css_class("compact");
-        stack.add_named(&empty, Some("empty"));
-
         let content = gtk::Box::new(gtk::Orientation::Vertical, 18);
         content.set_margin_top(12);
         content.set_margin_bottom(24);
@@ -114,9 +106,12 @@ impl Panel {
                     content.remove(&c);
                 }
                 let has = fill(&ctx, &content);
-                if !toggle.is_active() {
-                    stack.set_visible_child_name(if has { "inspector" } else { "empty" });
-                }
+                // With nothing selected the panel shows the actions to drag onto the deck.
+                stack.set_visible_child_name(if has && !toggle.is_active() {
+                    "inspector"
+                } else {
+                    "library"
+                });
             })
         };
         *ctx.rebuild.borrow_mut() = Some(rebuild.clone());
@@ -258,6 +253,7 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) {
     let write_tap: Write = {
         let ctx = ctx.clone();
         Rc::new(move |a: Option<Action>, how: How, picked: bool| {
+            let before = key_look(&ctx.state, k);
             ctx.commit(how, |e| {
                 let hold = e.key(k).and_then(|k| k.hold.clone());
                 match a {
@@ -265,10 +261,20 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) {
                     Some(a) if picked => e.drop_action(Slot::Key(k), a),
                     a => e.set_key_actions(k, a, hold),
                 }
-            })
+            });
+            // A new action (or app) can change the icon, colours and label: show them.
+            if how != How::Structure && key_look(&ctx.state, k) != before {
+                ctx.schedule_rebuild();
+            }
         })
     };
-    for w in slot_rows(ctx, tap.as_ref(), write_tap, "Choose what this key does") {
+    for w in slot_rows(
+        ctx,
+        &format!("key{k}/tap"),
+        tap.as_ref(),
+        write_tap,
+        "Choose what this key does",
+    ) {
         actions.add(&w);
     }
     content.append(&actions);
@@ -286,7 +292,13 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) {
             })
         })
     };
-    for w in slot_rows(ctx, hold.as_ref(), write_hold, "Nothing (tap action only)") {
+    for w in slot_rows(
+        ctx,
+        &format!("key{k}/hold"),
+        hold.as_ref(),
+        write_hold,
+        "Nothing (tap action only)",
+    ) {
         hold_group.add(&w);
     }
     content.append(&hold_group);
@@ -327,7 +339,10 @@ fn key_preview(ctx: &C, k: u8) -> gtk::Widget {
     let refresh = {
         let state = ctx.state.clone();
         move || {
-            let look = key_look(&state, k);
+            let mut look = key_look(&state, k);
+            if let Some(f) = state.preview.borrow().as_ref() {
+                ulanzi_core::edit::apply_field(&mut look, f);
+            }
             let tex = canvas::key_texture(&look, &canvas::profile_dir(&state));
             picture.set_paintable(tex.as_ref());
             let text = if look.label.visible {
@@ -340,27 +355,27 @@ fn key_preview(ctx: &C, k: u8) -> gtk::Widget {
         }
     };
     refresh();
-    ctx.on_refresh(refresh);
+    let refresh = Rc::new(refresh);
+    {
+        let refresh = refresh.clone();
+        ctx.on_refresh(move || refresh());
+    }
+    {
+        // Live previews (hovered colours); weak so a rebuilt inspector drops it.
+        let weak = Rc::downgrade(&refresh);
+        ctx.state.on(move |c| {
+            if c == Change::Preview
+                && let Some(r) = weak.upgrade()
+            {
+                r()
+            }
+        });
+    }
     frame.upcast()
 }
 
 // ---------------------------------------------------------------------------------------------
 // Appearance (one key or many)
-
-fn rgba(c: Color) -> gdk::RGBA {
-    let [r, g, b, a] = c.0;
-    gdk::RGBA::new(
-        r as f32 / 255.0,
-        g as f32 / 255.0,
-        b as f32 / 255.0,
-        a as f32 / 255.0,
-    )
-}
-
-fn color(c: &gdk::RGBA) -> Color {
-    let v = |f: f32| (f.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color([v(c.red()), v(c.green()), v(c.blue()), 255])
-}
 
 fn source_summary(s: &ImageSource) -> String {
     match s {
@@ -405,7 +420,7 @@ fn appearance_group(ctx: &C, keys: Vec<u8>) -> adw::PreferencesGroup {
     let state = ctx.state.clone();
     let group = adw::PreferencesGroup::builder().title("Appearance").build();
     let keys: Rc<Vec<u8>> = Rc::new(keys);
-    let (source, bg, fg, label, visible, scale, dynamic) = {
+    let (source, bg, fg, label, visible, scale, dynamic, pos) = {
         let e = state.editor.borrow();
         (
             e.shared_look(&keys, |l| l.source.clone()),
@@ -415,6 +430,7 @@ fn appearance_group(ctx: &C, keys: Vec<u8>) -> adw::PreferencesGroup {
             e.shared_look(&keys, |l| l.label.visible),
             e.shared_look(&keys, |l| (l.icon_scale * 100.0).round() as i32),
             e.shared_look(&keys, |l| l.dynamic),
+            e.shared_look(&keys, |l| l.label.position),
         )
     };
     let set = {
@@ -449,30 +465,35 @@ fn appearance_group(ctx: &C, keys: Vec<u8>) -> adw::PreferencesGroup {
     // Colours
     for (title, value, is_bg) in [("Background", bg, true), ("Icon and Text", fg, false)] {
         let row = adw::ActionRow::builder().title(title).build();
-        let button = gtk::ColorDialogButton::new(Some(gtk::ColorDialog::builder().with_alpha(false).build()));
-        button.set_valign(gtk::Align::Center);
-        match value {
-            Mixed::One(c) => button.set_rgba(&rgba(c)),
+        let field = move |c: Color| {
+            if is_bg {
+                Field::Background(c)
+            } else {
+                Field::Foreground(c)
+            }
+        };
+        let current = match value {
+            Mixed::One(c) => Some(c),
             _ => {
                 row.set_subtitle("Mixed");
-                button.set_rgba(&gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
-                button.add_css_class("mixed");
+                None
             }
-        }
-        let (set, r) = (set.clone(), row.clone());
-        button.connect_rgba_notify(move |b| {
-            r.set_subtitle("");
-            b.remove_css_class("mixed");
-            let c = color(&b.rgba());
-            set(
-                How::Set,
-                if is_bg {
-                    Field::Background(c)
-                } else {
-                    Field::Foreground(c)
-                },
-            );
-        });
+        };
+        let preview = {
+            let state = state.clone();
+            move |c: Option<Color>| {
+                *state.preview.borrow_mut() = c.map(field);
+                state.notify(Change::Preview);
+            }
+        };
+        let pick = {
+            let (set, r) = (set.clone(), row.clone());
+            move |c: Color| {
+                r.set_subtitle("");
+                set(How::Typing(if is_bg { "bg" } else { "fg" }), field(c));
+            }
+        };
+        let button = crate::ui::color_popover::color_button(current, preview, pick);
         row.add_suffix(&button);
         row.set_activatable_widget(Some(&button));
         group.add(&row);
@@ -548,6 +569,31 @@ fn appearance_group(ctx: &C, keys: Vec<u8>) -> adw::PreferencesGroup {
         });
     }
     group.add(&show);
+
+    let position = adw::ComboRow::builder()
+        .title("Label Position")
+        .model(&gtk::StringList::new(&["Default", "Top", "Middle", "Bottom"]))
+        .selected(match pos {
+            Mixed::One(Some(p)) => 1 + LabelPosition::ALL.iter().position(|x| *x == p).unwrap_or(0) as u32,
+            _ => 0,
+        })
+        .build();
+    position.set_subtitle(match pos {
+        Mixed::Mixed => "Mixed",
+        _ => "Default follows Preferences",
+    });
+    {
+        let set = set.clone();
+        position.connect_selected_notify(move |r| {
+            r.set_subtitle("Default follows Preferences");
+            let p = match r.selected() {
+                0 => None,
+                i => LabelPosition::ALL.get(i as usize - 1).copied(),
+            };
+            set(How::Set, Field::LabelPosition(p))
+        });
+    }
+    group.add(&position);
 
     let size = adw::SpinRow::with_range(30.0, 100.0, 5.0);
     size.set_title("Icon Size");
@@ -673,7 +719,13 @@ fn multi_view(ctx: &C, content: &gtk::Box, keys: Vec<u8>) {
 type Write = Rc<dyn Fn(Option<Action>, How, bool)>;
 
 /// The action card (chip, title, summary, Change / Remove) followed by the parameter rows.
-fn slot_rows(ctx: &C, action: Option<&Action>, write: Write, empty_hint: &str) -> Vec<gtk::Widget> {
+fn slot_rows(
+    ctx: &C,
+    path: &str,
+    action: Option<&Action>,
+    write: Write,
+    empty_hint: &str,
+) -> Vec<gtk::Widget> {
     let state = &ctx.state;
     let spec = action.and_then(catalog::spec_for);
     let card = adw::ActionRow::builder()
@@ -716,26 +768,37 @@ fn slot_rows(ctx: &C, action: Option<&Action>, write: Write, empty_hint: &str) -
                 write(Some(a), how, false);
             })
         };
-        rows.extend(action_editor::rows_for(state, a, on));
+        rows.extend(action_editor::rows_for(state, path, a, on));
     }
     rows
 }
 
 /// A collapsible slot (dial zones, screen tap/hold): title, summary, picker; parameters inside.
-fn slot_expander(ctx: &C, title: &str, action: Option<&Action>, write: Write) -> adw::ExpanderRow {
+fn slot_expander(
+    ctx: &C,
+    path: &str,
+    title: &str,
+    action: Option<&Action>,
+    write: Write,
+) -> adw::ExpanderRow {
     let state = &ctx.state;
     let exp = adw::ExpanderRow::builder()
         .title(title)
         .subtitle(action.map(catalog::describe).unwrap_or_else(|| "Nothing".into()))
         .build();
     exp.add_prefix(&action_editor::action_chip(state, action, 32));
+    state.remember_expanded(&exp, path);
     let picker = {
-        let write = write.clone();
+        let (write, state, path) = (write.clone(), state.clone(), path.to_string());
         action_editor::picker_button(
-            state,
+            &state.clone(),
             if action.is_some() { "Change" } else { "Choose" },
             true,
-            move |a| write(Some(a), How::Structure, true),
+            move |a| {
+                // Open the row so its settings are right there.
+                state.expanded.borrow_mut().insert(path.clone());
+                write(Some(a), How::Structure, true)
+            },
         )
     };
     exp.add_suffix(&picker);
@@ -752,7 +815,7 @@ fn slot_expander(ctx: &C, title: &str, action: Option<&Action>, write: Write) ->
                     write(Some(a), how, false);
                 })
             };
-            let rows = action_editor::rows_for(state, a, on);
+            let rows = action_editor::rows_for(state, path, a, on);
             exp.set_enable_expansion(true);
             for r in rows {
                 exp.add_row(&r);
@@ -787,7 +850,13 @@ fn dial_view(ctx: &C, content: &gtk::Box, d: u8) {
             let ctx = ctx.clone();
             Rc::new(move |a, how, _| ctx.commit(how, |e| e.set_dial(d, |dial| *pick(dial) = a)))
         };
-        group.add(&slot_expander(ctx, title, action, write));
+        group.add(&slot_expander(
+            ctx,
+            &format!("dial{d}/{title}"),
+            title,
+            action,
+            write,
+        ));
     }
     content.append(&group);
 }
@@ -808,7 +877,13 @@ fn small_view(ctx: &C, content: &gtk::Box, s: u8) {
         let ctx = ctx.clone();
         Rc::new(move |a, how, _| ctx.commit(how, |e| e.set_small_button(s, a)))
     };
-    for w in slot_rows(ctx, action.as_ref(), write, "Choose what this button does") {
+    for w in slot_rows(
+        ctx,
+        &format!("small{s}"),
+        action.as_ref(),
+        write,
+        "Choose what this button does",
+    ) {
         group.add(&w);
     }
     content.append(&group);
@@ -905,7 +980,13 @@ fn screen_view(ctx: &C, content: &gtk::Box) {
                         })
                     })
                 };
-                group.add(&slot_expander(ctx, title, action.as_ref(), write));
+                group.add(&slot_expander(
+                    ctx,
+                    &format!("screen/{title}"),
+                    title,
+                    action.as_ref(),
+                    write,
+                ));
             }
             content.append(&group);
         }
@@ -947,11 +1028,5 @@ mod tests {
                 ..
             }
         ));
-    }
-
-    #[test]
-    fn colors_convert() {
-        let c = Color::rgb(0x35, 0x84, 0xe4);
-        assert_eq!(color(&rgba(c)), c);
     }
 }
