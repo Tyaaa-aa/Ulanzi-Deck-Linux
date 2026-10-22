@@ -9,3 +9,8 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+zip.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

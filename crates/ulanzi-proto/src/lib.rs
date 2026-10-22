@@ -4,7 +4,11 @@
 
 mod commands;
 mod json;
+mod manifest;
 mod packet;
+mod zipper;
 
 pub use commands::*;
+pub use manifest::*;
 pub use packet::*;
+pub use zipper::*;
