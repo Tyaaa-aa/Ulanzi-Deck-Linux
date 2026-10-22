@@ -50,8 +50,12 @@ async fn main() -> ExitCode {
     // Take the bus name first so a second instance exits before touching anything.
     let conn = match zbus::connection::Builder::session()
         .and_then(|b| b.name(BUS_NAME))
-        .map(|b| b.allow_name_replacements(true).replace_existing_names(replace))
-    {
+        .map(|b| {
+            // A frozen media player must not stall the deck: every D-Bus call gets a time limit.
+            b.allow_name_replacements(true)
+                .replace_existing_names(replace)
+                .method_timeout(std::time::Duration::from_secs(2))
+        }) {
         Ok(b) => match b.build().await {
             Ok(c) => c,
             Err(zbus::Error::NameTaken) => {
@@ -77,6 +81,10 @@ async fn main() -> ExitCode {
     });
 
     let executor = Arc::new(Executor::new(Some(conn.clone())));
+    {
+        let ex = executor.clone();
+        tokio::task::spawn_blocking(move || ex.prepare_keyboard());
+    }
     let media = executor.media().cloned();
     let (tx, events) = spawn_deck(store.clone(), settings, executor);
 
@@ -138,10 +146,17 @@ fn first_run(store: &Store) {
     }
 }
 
-/// Watch for the deck appearing, disappearing or changing permissions, and (re)connect.
+/// Watch for the deck appearing, disappearing or changing permissions, and (re)connect. A connection
+/// that dies within a few seconds backs off (1 s, 2 s, 4 s ... 30 s) so a wedged deck does not cause a
+/// reconnect storm.
 async fn hotplug(tx: mpsc::Sender<DeckMsg>, mut events: broadcast::Receiver<DeckEvent>) {
+    const SHORT_LIVED: Duration = Duration::from_secs(5);
+    const MAX_BACKOFF: Duration = Duration::from_secs(30);
     let mut ticks = watch_dev("/dev".into());
     let mut connected = false;
+    let mut connected_at: Option<tokio::time::Instant> = None;
+    let mut failures: u32 = 0;
+    let mut retry_at = tokio::time::Instant::now();
     let mut last = DeviceState::Error {
         message: "starting".into(),
     };
@@ -150,12 +165,29 @@ async fn hotplug(tx: mpsc::Sender<DeckMsg>, mut events: broadcast::Receiver<Deck
             t = ticks.recv() => if t.is_none() { break },
             ev = events.recv() => match ev {
                 Ok(DeckEvent::State(DeviceState::Ready { .. })) => connected = true,
-                Ok(DeckEvent::State(_)) => connected = false,
-                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Ok(DeckEvent::State(_)) => {
+                    if connected {
+                        let short = connected_at.is_some_and(|t| t.elapsed() < SHORT_LIVED);
+                        failures = if short { failures + 1 } else { 0 };
+                        let wait = if failures == 0 {
+                            Duration::ZERO
+                        } else {
+                            Duration::from_secs(1 << failures.min(5)).min(MAX_BACKOFF)
+                        };
+                        if !wait.is_zero() {
+                            tracing::warn!("deck connection keeps dropping; retrying in {} s", wait.as_secs());
+                        }
+                        retry_at = tokio::time::Instant::now() + wait;
+                    }
+                    connected = false;
+                }
+                Ok(_) => continue,
+                // Missed events: assume nothing and re-probe.
+                Err(broadcast::error::RecvError::Lagged(_)) => connected = false,
                 Err(broadcast::error::RecvError::Closed) => break,
             },
         }
-        if connected {
+        if connected || tokio::time::Instant::now() < retry_at {
             continue;
         }
         let state = probe(
@@ -168,6 +200,7 @@ async fn hotplug(tx: mpsc::Sender<DeckMsg>, mut events: broadcast::Receiver<Deck
                 Ok(t) => {
                     tracing::info!("deck connected at {}", node.display());
                     connected = true;
+                    connected_at = Some(tokio::time::Instant::now());
                     last = DeviceState::Ready { node: node.clone() };
                     if tx.send(DeckMsg::DeviceUp(Box::new(t), node)).await.is_err() {
                         break;

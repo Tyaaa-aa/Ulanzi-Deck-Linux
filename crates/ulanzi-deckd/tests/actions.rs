@@ -190,3 +190,35 @@ async fn multi_runs_in_order_with_delays() {
     assert_eq!(ran[0].0, Action::Shortcut { keys: "a".into() });
     assert!(ran[1].1 - start >= Duration::from_millis(150));
 }
+
+#[test]
+fn launched_apps_get_their_own_scope_under_systemd() {
+    use ulanzi_deckd::actions::command::wrap_in_scope;
+    let argv = vec!["firefox".to_string(), "--new-window".to_string()];
+    assert_eq!(
+        wrap_in_scope(&argv, false, true),
+        argv,
+        "not running under systemd"
+    );
+    assert_eq!(
+        wrap_in_scope(&argv, true, false),
+        argv,
+        "no systemd-run available"
+    );
+    let wrapped = wrap_in_scope(&argv, true, true);
+    assert_eq!(&wrapped[..4], &["systemd-run", "--user", "--scope", "--quiet"]);
+    assert_eq!(&wrapped[wrapped.len() - 2..], &argv[..]);
+}
+
+#[tokio::test]
+async fn run_capture_times_out() {
+    use ulanzi_deckd::actions::command::run_capture_timeout;
+    let t = std::time::Instant::now();
+    let r = run_capture_timeout(
+        &["sleep".to_string(), "5".to_string()],
+        Duration::from_millis(200),
+    )
+    .await;
+    assert!(r.is_err());
+    assert!(t.elapsed() < Duration::from_secs(2));
+}

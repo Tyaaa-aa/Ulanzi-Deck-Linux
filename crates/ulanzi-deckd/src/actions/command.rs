@@ -17,8 +17,29 @@ pub fn which(name: &str) -> Option<PathBuf> {
     })
 }
 
-/// Start `argv` in its own process group with no stdio, and reap it in the background.
+/// Under systemd, run `argv` in its own transient scope so that restarting the service does not kill
+/// apps launched from the deck (they would otherwise live in the service's cgroup).
+pub fn wrap_in_scope(argv: &[String], under_systemd: bool, has_systemd_run: bool) -> Vec<String> {
+    if !(under_systemd && has_systemd_run) {
+        return argv.to_vec();
+    }
+    let mut out: Vec<String> = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    out.extend_from_slice(argv);
+    out
+}
+
+/// Start `argv` in its own process group (and, under systemd, its own scope) with no stdio, and reap
+/// it in the background.
 pub fn spawn_detached(argv: &[String]) -> Result<(), ActionError> {
+    let under_systemd = std::env::var_os("INVOCATION_ID").is_some();
+    let argv = wrap_in_scope(
+        argv,
+        under_systemd,
+        under_systemd && which("systemd-run").is_some(),
+    );
     let (prog, args) = argv
         .split_first()
         .ok_or_else(|| ActionError::Failed("nothing to run".into()))?;
@@ -59,17 +80,33 @@ pub fn spawn_shell(cmd: &str, in_terminal: bool) -> Result<(), ActionError> {
     spawn_detached(&argv)
 }
 
+/// Time limit for helper tools (wpctl, pactl) so a hung one cannot stall an action queue.
+const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Run `argv` to completion and return stdout; a non-zero exit becomes an error with stderr.
 pub async fn run_capture(argv: &[String]) -> Result<String, ActionError> {
+    run_capture_timeout(argv, TOOL_TIMEOUT).await
+}
+
+/// [`run_capture`] with an explicit time limit; the process is killed when it runs out.
+pub async fn run_capture_timeout(argv: &[String], limit: std::time::Duration) -> Result<String, ActionError> {
     let (prog, args) = argv
         .split_first()
         .ok_or_else(|| ActionError::Failed("nothing to run".into()))?;
-    let out = Command::new(prog)
+    let child = Command::new(prog)
         .args(args)
         .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| ActionError::Unavailable(format!("could not run {prog}: {e}")))?;
+        .kill_on_drop(true)
+        .output();
+    let out = match tokio::time::timeout(limit, child).await {
+        Ok(r) => r.map_err(|e| ActionError::Unavailable(format!("could not run {prog}: {e}")))?,
+        Err(_) => {
+            return Err(ActionError::Failed(format!(
+                "{prog} did not finish within {} s",
+                limit.as_secs_f32()
+            )));
+        }
+    };
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {

@@ -57,6 +57,25 @@ impl Executor {
         }
     }
 
+    /// Create the virtual keyboard now. The compositor needs a moment to pick up a new input
+    /// device, so creating it on the first shortcut would lose that shortcut. Blocking; call from
+    /// `spawn_blocking`.
+    pub fn prepare_keyboard(&self) {
+        let Ok(mut guard) = self.keyboard.lock() else {
+            return;
+        };
+        if guard.is_none() {
+            match VirtualKeyboard::new() {
+                Ok(kb) => *guard = Some(kb),
+                Err(e) => tracing::warn!("{e}"),
+            }
+        }
+    }
+
+    pub fn keyboard_handle(&self) -> Arc<Mutex<Option<VirtualKeyboard>>> {
+        self.keyboard.clone()
+    }
+
     pub fn media(&self) -> Option<&MediaClient> {
         self.media.as_ref()
     }

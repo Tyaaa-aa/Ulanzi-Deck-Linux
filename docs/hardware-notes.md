@@ -31,7 +31,8 @@ The deck sends **no input at all while locked**. It locks itself after ~2 minute
 
 ## Writes
 
-Each 1024-byte packet must be written as **1025 bytes with a leading report ID 0** **[homedeck]**.
+Each 1024-byte packet must be written as **1025 bytes with a leading report ID 0** **[homedeck]**
+(`transport/hidraw.rs`, covered by `writes_report_id_then_the_packet`).
 Without it the kernel strips the first byte of any continuation chunk that starts with `0x00`, which is
 what the old "padding file" workaround was dodging. With the prefix the workaround is gone.
 
@@ -50,13 +51,19 @@ what the old "padding file" workaround was dodging. With the prefix the workarou
 
 ## Uploads (U3, U5)
 
-* The deck caches images **by file name**: re-uploading under the same name does not redraw. Every
-  image gets a content-hash name.
+* The deck caches images **by file name**: re-uploading under the same name does not redraw. Image
+  names carry a per-process random seed that is bumped on every connection, so names are never reused
+  across connections or daemon restarts; within a connection they are content hashes.
 * **Partial update (0x000d) works**: a ZIP with only the changed keys updates just those keys.
 * **Keys left out of an upload keep their image** (U5).
-* **Back-to-back uploads break the screen.** 10-30 full uploads 30-130 ms apart left all keys black.
-  The daemon spaces uploads at least 1 s apart, folds intermediate states into the latest, and uses
-  partial updates for live changes.
+* An early round of tests blamed partial updates and fast uploads for blank keys and reboots. Those
+  tests ran with a transport bug: packets were written **without the report ID 0 prefix**, so chunks
+  starting with `0x00` lost a byte. With the prefix (re-probed 2026-10-22 with `ulanzictl probe crash`),
+  92 KB partial updates and 177 KB full pages **back to back** all survived, and the deck never
+  rebooted.
+* The daemon still spaces uploads 0.5 s apart (folding intermediate states into the latest), waits for
+  the device-info reply before the first upload after connecting, and sends only the changed keys for
+  changes on the same page.
 
 ## Other commands **[homedeck]**
 

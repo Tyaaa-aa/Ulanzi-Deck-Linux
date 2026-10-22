@@ -82,12 +82,19 @@ impl std::str::FromStr for PageTarget {
     }
 }
 
-/// Replace whatever follows "password" on a log line.
+/// Replace whatever follows "password" (any case) on a log line.
 fn redact(log: &str) -> String {
     log.lines()
-        .map(|l| match l.to_lowercase().find("password") {
-            Some(i) => format!("{}password <redacted>", &l[..i]),
-            None => l.to_string(),
+        .map(|l| {
+            match l
+                .as_bytes()
+                .windows(8)
+                .position(|w| w.eq_ignore_ascii_case(b"password"))
+            {
+                // The match starts with ASCII 'p', so the byte index is a char boundary.
+                Some(i) => format!("{}password <redacted>", &l[..i]),
+                None => l.to_string(),
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -371,6 +378,11 @@ mod tests {
         let r = redact(log);
         assert!(!r.contains("hunter2") && !r.contains("secret"), "{r}");
         assert!(r.contains("INFO connected"));
+        let tricky = redact("İİİ obs Password=hunter2");
+        assert!(
+            tricky.starts_with("İİİ obs ") && !tricky.contains("hunter2"),
+            "{tricky}"
+        );
     }
 
     #[test]

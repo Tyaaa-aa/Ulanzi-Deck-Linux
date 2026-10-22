@@ -11,6 +11,8 @@ ExecStart=%h/.local/bin/ulanzi-deckd
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
+# Exit code 3 means another instance already runs; retrying would not help.
+RestartPreventExitStatus=3
 
 [Install]
 WantedBy=graphical-session.target

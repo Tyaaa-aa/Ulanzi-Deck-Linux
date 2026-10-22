@@ -92,7 +92,8 @@ impl Store {
 
     pub fn save_settings(&self, s: &Settings) -> Result<(), CoreError> {
         let path = self.root.join(SETTINGS_FILE);
-        write_atomic(&path, to_toml(s)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
+        // Private: it can hold the OBS password.
+        write_atomic_mode(&path, to_toml(s)?.as_bytes(), 0o600).map_err(|e| CoreError::io(&path, e))
     }
 
     pub fn load_profile(&self, id: Uuid) -> Result<Profile, CoreError> {
@@ -191,6 +192,12 @@ fn parse_versioned<T: DeserializeOwned>(path: &Path, text: &str) -> Result<T, Co
 
 /// Write via a temp file in the same directory, fsync, then rename over the target.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic_mode(path, bytes, 0o644)
+}
+
+/// [`write_atomic`] creating the file with permission bits `mode`.
+pub fn write_atomic_mode(path: &Path, bytes: &[u8], mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
     let name = path
@@ -199,7 +206,12 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .unwrap_or_default();
     let tmp = dir.join(format!(".{name}.tmp-{}", std::process::id()));
     let result = (|| {
-        let mut f = File::create(&tmp)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         fs::rename(&tmp, path)?;

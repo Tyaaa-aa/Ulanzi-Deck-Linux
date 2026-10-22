@@ -22,14 +22,36 @@ pub struct DynamicState {
 }
 
 /// Rendered key images by look hash, plus which warnings were already logged.
-#[derive(Default)]
 pub struct RenderCache {
     images: HashMap<u64, Option<Vec<u8>>>,
     warned: HashSet<u64>,
-    /// Bumped for every full upload and put in every image name. The deck caches images by file
-    /// name and can lose the pictures while keeping the names (seen after a reset), so a full upload
-    /// must never reuse a name it may have seen.
+    /// Part of every image name. Seeded randomly per process and bumped on every (re)connect: the
+    /// deck caches images by file name, so a new connection or daemon must never reuse names from an
+    /// earlier one. Within a connection names are stable, so unchanged keys are not re-sent.
     pub generation: u32,
+}
+
+impl RenderCache {
+    pub fn new() -> RenderCache {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
+            .unwrap_or(0);
+        let seed = nanos ^ std::process::id().rotate_left(16);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        RenderCache {
+            images: HashMap::new(),
+            warned: HashSet::new(),
+            generation: seed.wrapping_add(n.wrapping_mul(0x9e37_79b9)),
+        }
+    }
+}
+
+impl Default for RenderCache {
+    fn default() -> Self {
+        RenderCache::new()
+    }
 }
 
 /// A page ready to upload, with a hash for "did anything change".
@@ -92,7 +114,7 @@ pub fn build_page(
                 })
             });
             if let Some(png) = png {
-                let name = format!("k{i}_{lh:016x}_g{}.png", cache.generation);
+                let name = format!("k{i}_{lh:016x}_{:08x}.png", cache.generation);
                 entry.icon = Some(format!("icons/{name}"));
                 images.push(ButtonImage {
                     name,
@@ -114,7 +136,7 @@ pub fn build_page(
     {
         let mut sh = DefaultHasher::new();
         png.hash(&mut sh);
-        let name = format!("screen_{:016x}_g{}.png", sh.finish(), cache.generation);
+        let name = format!("screen_{:016x}_{:08x}.png", sh.finish(), cache.generation);
         screen.icon = Some(format!("icons/{name}"));
         name.hash(&mut h);
         images.push(ButtonImage {

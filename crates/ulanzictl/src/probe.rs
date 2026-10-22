@@ -210,6 +210,27 @@ fn zip_for(entries: &BTreeMap<u8, ButtonEntry>, images: &[ButtonImage]) -> Vec<u
     }
 }
 
+fn partial_packets(keys: &[(u8, Vec<u8>)]) -> Vec<ulanzi_proto::Packet> {
+    let mut entries = BTreeMap::new();
+    let mut images = Vec::new();
+    for (i, data) in keys {
+        let name = format!("q{i}_{}.png", unique());
+        entries.insert(
+            *i,
+            ButtonEntry {
+                state: 0,
+                text: None,
+                icon: Some(format!("icons/{name}")),
+            },
+        );
+        images.push(ButtonImage {
+            name,
+            png: data.clone(),
+        });
+    }
+    file_packets(Command::PartialUpdate, &zip_for(&entries, &images))
+}
+
 fn unique() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -439,14 +460,18 @@ async fn crash(dev: &mut Hidraw) -> Result<(), String> {
     };
     let mut steps: Vec<(String, Vec<ulanzi_proto::Packet>, u64)> =
         vec![("realistic full page".into(), page(&page_keys(0)), 2)];
-    for n in 1..=5u8 {
+    for n in 0..6u32 {
+        let p = partial_packets(&[(6, noise(110, 110, 500 + n)), (13, noise(150, 100, 600 + n))]);
+        steps.push((format!("partial #{n}, back to back"), p, 0));
+    }
+    for n in 0..4u8 {
         steps.push((
-            format!("realistic full page #{n}, 2 s later"),
-            page(&page_keys(n * 7)),
-            2,
+            format!("full page #{n}, back to back"),
+            page(&page_keys(n * 13)),
+            0,
         ));
     }
-    steps.push(("last page, watched for 8 s".into(), page(&page_keys(90)), 8));
+    steps.push(("final page, watched 8 s".into(), page(&page_keys(77)), 8));
     for (name, packets, wait_after) in steps {
         let kb = packets.len();
         let ok = survives(dev, &packets, wait_after).await;

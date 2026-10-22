@@ -245,3 +245,16 @@ fn unknown_field_rejected() {
     std::fs::write(&path, text).expect("write");
     assert!(s.load_profile(p.id).is_err());
 }
+
+#[test]
+fn settings_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_d, s) = store();
+    s.save_settings(&Settings::default()).expect("save");
+    let mode = std::fs::metadata(s.root().join("settings.toml"))
+        .expect("meta")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "settings.toml can hold the OBS password");
+}

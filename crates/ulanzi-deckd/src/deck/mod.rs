@@ -16,9 +16,9 @@ use ulanzi_core::model::{Action, BrightnessOp, Model, Profile, ScreenConfig, Set
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_proto::{
-    ButtonEntry, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow, brightness,
-    button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time, small_window,
-    unlock,
+    ButtonEntry, ButtonImage, Command, Control, DeviceReport, InputEvent, InputKind, ScreenMode, SmallWindow,
+    brightness, button_zip, file_packets, label_style, parse_report, request_device_info, sleep_time,
+    small_window, unlock,
 };
 use uuid::Uuid;
 
@@ -35,14 +35,13 @@ use crate::transport::{DeviceState, Transport};
 const TICK: Duration = Duration::from_secs(1);
 /// Re-send unlock this often, in case the deck locked anyway.
 const UNLOCK_EVERY: Duration = Duration::from_secs(30);
-/// Minimum time between page uploads. Measured on hardware: full pages with photos every 2 s are
-/// fine; uploads arriving back to back blank the deck.
-const MIN_UPLOAD_GAP: Duration = Duration::from_secs(2);
+/// Minimum time between uploads. With correct framing (report ID 0) the deck took back-to-back
+/// full and partial uploads on hardware; the gap is a safety margin that also folds rapid changes.
+const MIN_UPLOAD_GAP: Duration = Duration::from_millis(500);
 /// How long to wait for the device-info reply (the deck's "ready") before uploading anyway.
 const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Time the deck needs after an upload before it can take another. Size made no measurable
-/// difference on hardware, so it is flat.
+/// Time to wait after an upload before the next one (flat; size made no difference on hardware).
 pub fn upload_cooldown(_bytes: usize) -> Duration {
     MIN_UPLOAD_GAP
 }
@@ -331,6 +330,8 @@ impl Deck {
     /// label style, device info request, brightness, sleep time, page, wide screen.
     async fn configure(&mut self) {
         self.shown = None;
+        // New connection, new image names: the deck must not match them against anything it cached.
+        self.cache.generation = self.cache.generation.wrapping_add(1);
         self.last_unlock = Instant::now();
         if !self.send(&[unlock()]).await {
             return;
@@ -440,26 +441,39 @@ impl Deck {
             .insert("page".into(), (self.nav.page + 1).to_string());
         dynamic.vars.insert("profile".into(), profile.name.clone());
         let here = (profile.id, self.nav.page);
-        // Built with the current generation, so an unchanged page compares equal to what is shown.
         let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
-        let unchanged = self
-            .shown
-            .as_ref()
-            .is_some_and(|s| s.at == here && s.entries == built.entries);
-        if !force && unchanged {
-            return;
-        }
-        // Always the whole page: partial updates (0x0d) crashed the deck after pages with photos.
-        // A fresh generation gives every image a name the deck has not cached.
-        self.cache.generation = self.cache.generation.wrapping_add(1);
-        let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
-        tracing::info!(
-            "upload: page {}, {} images, generation {}",
-            self.nav.page + 1,
-            built.images.len(),
-            self.cache.generation
-        );
-        let packets = file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images));
+        let same_page = self.shown.as_ref().filter(|s| !force && s.at == here);
+        let packets = match same_page {
+            // Same page: send only the keys that changed (what Ulanzi Studio does).
+            Some(shown) => {
+                let changed: BTreeMap<u8, ButtonEntry> = built
+                    .entries
+                    .iter()
+                    .filter(|(i, e)| shown.entries.get(i) != Some(e))
+                    .map(|(i, e)| (*i, e.clone()))
+                    .collect();
+                if changed.is_empty() {
+                    return;
+                }
+                let names: Vec<&str> = changed.values().filter_map(|e| e.icon.as_deref()).collect();
+                let images: Vec<ButtonImage> = built
+                    .images
+                    .iter()
+                    .filter(|img| names.iter().any(|n| n.ends_with(&img.name)))
+                    .cloned()
+                    .collect();
+                tracing::info!("partial upload: keys {:?}", changed.keys().collect::<Vec<_>>());
+                file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
+            }
+            None => {
+                tracing::info!(
+                    "full upload: page {}, {} images",
+                    self.nav.page + 1,
+                    built.images.len()
+                );
+                file_packets(Command::SetButtons, &button_zip(&built.entries, &built.images))
+            }
+        };
         let bytes = packets.len() * ulanzi_proto::PACKET_SIZE;
         if self.send(&packets).await {
             let done = Instant::now();
