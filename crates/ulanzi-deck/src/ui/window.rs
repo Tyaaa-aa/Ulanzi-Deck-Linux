@@ -100,6 +100,8 @@ fn banner(state: &State) -> adw::Banner {
                     },
                     |_| {},
                 );
+            } else if let Some(root) = b.root() {
+                crate::ui::onboarding::open(&state, &root, Some("permissions"));
             }
         });
     }
@@ -112,9 +114,11 @@ fn banner(state: &State) -> adw::Banner {
             let s = state.status.borrow().clone();
             let (show, title, button) = match &s {
                 Status::ServiceDown => (true, "The Ulanzi Deck service is not running", Some("Start")),
-                Status::Device { state: st, .. } if st == "no_permission" => {
-                    (true, "This computer needs permission to use the deck", None)
-                }
+                Status::Device { state: st, .. } if st == "no_permission" => (
+                    true,
+                    "This computer needs permission to use the deck",
+                    Some("Fix…"),
+                ),
                 Status::Device { state: st, .. } if st == "busy" => {
                     (true, "Another program is using the deck", None)
                 }

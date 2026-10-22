@@ -75,6 +75,16 @@ fn main() -> glib::ExitCode {
             tracing_subscriber::EnvFilter::try_from_env("ULANZI_LOG").unwrap_or_else(|_| "warn".into()),
         )
         .init();
+    // The privileged helper behind onboarding's "Grant Access…" (run through pkexec).
+    if std::env::args().nth(1).as_deref() == Some("--install-rules") {
+        return match ui::onboarding::install_rules() {
+            Ok(()) => glib::ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                glib::ExitCode::FAILURE
+            }
+        };
+    }
     let shot = parse_args();
     let flags = if shot.is_some() {
         gio::ApplicationFlags::NON_UNIQUE
@@ -111,8 +121,37 @@ fn main() -> glib::ExitCode {
         let app = app.clone();
         let state2 = state.clone();
         let shot = shot.clone();
+        {
+            let onboarding = gio::SimpleAction::new("onboarding", None);
+            let (state, window) = (state.clone(), window.clone());
+            onboarding.connect_activate(move |_, _| ui::onboarding::open(&state, &window, None));
+            app.add_action(&onboarding);
+        }
+        {
+            let about = gio::SimpleAction::new("about", None);
+            let window = window.clone();
+            about.connect_activate(move |_, _| {
+                adw::AboutDialog::builder()
+                    .application_name("Ulanzi Deck")
+                    .application_icon(APP_ID)
+                    .version(env!("CARGO_PKG_VERSION"))
+                    .developer_name("Tyaaa-aa")
+                    .license_type(gtk::License::MitX11)
+                    .website("https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux")
+                    .issue_url("https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues")
+                    .comments("Configure the Ulanzi D200 and D200X stream decks on Linux.")
+                    .build()
+                    .present(Some(&window));
+            });
+            app.add_action(&about);
+        }
         ui::window::connect(&state, move || {
-            let Some(shot) = shot else { return };
+            let Some(shot) = shot else {
+                if ui::onboarding::should_show() {
+                    ui::onboarding::open(&state2, &window, None);
+                }
+                return;
+            };
             if let Some(sel) = &shot.select {
                 state2.select(|s| match sel.split_once(':') {
                     Some(("key", n)) => n
@@ -126,6 +165,9 @@ fn main() -> glib::ExitCode {
             }
             match shot.open.as_deref() {
                 Some("library") => library_toggle.set_active(true),
+                Some(o) if o.starts_with("onboarding") => {
+                    ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
+                }
                 Some(o) if o.starts_with("picker") => {
                     ui::icon_picker::open_at(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }

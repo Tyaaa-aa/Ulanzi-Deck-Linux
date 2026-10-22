@@ -271,6 +271,10 @@ impl Editor {
         });
     }
 
+    pub fn set_model(&mut self, model: Model) {
+        self.edit(|p, _| p.model = model);
+    }
+
     pub fn set_screen(&mut self, screen: ScreenConfig) {
         self.edit(|p, _| p.screen = screen);
     }

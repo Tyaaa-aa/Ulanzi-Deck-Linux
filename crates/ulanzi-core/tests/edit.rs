@@ -251,3 +251,18 @@ fn ending_a_merge_starts_a_new_step() {
     assert!(e.undo());
     assert_eq!(key(&e, 0).look.label.text, "A");
 }
+
+#[test]
+fn set_model_is_undoable() {
+    let mut e = editor_with_keys();
+    let before = e.profile().model;
+    let other = if before == Model::D200 {
+        Model::D200X
+    } else {
+        Model::D200
+    };
+    e.set_model(other);
+    assert_eq!(e.profile().model, other);
+    assert!(e.undo());
+    assert_eq!(e.profile().model, before);
+}
