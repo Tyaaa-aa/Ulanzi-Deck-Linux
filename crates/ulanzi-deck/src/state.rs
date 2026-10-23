@@ -84,6 +84,8 @@ pub struct AppState {
     /// Expandable rows the user opened, by path, so rebuilding the inspector keeps them open.
     pub expanded: RefCell<std::collections::HashSet<String>>,
     pub obs: RefCell<ObsInfo>,
+    /// What the service sees playing (for the Now Playing preview); `None` when nothing plays.
+    pub now_playing: RefCell<Option<ulanzi_core::render::screen::MediaData>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -121,6 +123,7 @@ impl AppState {
             rules: RefCell::new(std::collections::HashMap::new()),
             expanded: RefCell::new(std::collections::HashSet::new()),
             obs: RefCell::default(),
+            now_playing: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
         })
     }

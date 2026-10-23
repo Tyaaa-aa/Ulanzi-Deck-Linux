@@ -169,18 +169,106 @@ pub fn parse_wpctl_volume(out: &str) -> Option<(u8, bool)> {
 }
 
 /// The current level of the default output (or the microphone), for the volume overlay.
-pub async fn current_level(input: bool) -> Option<(u8, bool)> {
-    let target = if input {
-        "@DEFAULT_AUDIO_SOURCE@"
-    } else {
-        "@DEFAULT_AUDIO_SINK@"
-    };
-    let out = tokio::process::Command::new("wpctl")
-        .args(["get-volume", target])
-        .output()
-        .await
-        .ok()?;
-    parse_wpctl_volume(&String::from_utf8_lossy(&out.stdout))
+/// The average of a pactl `volume` object's channels, in percent.
+fn channel_percent(v: &serde_json::Value) -> Option<u8> {
+    let ch: Vec<u32> = v
+        .as_object()?
+        .values()
+        .filter_map(|c| {
+            c.get("value_percent")?
+                .as_str()?
+                .trim_end_matches('%')
+                .trim()
+                .parse()
+                .ok()
+        })
+        .collect();
+    (!ch.is_empty()).then(|| (ch.iter().sum::<u32>() / ch.len() as u32).min(255) as u8)
+}
+
+/// Level, mute and description of the output `name`, from `pactl -f json list sinks`.
+pub fn sink_level(json: &str, name: &str) -> Option<(u8, bool, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let s = v
+        .as_array()?
+        .iter()
+        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some(name))?;
+    Some((
+        channel_percent(s.get("volume")?)?,
+        s.get("mute").and_then(|m| m.as_bool()).unwrap_or(false),
+        s.get("description")
+            .and_then(|d| d.as_str())
+            .unwrap_or(name)
+            .to_string(),
+    ))
+}
+
+/// Level, mute and name of the first sound stream of app `name`, from
+/// `pactl -f json list sink-inputs` (matched like the volume action matches).
+pub fn app_level(json: &str, name: &str) -> Option<(u8, bool, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let needle = name.to_lowercase();
+    let it = v.as_array()?.iter().find(|it| {
+        let props = it.get("properties");
+        ["application.name", "application.process.binary", "media.name"]
+            .iter()
+            .any(|k| {
+                props
+                    .and_then(|p| p.get(*k))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| v.to_lowercase().contains(&needle))
+            })
+    })?;
+    let app = it
+        .get("properties")
+        .and_then(|p| p.get("application.name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(name);
+    // "VLC media player (LibVLC 3.0.24)" → "VLC media player"
+    let app = app.split(" (").next().unwrap_or(app).trim().to_string();
+    Some((
+        channel_percent(it.get("volume")?)?,
+        it.get("mute").and_then(|m| m.as_bool()).unwrap_or(false),
+        app,
+    ))
+}
+
+/// The level after a volume action, for the overlay: (percent, muted, what it is).
+/// The default output has no name; the others are named on the overlay.
+pub async fn current_level(target: &AudioTarget) -> Option<(u8, bool, String)> {
+    match target {
+        AudioTarget::Default | AudioTarget::Input => {
+            let node = if *target == AudioTarget::Input {
+                "@DEFAULT_AUDIO_SOURCE@"
+            } else {
+                "@DEFAULT_AUDIO_SINK@"
+            };
+            let out = tokio::process::Command::new("wpctl")
+                .args(["get-volume", node])
+                .output()
+                .await
+                .ok()?;
+            let (p, m) = parse_wpctl_volume(&String::from_utf8_lossy(&out.stdout))?;
+            let label = if *target == AudioTarget::Input {
+                "Microphone"
+            } else {
+                ""
+            };
+            Some((p, m, label.to_string()))
+        }
+        AudioTarget::Device { name } => {
+            let json = run_capture(&s(&["pactl", "-f", "json", "list", "sinks"]))
+                .await
+                .ok()?;
+            sink_level(&json, name)
+        }
+        AudioTarget::App { name } => {
+            let json = run_capture(&s(&["pactl", "-f", "json", "list", "sink-inputs"]))
+                .await
+                .ok()?;
+            app_level(&json, name)
+        }
+    }
 }
 
 pub fn play_sound_argv(path: &str, device: Option<&str>) -> Vec<String> {

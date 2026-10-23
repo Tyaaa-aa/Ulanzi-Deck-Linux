@@ -1019,6 +1019,7 @@ pub fn volume_overlay(
     base: Option<&[u8]>,
     percent: u8,
     muted: bool,
+    name: &str,
     accent: Color,
     fonts: &mut Fonts,
 ) -> Vec<u8> {
@@ -1054,7 +1055,13 @@ pub fn volume_overlay(
         if muted { dim() } else { WHITE },
     );
     let (bx, bw) = (136.0, WF - 136.0 - 120.0);
-    rounded(&mut pix, bx, 92.0, bw, 12.0, 6.0, &paint(Color::WHITE, 0.15));
+    // Which volume this is (an app, a device, the microphone); nothing for the default output.
+    let by = if name.is_empty() { 92.0 } else { 108.0 };
+    if !name.is_empty() {
+        let size = fit(fonts, name, 20.0, bw, false);
+        text(fonts, &mut pix, name, (bx, 66.0), size, false, dim());
+    }
+    rounded(&mut pix, bx, by, bw, 12.0, 6.0, &paint(Color::WHITE, 0.15));
     let fill = if muted {
         0.0
     } else {
@@ -1063,7 +1070,7 @@ pub fn volume_overlay(
     rounded(
         &mut pix,
         bx,
-        92.0,
+        by,
         (bw * fill).max(0.0),
         12.0,
         6.0,

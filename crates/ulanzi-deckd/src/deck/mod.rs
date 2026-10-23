@@ -143,15 +143,18 @@ pub fn start_deck(
 
 /// Reads the volume after volume actions, off the action queue, one read at a time: a burst of
 /// dial steps gives one read now and one more after the burst.
+/// A volume level for the overlay: percent, muted, and what it belongs to (empty: the default output).
+type Level = (u8, bool, String);
+
 #[derive(Clone)]
 struct LevelReader {
-    tx: mpsc::UnboundedSender<(u8, bool)>,
+    tx: mpsc::UnboundedSender<Level>,
     busy: Arc<std::sync::atomic::AtomicBool>,
     again: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl LevelReader {
-    fn new(tx: mpsc::UnboundedSender<(u8, bool)>) -> LevelReader {
+    fn new(tx: mpsc::UnboundedSender<Level>) -> LevelReader {
         LevelReader {
             tx,
             busy: Arc::default(),
@@ -159,7 +162,7 @@ impl LevelReader {
         }
     }
 
-    fn request(&self, input: bool) {
+    fn request(&self, target: AudioTarget) {
         use std::sync::atomic::Ordering::SeqCst;
         if self.busy.swap(true, SeqCst) {
             self.again.store(true, SeqCst);
@@ -169,7 +172,7 @@ impl LevelReader {
         tokio::spawn(async move {
             loop {
                 me.again.store(false, SeqCst);
-                if let Some(level) = crate::actions::audio::current_level(input).await {
+                if let Some(level) = crate::actions::audio::current_level(&target).await {
                     let _ = me.tx.send(level);
                 }
                 if !me.again.load(SeqCst) {
@@ -219,7 +222,7 @@ struct Deck {
     screen_hash: Option<u64>,
     /// Volume levels read after volume actions, for the overlay.
     level_tx: LevelReader,
-    level_rx: Option<mpsc::UnboundedReceiver<(u8, bool)>>,
+    level_rx: Option<mpsc::UnboundedReceiver<Level>>,
 }
 
 impl Deck {
@@ -339,8 +342,10 @@ impl Deck {
                 } => self.push_page(false).await,
                 _ = tick.tick() => self.on_tick().await,
                 _ = wake.notified() => self.refresh_screen().await,
-                Some((pct, muted)) = levels.recv() => {
-                    self.screen.show_overlay(pct, muted, Instant::now());
+                Some((pct, muted, label)) = levels.recv() => {
+                    if self.settings.volume_overlay {
+                        self.screen.show_overlay(pct, muted, label, Instant::now());
+                    }
                     self.refresh_screen().await;
                 },
             }
@@ -827,19 +832,15 @@ impl Deck {
             let name = c.as_str();
             tokio::spawn(async move {
                 while let Some(a) = rx.recv().await {
-                    let input = match &a {
-                        Action::Volume { target, .. } => match target {
-                            AudioTarget::Default => Some(false),
-                            AudioTarget::Input => Some(true),
-                            _ => None,
-                        },
+                    let target = match &a {
+                        Action::Volume { target, .. } => Some(target.clone()),
                         _ => None,
                     };
                     let result = runner.run(&a).await;
                     if result.is_ok()
-                        && let Some(input) = input
+                        && let Some(target) = target
                     {
-                        levels.request(input);
+                        levels.request(target);
                     }
                     if let Err(e) = result {
                         tracing::warn!("{name}: {e}");

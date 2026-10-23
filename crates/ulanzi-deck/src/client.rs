@@ -374,6 +374,20 @@ impl Client {
         Ok(self.inner.proxy.call("FocusStatus", &()).await?)
     }
 
+    /// What the service sees playing, for the Now Playing preview.
+    pub async fn now_playing(&self) -> Result<Option<ulanzi_core::render::screen::MediaData>> {
+        let (any, title, artist, art, pos, len, playing): (bool, String, String, String, u32, u32, bool) =
+            self.inner.proxy.call("NowPlaying", &()).await?;
+        Ok(any.then(|| ulanzi_core::render::screen::MediaData {
+            title,
+            artist,
+            art: (!art.is_empty()).then(|| art.into()),
+            position_s: (len > 0).then_some(pos),
+            length_s: (len > 0).then_some(len),
+            playing,
+        }))
+    }
+
     /// The OBS connection: (state id, title, detail).
     pub async fn obs_status(&self) -> Result<(String, String, String)> {
         Ok(self.inner.proxy.call("ObsStatus", &()).await?)

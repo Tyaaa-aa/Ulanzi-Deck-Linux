@@ -42,7 +42,7 @@ pub struct ScreenRuntime {
     fonts: Option<Fonts>,
     /// The widget drawn last (for the screen's default tap).
     shown: Option<Widget>,
-    overlay: Option<(u8, bool, Instant)>,
+    overlay: Option<(u8, bool, String, Instant)>,
     /// The last widget picture, for the overlay to lie on.
     base: Option<Vec<u8>>,
 }
@@ -77,12 +77,12 @@ impl ScreenRuntime {
 
     /// The overlay is up.
     pub fn overlay_active(&self, now: Instant) -> bool {
-        self.overlay.is_some_and(|(_, _, until)| now < until)
+        self.overlay.as_ref().is_some_and(|(_, _, _, until)| now < *until)
     }
 
     /// Show (or update) the volume overlay.
-    pub fn show_overlay(&mut self, percent: u8, muted: bool, now: Instant) {
-        self.overlay = Some((percent, muted, now + OVERLAY_FOR));
+    pub fn show_overlay(&mut self, percent: u8, muted: bool, label: String, now: Instant) {
+        self.overlay = Some((percent, muted, label, now + OVERLAY_FOR));
     }
 
     /// The widget drawn last.
@@ -163,13 +163,13 @@ impl ScreenRuntime {
             }
         };
         self.base = base.clone();
-        match self.overlay {
-            Some((pct, muted, until)) if now < until => {
+        match self.overlay.clone() {
+            Some((pct, muted, label, until)) if now < until => {
                 let accent = style
                     .map(|s| s.accent)
                     .unwrap_or_else(ulanzi_core::model::default_accent);
                 let fonts = self.fonts.get_or_insert_with(Fonts::system);
-                Some(volume_overlay(base.as_deref(), pct, muted, accent, fonts))
+                Some(volume_overlay(base.as_deref(), pct, muted, &label, accent, fonts))
             }
             _ => {
                 self.overlay = None;
@@ -319,8 +319,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let t0 = Instant::now();
         assert!(rt.picture(&p, &dir, &DynamicState::default(), t0).is_none());
-        rt.show_overlay(40, false, t0);
-        rt.show_overlay(45, false, t0 + Duration::from_millis(1000));
+        rt.show_overlay(40, false, String::new(), t0);
+        rt.show_overlay(45, false, "Spotify".into(), t0 + Duration::from_millis(1000));
         assert!(rt.overlay_active(t0 + Duration::from_millis(2000)));
         assert!(
             rt.picture(

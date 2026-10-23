@@ -112,6 +112,9 @@ fn download(url: &str, to: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The track the sampler saw last, for the app's preview (`NowPlaying` on D-Bus).
+pub static LAST_MEDIA: std::sync::Mutex<Option<MediaData>> = std::sync::Mutex::new(None);
+
 /// How many samples the System widget's graphs keep (one a second).
 pub const HISTORY: usize = 60;
 
@@ -205,6 +208,9 @@ impl Sampler {
             playing: m.status == PlaybackStatus::Playing,
         });
 
+        if let Ok(mut m) = LAST_MEDIA.lock() {
+            *m = media_data.clone();
+        }
         DynamicState {
             vars,
             playing: media.as_ref().map(|m| m.status == PlaybackStatus::Playing),

@@ -334,3 +334,28 @@ fn a_new_track_starts_at_zero() {
     assert_eq!(c.position("t3", 0), 0);
     assert_eq!(c.position("t3", s), s);
 }
+
+#[test]
+fn levels_for_devices_and_apps() {
+    use ulanzi_deckd::actions::audio::{app_level, sink_level};
+    let sinks = r#"[{"name":"usb.headset","description":"Headset","mute":false,
+        "volume":{"front-left":{"value_percent":"40%"},"front-right":{"value_percent":"44%"}}}]"#;
+    assert_eq!(
+        sink_level(sinks, "usb.headset"),
+        Some((42, false, "Headset".to_string()))
+    );
+    assert_eq!(sink_level(sinks, "other"), None);
+    let inputs = r#"[{"index":1,"mute":true,"volume":{"front-left":{"value_percent":"50%"}},
+        "properties":{"application.name":"VLC media player (LibVLC 3.0.24)","application.process.binary":"vlc"}},
+        {"index":2,"mute":false,"volume":{"mono":{"value_percent":"80%"}},
+        "properties":{"application.name":"Firefox"}}]"#;
+    assert_eq!(
+        app_level(inputs, "vlc"),
+        Some((50, true, "VLC media player".to_string()))
+    );
+    assert_eq!(
+        app_level(inputs, "firefox"),
+        Some((80, false, "Firefox".to_string()))
+    );
+    assert_eq!(app_level(inputs, "spotify"), None);
+}

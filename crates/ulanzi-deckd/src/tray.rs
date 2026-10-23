@@ -81,6 +81,21 @@ struct View {
     auto_switch: bool,
 }
 
+/// Emblem on the tray icon while profiles follow the app in front.
+const AUTO_EMBLEM: &str = "emblem-synchronizing";
+
+fn overlay_icon(auto_switch: bool) -> &'static str {
+    if auto_switch { AUTO_EMBLEM } else { "" }
+}
+
+fn tooltip_text(state: &str, model: &str, auto_switch: bool) -> String {
+    let mut t = state_text(state, model);
+    if auto_switch {
+        t.push_str("\nAuto-switch on: profiles follow the app in front");
+    }
+    t
+}
+
 struct DeckTray {
     tx: mpsc::Sender<DeckMsg>,
     quit: Arc<Notify>,
@@ -104,10 +119,13 @@ impl ksni::Tray for DeckTray {
     fn icon_name(&self) -> String {
         TRAY_ICON.into()
     }
+    fn overlay_icon_name(&self) -> String {
+        overlay_icon(self.view.auto_switch).into()
+    }
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "Ulanzi Deck".into(),
-            description: state_text(&self.view.state, &self.view.model),
+            description: tooltip_text(&self.view.state, &self.view.model, self.view.auto_switch),
             ..Default::default()
         }
     }
@@ -261,6 +279,14 @@ pub async fn run(
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    #[test]
+    fn auto_switch_shows_on_the_icon() {
+        assert_eq!(overlay_icon(true), AUTO_EMBLEM);
+        assert_eq!(overlay_icon(false), "");
+        assert!(tooltip_text("ready", "D200X", true).contains("Auto-switch on"));
+        assert!(!tooltip_text("ready", "D200X", false).contains("Auto-switch on"));
+    }
 
     #[test]
     fn menu_model_lists_profiles_and_state() {

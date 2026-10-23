@@ -183,12 +183,20 @@ fn volume_overlay_draws_over_a_picture() {
         Some(&base),
         45,
         false,
+        "",
         Color::rgb(255, 0, 0),
         &mut fonts,
     ));
     assert_eq!(img.dimensions(), (458, 196));
     assert!(img.pixels().any(|p| p.0[0] > 200 && p.0[1] < 60));
-    let muted = decode(&volume_overlay(None, 45, true, Color::rgb(255, 0, 0), &mut fonts));
+    let muted = decode(&volume_overlay(
+        None,
+        45,
+        true,
+        "Spotify",
+        Color::rgb(255, 0, 0),
+        &mut fonts,
+    ));
     assert!(colours(&muted) > 10);
 }
 

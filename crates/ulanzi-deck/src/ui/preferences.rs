@@ -242,6 +242,19 @@ fn device_page(state: &State) -> adw::PreferencesPage {
         });
     }
     display.add(&dim);
+    let overlay = adw::SwitchRow::builder()
+        .title("Show Volume Changes")
+        .subtitle("A volume bar on the wide screen for a moment when a key or dial changes the volume")
+        .active(s.volume_overlay)
+        .build();
+    {
+        let state = state.clone();
+        overlay.connect_active_notify(move |r| {
+            let v = r.is_active();
+            change(&state, |s| s.volume_overlay = v)
+        });
+    }
+    display.add(&overlay);
     page.add(&display);
 
     let labels = adw::PreferencesGroup::builder()

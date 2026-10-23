@@ -34,6 +34,8 @@ pub struct Settings {
     pub tray: bool,
     /// Switch profiles by the app in front (each profile's `match` apps).
     pub auto_switch: bool,
+    /// Show volume changes on the wide screen for a moment.
+    pub volume_overlay: bool,
     /// The order profiles are listed in (ids not listed come after, in their own order).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub profile_order: Vec<Uuid>,
@@ -60,6 +62,7 @@ impl Default for Settings {
             autostart: true,
             tray: true,
             auto_switch: true,
+            volume_overlay: true,
             profile_order: Vec::new(),
         }
     }

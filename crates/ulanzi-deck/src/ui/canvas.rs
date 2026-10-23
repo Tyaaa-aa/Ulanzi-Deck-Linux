@@ -474,6 +474,10 @@ fn screen_texture(state: &State) -> Option<gdk::Texture> {
     if let Widget::Pictures { paths, .. } = &w {
         data.picture = paths.first().map(|p| dir.join(p));
     }
+    // The real song when something plays; the sample one only when nothing does.
+    if let Some(m) = state.now_playing.borrow().clone() {
+        data.media = Some(m);
+    }
     let style = ScreenStyle {
         background,
         accent,
@@ -497,7 +501,21 @@ fn screen_ticks(state: &State) -> bool {
         widgets
             .get(crate::ui::widgets_editor::preview_index())
             .or(widgets.first()),
-        Some(Widget::Clock { .. })
+        Some(Widget::Clock { .. } | Widget::NowPlaying { .. })
+    )
+}
+
+/// The previewed widget is Now Playing (its song comes from the service).
+fn screen_plays_media(state: &State) -> bool {
+    let e = state.editor.borrow();
+    let ScreenConfig::Custom { widgets, .. } = &e.profile().screen else {
+        return false;
+    };
+    matches!(
+        widgets
+            .get(crate::ui::widgets_editor::preview_index())
+            .or(widgets.first()),
+        Some(Widget::NowPlaying { .. })
     )
 }
 
@@ -805,7 +823,20 @@ pub fn build(state: &State) -> Canvas {
             let Some(pic) = pic.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            if pic.is_mapped() && screen_ticks(&state) {
+            if pic.is_mapped() && screen_plays_media(&state) {
+                // Ask the service what plays, then redraw with it.
+                if let Some(c) = state.client.borrow().clone() {
+                    let (state, pic) = (state.clone(), pic.downgrade());
+                    crate::runtime::run(async move { c.now_playing().await }, move |r| {
+                        if let Ok(m) = r {
+                            *state.now_playing.borrow_mut() = m;
+                        }
+                        if let Some(pic) = pic.upgrade() {
+                            pic.set_paintable(Some(&or_blank(screen_texture(&state), 458, 196)));
+                        }
+                    });
+                }
+            } else if pic.is_mapped() && screen_ticks(&state) {
                 pic.set_paintable(Some(&or_blank(screen_texture(&state), 458, 196)));
             }
             glib::ControlFlow::Continue

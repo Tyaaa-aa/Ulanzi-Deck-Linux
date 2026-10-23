@@ -498,15 +498,7 @@ fn volume_rows(ed: &Ed, target: &AudioTarget, op: VolumeOp, step: u8, limit_100:
                 *name = n.unwrap_or_default();
             }
         })),
-        AudioTarget::App { name } => rows.push(entry_row(ed, "App Name", name, "vol-app", |a, t| {
-            if let Action::Volume {
-                target: AudioTarget::App { name },
-                ..
-            } = a
-            {
-                *name = t;
-            }
-        })),
+        AudioTarget::App { name } => rows.push(app_volume_row(ed, name)),
         _ => {}
     }
     let o = match op {
@@ -1317,6 +1309,132 @@ fn obs_rows(state: &State, ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {
         _ => {}
     }
     rows
+}
+
+/// Apps playing sound right now (their names as the sound system knows them), newest first.
+fn apps_with_sound() -> Vec<String> {
+    let out = std::process::Command::new("pactl")
+        .args(["-f", "json", "list", "sink-inputs"])
+        .output()
+        .ok();
+    let v: serde_json::Value = out
+        .and_then(|o| serde_json::from_slice(&o.stdout).ok())
+        .unwrap_or_default();
+    let mut names: Vec<String> = Vec::new();
+    for it in v.as_array().into_iter().flatten().rev() {
+        let props = it.get("properties");
+        let n = ["application.name", "application.process.binary"]
+            .iter()
+            .find_map(|k| props.and_then(|p| p.get(*k)).and_then(|v| v.as_str()));
+        if let Some(n) = n {
+            let n = n.split(" (").next().unwrap_or(n).trim().to_string();
+            if !n.is_empty() && !names.contains(&n) {
+                names.push(n);
+            }
+        }
+    }
+    names
+}
+
+/// The installed app whose name matches, for its icon.
+fn installed_app_named(name: &str) -> Option<AppEntry> {
+    let n = name.to_lowercase();
+    installed_apps()
+        .iter()
+        .find(|a| a.name.to_lowercase() == n || a.desktop_id.trim_end_matches(".desktop").to_lowercase() == n)
+        .cloned()
+}
+
+/// Which app's volume: pick an installed app, or one that is playing sound right now.
+fn app_volume_row(ed: &Ed, name: &str) -> gtk::Widget {
+    let row = adw::ActionRow::builder()
+        .title("App")
+        .subtitle(if name.is_empty() {
+            "Choose the app whose volume this changes".to_string()
+        } else {
+            "Matched by name while the app plays sound".to_string()
+        })
+        .build();
+    let found = installed_app_named(name);
+    let shown = crate::ui::app_picker::app_label(
+        found.as_ref().map(|a| a.desktop_id.as_str()),
+        if name.is_empty() { "Choose App…" } else { name },
+        20,
+    );
+    let set = {
+        let ed = ed.clone();
+        Rc::new(move |n: String| {
+            ed.apply(How::Structure, |a| {
+                if let Action::Volume {
+                    target: AudioTarget::App { name },
+                    ..
+                } = a
+                {
+                    *name = n;
+                }
+            })
+        })
+    };
+    let picker = {
+        let set = set.clone();
+        crate::ui::app_picker::button(&shown, found.map(|a| a.desktop_id), Vec::new(), move |app| {
+            set(app.name)
+        })
+    };
+    // Apps making sound now, as the sound system names them (always matches).
+    let now = gtk::MenuButton::builder()
+        .icon_name("audio-volume-high-symbolic")
+        .tooltip_text("Apps playing sound now")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar"])
+        .build();
+    let popover = gtk::Popover::builder().child(&list).build();
+    now.set_popover(Some(&popover));
+    {
+        let list = list.clone();
+        popover.connect_show(move |_| {
+            while let Some(c) = list.first_child() {
+                list.remove(&c);
+            }
+            let names = apps_with_sound();
+            if names.is_empty() {
+                list.append(
+                    &gtk::Label::builder()
+                        .label("No app is playing sound right now")
+                        .margin_top(8)
+                        .margin_bottom(8)
+                        .margin_start(8)
+                        .margin_end(8)
+                        .css_classes(["dim-label"])
+                        .build(),
+                );
+            }
+            for n in names {
+                let app = installed_app_named(&n);
+                let item =
+                    crate::ui::app_picker::app_label(app.as_ref().map(|a| a.desktop_id.as_str()), &n, 20);
+                item.set_margin_top(4);
+                item.set_margin_bottom(4);
+                list.append(&gtk::ListBoxRow::builder().child(&item).name(n.as_str()).build());
+            }
+        });
+    }
+    {
+        let popover = popover.downgrade();
+        list.connect_row_activated(move |_, r| {
+            if let Some(p) = popover.upgrade() {
+                p.popdown();
+            }
+            set(r.widget_name().to_string());
+        });
+    }
+    row.add_suffix(&now);
+    row.add_suffix(&picker);
+    row.upcast()
 }
 
 /// Outputs (name, description) from `pactl`, for the Switch Output checklist.

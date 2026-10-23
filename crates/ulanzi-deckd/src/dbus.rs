@@ -456,6 +456,24 @@ impl DeckService {
         self.send(DeckMsg::Settings(Box::new(s))).await
     }
 
+    /// What is playing: (anything, title, artist, album-art file, position s, length s, playing).
+    /// Position and length are 0 when the player doesn't say.
+    async fn now_playing(&self) -> (bool, String, String, String, u32, u32, bool) {
+        let m = crate::screen::LAST_MEDIA.lock().ok().and_then(|m| m.clone());
+        match m {
+            Some(m) => (
+                true,
+                m.title,
+                m.artist,
+                m.art.map(|p| p.display().to_string()).unwrap_or_default(),
+                m.position_s.unwrap_or(0),
+                m.length_s.unwrap_or(0),
+                m.playing,
+            ),
+            None => (false, String::new(), String::new(), String::new(), 0, 0, false),
+        }
+    }
+
     /// The OBS connection: (state id, title, detail). See spec §6 for the states.
     async fn obs_status(&self) -> Result<(String, String, String)> {
         let s = self.obs()?.status();
