@@ -31,7 +31,9 @@ pub struct DynamicState {
     pub plugin_vars: BTreeMap<String, String>,
 }
 
-/// Rendered key images by look hash, plus which warnings were already logged.
+/// Rendered key images by look hash, plus which warnings were already logged. Holds only what
+/// the last built page uses: a label drawn into the picture with a changing value would otherwise
+/// keep one picture per value forever.
 pub struct RenderCache {
     images: HashMap<u64, Option<Vec<u8>>>,
     warned: HashSet<u64>,
@@ -257,6 +259,7 @@ pub fn build_page(
     let mut h = DefaultHasher::new();
     let keys = profile.pages.get(page).map(|p| &p.keys);
     let vars = dynamic.label_vars();
+    let mut used = HashSet::new();
 
     for i in 0..SCREEN_INDEX {
         let mut entry = ButtonEntry::default();
@@ -290,6 +293,7 @@ pub fn build_page(
                 entry.text = Some(resolve_vars(&look.label.text, &vars));
             }
             lh.hash(&mut h);
+            used.insert(lh);
         }
         (i, &entry.text, &entry.icon).hash(&mut h);
         entries.insert(i, entry);
@@ -308,6 +312,8 @@ pub fn build_page(
         });
     }
     entries.insert(SCREEN_INDEX, screen);
+    cache.images.retain(|lh, _| used.contains(lh));
+    cache.warned.retain(|lh| used.contains(lh));
     BuiltPage {
         entries,
         images,
@@ -515,6 +521,23 @@ mod tests {
         let b = build_page(&p, 0, &ctx(), &d, &mut cache);
         // A new value means a new picture.
         assert_ne!(a.entries[&6].icon, b.entries[&6].icon);
+    }
+
+    #[test]
+    fn cache_keeps_only_the_current_page() {
+        // A label drawn into the picture with a changing value must not keep every old picture.
+        let mut p = profile();
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.label.position = Some(ulanzi_core::model::LabelPosition::Top);
+        key.look.label.text = "N {hello.n}".into();
+        let mut d = DynamicState::default();
+        let mut cache = RenderCache::default();
+        for n in 0..50 {
+            d.set_plugin_var("hello", "n", n.to_string());
+            build_page(&p, 0, &ctx(), &d, &mut cache);
+        }
+        assert_eq!(cache.images.len(), 1);
+        assert!(cache.warned.len() <= 1);
     }
 
     #[test]
