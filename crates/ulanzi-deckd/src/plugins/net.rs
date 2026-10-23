@@ -105,12 +105,25 @@ impl Budget {
         }
     }
 
+    /// Saturating: releasing more than was reserved cannot wrap the count.
     fn release(&self, n: usize) {
         let n = n.min(QUEUED_NET);
-        if n > 0 {
-            self.used.fetch_sub(n, Ordering::AcqRel);
-            self.freed.notify_waiters();
+        if n == 0 {
+            return;
         }
+        let mut used = self.used.load(Ordering::Acquire);
+        loop {
+            match self.used.compare_exchange_weak(
+                used,
+                used.saturating_sub(n),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(now) => used = now,
+            }
+        }
+        self.freed.notify_waiters();
     }
 
     /// Post `event` carrying `n` bytes once they fit; the room is returned if it is dropped.
@@ -589,25 +602,48 @@ fn ws_message(data: Payload) -> Message {
 }
 
 /// Relay a WebSocket until either side closes it.
+///
+/// Data the plugin sent before closing is never lost: the idle wait prefers queued data over the
+/// close, and a message caught mid-send by the close is finished first when draining.
 async fn pump_ws<S>(id: u32, mut ws: WebSocketStream<S>, mut plugin: Plugin, queue: &Queue) -> Option<String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut close_reason: Option<String> = None;
+    // A message taken from the plugin but not yet handed to the WebSocket.
+    let mut pending: Option<Message> = None;
     loop {
         let step = tokio::select! {
-            _ = &mut plugin.gone => Step::Finish,
+            biased;
             out = plugin.data.recv() => match out {
                 Some(data) => {
                     plugin.sent(&data);
-                    let send = ws.send(ws_message(data));
-                    unless_gone(&mut plugin.gone, async {
-                        match send.await {
-                            Ok(()) => Step::Go,
-                            Err(e) => Step::Ended(format!("connection lost: {e}")),
+                    let msg = ws_message(data);
+                    // Wait for room without giving up the message: a close keeps it for the drain.
+                    let ready = tokio::select! {
+                        biased;
+                        r = std::future::poll_fn(|cx| ws.poll_ready_unpin(cx)) => Some(r),
+                        _ = &mut plugin.gone => None,
+                    };
+                    match ready {
+                        None => {
+                            pending = Some(msg);
+                            Step::Finish
                         }
-                    })
-                    .await
+                        Some(Err(e)) => Step::Ended(format!("connection lost: {e}")),
+                        Some(Ok(())) => match ws.start_send_unpin(msg) {
+                            Err(e) => Step::Ended(format!("connection lost: {e}")),
+                            // Handed over: a close during the flush leaves it for `close` to flush.
+                            Ok(()) => tokio::select! {
+                                biased;
+                                r = std::future::poll_fn(|cx| ws.poll_flush_unpin(cx)) => match r {
+                                    Ok(()) => Step::Go,
+                                    Err(e) => Step::Ended(format!("connection lost: {e}")),
+                                },
+                                _ = &mut plugin.gone => Step::Finish,
+                            },
+                        },
+                    }
                 }
                 None => Step::Finish,
             },
@@ -630,6 +666,7 @@ where
                 Some(Err(e)) => Step::Ended(format!("connection lost: {e}")),
                 None => Step::Ended("connection lost".into()),
             },
+            _ = &mut plugin.gone => Step::Finish,
         };
         match step {
             Step::Go => {}
@@ -639,12 +676,18 @@ where
                 let data = &mut plugin.data;
                 let unsent = &plugin.unsent;
                 let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+                    if let Some(msg) = pending.take()
+                        && ws.feed(msg).await.is_err()
+                    {
+                        return;
+                    }
                     while let Some(d) = data.recv().await {
                         unsent.fetch_sub(payload_len(&d), Ordering::Relaxed);
-                        if ws.send(ws_message(d)).await.is_err() {
+                        if ws.feed(ws_message(d)).await.is_err() {
                             return;
                         }
                     }
+                    // Flushes everything fed, then the close frame.
                     let _ = ws.close(None).await;
                 })
                 .await;
@@ -654,26 +697,51 @@ where
     }
 }
 
-/// Relay a TCP (or TLS) stream until either side closes it.
+/// Relay a TCP (or TLS) stream until either side closes it. Like `pump_ws`, data sent before the
+/// plugin closed goes out in full and in order: a write caught by the close resumes at the byte
+/// where it stopped.
 async fn pump_tcp<S>(id: u32, mut stream: S, mut plugin: Plugin, queue: &Queue) -> Option<String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut buf = vec![0u8; READ_CHUNK];
+    // A payload taken from the plugin and how much of it is written.
+    let mut pending: Option<(Payload, usize)> = None;
     loop {
         let step = tokio::select! {
-            _ = &mut plugin.gone => Step::Finish,
+            biased;
             out = plugin.data.recv() => match out {
                 Some(data) => {
                     plugin.sent(&data);
-                    let write = stream.write_all(payload_bytes(&data));
-                    unless_gone(&mut plugin.gone, async {
-                        match write.await {
-                            Ok(()) => Step::Go,
-                            Err(e) => Step::Ended(format!("connection lost: {e}")),
+                    let bytes = payload_bytes(&data);
+                    let mut done = 0;
+                    let mut step = Step::Go;
+                    // One `write` at a time: each either writes some bytes or none, so a close
+                    // in between knows exactly where to resume.
+                    while done < bytes.len() {
+                        tokio::select! {
+                            biased;
+                            w = stream.write(&bytes[done..]) => match w {
+                                Ok(0) => {
+                                    step = Step::Ended("connection lost".into());
+                                    break;
+                                }
+                                Ok(n) => done += n,
+                                Err(e) => {
+                                    step = Step::Ended(format!("connection lost: {e}"));
+                                    break;
+                                }
+                            },
+                            _ = &mut plugin.gone => {
+                                step = Step::Finish;
+                                break;
+                            }
                         }
-                    })
-                    .await
+                    }
+                    if matches!(step, Step::Finish) {
+                        pending = Some((data, done));
+                    }
+                    step
                 }
                 None => Step::Finish,
             },
@@ -685,6 +753,7 @@ where
                 }
                 Err(e) => Step::Ended(format!("connection lost: {e}")),
             },
+            _ = &mut plugin.gone => Step::Finish,
         };
         match step {
             Step::Go => {}
@@ -693,6 +762,11 @@ where
                 let data = &mut plugin.data;
                 let unsent = &plugin.unsent;
                 let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+                    if let Some((d, done)) = pending.take()
+                        && stream.write_all(&payload_bytes(&d)[done..]).await.is_err()
+                    {
+                        return;
+                    }
                     while let Some(d) = data.recv().await {
                         unsent.fetch_sub(payload_len(&d), Ordering::Relaxed);
                         if stream.write_all(payload_bytes(&d)).await.is_err() {
@@ -866,6 +940,9 @@ mod tests {
             .expect("room after release")
             .expect("task");
         assert_eq!(budget.used(), 20);
+        // Releasing more than is reserved stops at zero.
+        budget.release(1000);
+        assert_eq!(budget.used(), 0);
     }
 
     #[tokio::test]

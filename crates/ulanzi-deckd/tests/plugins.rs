@@ -730,3 +730,98 @@ async fn queued_network_data_is_bounded() {
     );
     assert_eq!(p.handle.net_queued(), 0);
 }
+
+/// Payload `i` of the probe's `burst` action (kept in step with the probe).
+fn burst_payload(i: usize) -> String {
+    format!("{i:04}{}", ".".repeat(4092))
+}
+
+#[tokio::test]
+async fn data_sent_before_close_arrives() {
+    const N: usize = 16;
+    const ROUNDS: usize = 50;
+    let expected: Vec<String> = (0..N).map(burst_payload).collect();
+    // What each peer received, in order, once the probe's close reached it.
+    let (got_tx, mut got) = mpsc::unbounded_channel::<Vec<String>>();
+    let (opened_tx, mut opened) = mpsc::unbounded_channel::<()>();
+
+    let ws_url = ws_server({
+        let (got_tx, opened_tx) = (got_tx.clone(), opened_tx.clone());
+        move |mut ws| {
+            let (got_tx, opened_tx) = (got_tx.clone(), opened_tx.clone());
+            async move {
+                let _ = ws.next().await; // "ping"
+                let _ = opened_tx.send(());
+                let mut seen = Vec::new();
+                while let Some(Ok(m)) = ws.next().await {
+                    match m {
+                        Message::Text(t) => seen.push(t.as_str().to_owned()),
+                        Message::Close(_) => break,
+                        _ => {}
+                    }
+                }
+                let _ = got_tx.send(seen);
+            }
+        }
+    })
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let tcp_port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            let (got_tx, opened_tx) = (got_tx.clone(), opened_tx.clone());
+            tokio::spawn(async move {
+                let mut ping = [0u8; 4];
+                if tcp.read_exact(&mut ping).await.is_err() {
+                    return;
+                }
+                let _ = opened_tx.send(());
+                let mut all = Vec::new();
+                let _ = tcp.read_to_end(&mut all).await;
+                let text = String::from_utf8_lossy(&all);
+                let pieces = text
+                    .as_bytes()
+                    .chunks(4096)
+                    .map(|c| String::from_utf8_lossy(c).into_owned())
+                    .collect();
+                let _ = got_tx.send(pieces);
+            });
+        }
+    });
+
+    let p = probe();
+    let started = Instant::now();
+    for round in 0..ROUNDS {
+        let ws = round % 2 == 0;
+        let open = match ws {
+            true => json!({"url": ws_url}),
+            false => json!({"host": "127.0.0.1", "port": tcp_port}),
+        };
+        assert_eq!(p.act(if ws { "ws" } else { "tcp" }, open).await, Ok(()));
+        tokio::time::timeout(PROMPTLY, opened.recv())
+            .await
+            .expect("socket opens")
+            .expect("peer");
+        assert_eq!(p.act("burst", json!({"n": N})).await, Ok(()));
+        let seen = tokio::time::timeout(PROMPTLY, got.recv())
+            .await
+            .expect("peer sees the close")
+            .expect("peer");
+        let kind = if ws { "ws" } else { "tcp" };
+        assert_eq!(
+            seen.len(),
+            N,
+            "round {round} ({kind}): {} payloads arrived",
+            seen.len()
+        );
+        assert!(
+            seen == expected,
+            "round {round} ({kind}): payloads out of order or cut"
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "took {:?}",
+        started.elapsed()
+    );
+}

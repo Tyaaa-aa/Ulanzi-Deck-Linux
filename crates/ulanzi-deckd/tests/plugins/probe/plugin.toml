@@ -56,6 +56,10 @@ id = "blast"
 name = "Blast"
 
 [[actions]]
+id = "burst"
+name = "Burst"
+
+[[actions]]
 id = "sleep"
 name = "Sleep"
 

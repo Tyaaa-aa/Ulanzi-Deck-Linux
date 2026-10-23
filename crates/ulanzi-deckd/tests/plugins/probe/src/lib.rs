@@ -18,6 +18,11 @@ fn text<'a>(params: &'a Value, key: &str, action: &str) -> Result<&'a str, Strin
         .ok_or_else(|| format!("{action} needs {key}"))
 }
 
+/// Payload `i` of the `burst` action: its number, padded to 4 KiB.
+pub fn burst_payload(i: u64) -> String {
+    format!("{i:04}{}", ".".repeat(4092))
+}
+
 impl Plugin for Probe {
     fn init(&mut self, _cx: &mut Cx, settings: Value) -> Result<(), String> {
         self.settings = settings;
@@ -84,6 +89,15 @@ impl Plugin for Probe {
                 let kib = params["kib"].as_u64().ok_or("blast needs kib")?;
                 for _ in 0..kib / 64 {
                     cx.send(socket, Payload::Binary(vec![b'x'; 64 * 1024]))?;
+                }
+                cx.close(socket);
+            }
+            "burst" => {
+                // `n` text payloads of 4 KiB (`burst_payload`) on the last socket, then close.
+                let socket = self.socket.ok_or("no socket")?;
+                let n = params["n"].as_u64().ok_or("burst needs n")?;
+                for i in 0..n {
+                    cx.send(socket, Payload::Text(burst_payload(i)))?;
                 }
                 cx.close(socket);
             }
