@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{Action, Background, KeyLook, ObsAction, Rotation, Widget};
+use super::{Action, Background, KeyLook, MediaTakeover, ObsAction, Rotation, Widget};
 use crate::Color;
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -90,6 +90,9 @@ pub enum ScreenConfig {
         background: Background,
         #[serde(default = "super::screen::default_accent")]
         accent: Color,
+        /// Show Now Playing while music plays, then go back to the widgets.
+        #[serde(default, skip_serializing_if = "MediaTakeover::is_off")]
+        media: MediaTakeover,
     },
 }
 
@@ -103,6 +106,7 @@ impl ScreenConfig {
             rotate: Rotation::Off,
             background: Background::Theme,
             accent: super::screen::default_accent(),
+            media: MediaTakeover::default(),
         }
     }
 }

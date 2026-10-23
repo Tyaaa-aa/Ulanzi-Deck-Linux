@@ -171,6 +171,8 @@ fn each_widget_draws_with_and_without_data() {
     let w = Widget::Weather {
         place: "Nowhere".into(),
         fahrenheit: false,
+        lat: None,
+        lon: None,
     };
     assert!(colours(&decode(&render_widget(&w, &style(), &err, &mut fonts))) > 10);
 }

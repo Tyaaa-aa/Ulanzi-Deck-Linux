@@ -474,6 +474,17 @@ fn screen_texture(state: &State) -> Option<gdk::Texture> {
     if let Widget::Pictures { paths, .. } = &w {
         data.picture = paths.first().map(|p| dir.join(p));
     }
+    // Real weather once the service has fetched it.
+    if let Widget::Weather {
+        place,
+        fahrenheit,
+        lat,
+        lon,
+    } = &w
+        && let Some(real) = preview_weather(state, place, *fahrenheit, lat.zip(*lon))
+    {
+        data.weather = Some(real);
+    }
     // The real song when something plays; the sample one only when nothing does.
     if let Some(m) = state.now_playing.borrow().clone() {
         data.media = Some(m);
@@ -489,6 +500,44 @@ fn screen_texture(state: &State) -> Option<gdk::Texture> {
         render_widget(&w, &style, &data, fonts)
     });
     texture(&png)
+}
+
+/// The weather for the preview: cached for 15 minutes; asks the service when missing, and the
+/// canvas redraws when it answers.
+fn preview_weather(
+    state: &State,
+    place: &str,
+    fahrenheit: bool,
+    at: Option<(f64, f64)>,
+) -> Option<ulanzi_core::render::screen::WeatherData> {
+    const FRESH: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    if place.trim().is_empty() {
+        return None;
+    }
+    let key = (place.to_string(), fahrenheit);
+    if let Some((w, asked)) = state.weather.borrow().get(&key)
+        && asked.elapsed() < FRESH
+    {
+        return w.clone();
+    }
+    let c = state.client.borrow().clone()?;
+    state
+        .weather
+        .borrow_mut()
+        .insert(key.clone(), (None, std::time::Instant::now()));
+    let (st, place) = (state.clone(), place.to_string());
+    crate::runtime::run(
+        async move { c.weather_now(&place, at, fahrenheit).await },
+        move |r| {
+            if let Ok(w) = r {
+                st.weather
+                    .borrow_mut()
+                    .insert(key, (Some(w), std::time::Instant::now()));
+                st.notify(Change::Preview);
+            }
+        },
+    );
+    None
 }
 
 /// The previewed widget changes by itself (a clock), so the canvas redraws it every second.

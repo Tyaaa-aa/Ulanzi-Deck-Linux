@@ -117,6 +117,8 @@ fn main() {
             Widget::Weather {
                 place: "Oslo".into(),
                 fahrenheit: false,
+                lat: None,
+                lon: None,
             },
             Background::Gradient {
                 from: Color::rgb(0x12, 0x2a, 0x45),

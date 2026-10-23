@@ -456,6 +456,45 @@ impl DeckService {
         self.send(DeckMsg::Settings(Box::new(s))).await
     }
 
+    /// Towns matching `query` for the weather widget: (label, latitude, longitude).
+    async fn weather_places(&self, query: String) -> Result<Vec<(String, f64, f64)>> {
+        let found = tokio::task::spawn_blocking(move || crate::widgets::weather::search(&query))
+            .await
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?
+            .map_err(DeckError::Unavailable)?;
+        Ok(found.into_iter().map(|p| (p.label(), p.lat, p.lon)).collect())
+    }
+
+    /// The weather now, for the app's preview: (ok, temperature, WMO code, high, low, place or error).
+    async fn weather_now(
+        &self,
+        place: String,
+        lat: f64,
+        lon: f64,
+        fahrenheit: bool,
+    ) -> (bool, f64, u8, f64, f64, String) {
+        use ulanzi_core::render::screen::WeatherData;
+        let w = tokio::task::spawn_blocking(move || {
+            if lat.is_finite() && lon.is_finite() && !(lat == 0.0 && lon == 0.0) {
+                crate::widgets::weather::fetch_at(&place, lat, lon, fahrenheit)
+            } else {
+                crate::widgets::weather::fetch(&place, fahrenheit)
+            }
+        })
+        .await
+        .unwrap_or_else(|e| WeatherData::Err(e.to_string()));
+        match w {
+            WeatherData::Ok {
+                temp,
+                code,
+                place,
+                high,
+                low,
+            } => (true, temp as f64, code, high as f64, low as f64, place),
+            WeatherData::Err(e) => (false, 0.0, 0, 0.0, 0.0, e),
+        }
+    }
+
     /// What is playing: (anything, title, artist, album-art file, position s, length s, playing).
     /// Position and length are 0 when the player doesn't say.
     async fn now_playing(&self) -> (bool, String, String, String, u32, u32, bool) {

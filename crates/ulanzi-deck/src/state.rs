@@ -64,6 +64,15 @@ pub enum Status {
 
 type Listener = Box<dyn Fn(Change)>;
 
+/// Preview weather by (place, fahrenheit): the reading (none yet) and when it was asked for.
+pub type WeatherCache = std::collections::HashMap<
+    (String, bool),
+    (
+        Option<ulanzi_core::render::screen::WeatherData>,
+        std::time::Instant,
+    ),
+>;
+
 pub struct AppState {
     pub editor: RefCell<Editor>,
     pub selection: RefCell<Selection>,
@@ -86,6 +95,8 @@ pub struct AppState {
     pub obs: RefCell<ObsInfo>,
     /// What the service sees playing (for the Now Playing preview); `None` when nothing plays.
     pub now_playing: RefCell<Option<ulanzi_core::render::screen::MediaData>>,
+    /// Weather for the preview, by (place, fahrenheit): the reading and when it was asked for.
+    pub weather: RefCell<WeatherCache>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -124,6 +135,7 @@ impl AppState {
             expanded: RefCell::new(std::collections::HashSet::new()),
             obs: RefCell::default(),
             now_playing: RefCell::default(),
+            weather: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
         })
     }

@@ -374,6 +374,37 @@ impl Client {
         Ok(self.inner.proxy.call("FocusStatus", &()).await?)
     }
 
+    /// Towns for the weather widget's place search: (label, latitude, longitude).
+    pub async fn weather_places(&self, query: &str) -> Result<Vec<(String, f64, f64)>> {
+        Ok(self.inner.proxy.call("WeatherPlaces", &(query,)).await?)
+    }
+
+    /// The weather now for the preview (coordinates 0,0 = look the place up by name).
+    pub async fn weather_now(
+        &self,
+        place: &str,
+        at: Option<(f64, f64)>,
+        fahrenheit: bool,
+    ) -> Result<ulanzi_core::render::screen::WeatherData> {
+        let (lat, lon) = at.unwrap_or((0.0, 0.0));
+        let (ok, temp, code, high, low, text): (bool, f64, u8, f64, f64, String) = self
+            .inner
+            .proxy
+            .call("WeatherNow", &(place, lat, lon, fahrenheit))
+            .await?;
+        Ok(if ok {
+            ulanzi_core::render::screen::WeatherData::Ok {
+                temp: temp as f32,
+                code,
+                place: text,
+                high: high as f32,
+                low: low as f32,
+            }
+        } else {
+            ulanzi_core::render::screen::WeatherData::Err(text)
+        })
+    }
+
     /// What the service sees playing, for the Now Playing preview.
     pub async fn now_playing(&self) -> Result<Option<ulanzi_core::render::screen::MediaData>> {
         let (any, title, artist, art, pos, len, playing): (bool, String, String, String, u32, u32, bool) =

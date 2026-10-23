@@ -300,6 +300,145 @@ fn choose_pictures(
     }
 }
 
+/// The weather widget's place: search towns by name and pick one (town, region, country).
+fn place_row(state: &State, edit: &EditScreen, i: usize, place: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title("Place")
+        .subtitle(if place.is_empty() {
+            "Choose a town or city"
+        } else {
+            place
+        })
+        .build();
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Town or city")
+        .search_delay(350)
+        .build();
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar"])
+        .build();
+    let note = gtk::Label::builder()
+        .label("Type at least two letters")
+        .margin_top(8)
+        .margin_bottom(8)
+        .css_classes(["dim-label"])
+        .build();
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    column.set_margin_top(6);
+    column.set_margin_bottom(6);
+    column.set_margin_start(6);
+    column.set_margin_end(6);
+    column.append(&search);
+    column.append(&note);
+    column.append(
+        &gtk::ScrolledWindow::builder()
+            .child(&list)
+            .propagate_natural_height(true)
+            .max_content_height(320)
+            .min_content_width(300)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .build(),
+    );
+    let popover = gtk::Popover::builder().child(&column).build();
+    let button = gtk::MenuButton::builder()
+        .label(if place.is_empty() {
+            "Choose…"
+        } else {
+            "Change…"
+        })
+        .valign(gtk::Align::Center)
+        .popover(&popover)
+        .build();
+    row.add_suffix(&button);
+    let found: Rc<std::cell::RefCell<Vec<(String, f64, f64)>>> = Rc::default();
+    // Only the newest search's answer counts.
+    let generation = Rc::new(Cell::new(0u32));
+    {
+        let (state, list, note, found, generation) = (
+            state.clone(),
+            list.clone(),
+            note.clone(),
+            found.clone(),
+            generation.clone(),
+        );
+        search.connect_search_changed(move |s| {
+            let q = s.text().to_string();
+            while let Some(c) = list.first_child() {
+                list.remove(&c);
+            }
+            found.borrow_mut().clear();
+            if q.trim().chars().count() < 2 {
+                note.set_label("Type at least two letters");
+                note.set_visible(true);
+                return;
+            }
+            let Some(c) = state.client.borrow().clone() else {
+                note.set_label("The service isn’t running");
+                return;
+            };
+            note.set_label("Searching…");
+            note.set_visible(true);
+            let g = generation.get() + 1;
+            generation.set(g);
+            let (list, note, found, generation) =
+                (list.clone(), note.clone(), found.clone(), generation.clone());
+            crate::runtime::run(async move { c.weather_places(&q).await }, move |r| {
+                if generation.get() != g {
+                    return;
+                }
+                match r {
+                    Ok(places) if places.is_empty() => note.set_label("No town by that name"),
+                    Ok(places) => {
+                        note.set_visible(false);
+                        for (label, _, _) in &places {
+                            list.append(
+                                &gtk::ListBoxRow::builder()
+                                    .child(
+                                        &gtk::Label::builder()
+                                            .label(label)
+                                            .xalign(0.0)
+                                            .margin_top(4)
+                                            .margin_bottom(4)
+                                            .build(),
+                                    )
+                                    .build(),
+                            );
+                        }
+                        *found.borrow_mut() = places;
+                    }
+                    Err(e) => note.set_label(&format!("Couldn’t search: {e}")),
+                }
+            });
+        });
+    }
+    {
+        let (edit, popover, found) = (edit.clone(), popover.downgrade(), found.clone());
+        list.connect_row_activated(move |_, r| {
+            let Some((label, la, lo)) = found.borrow().get(r.index().max(0) as usize).cloned() else {
+                return;
+            };
+            if let Some(p) = popover.upgrade() {
+                p.popdown();
+            }
+            edit_widget(&edit, How::Structure, i, move |w| {
+                if let Widget::Weather { place, lat, lon, .. } = w {
+                    *place = label;
+                    *lat = Some(la);
+                    *lon = Some(lo);
+                }
+            });
+        });
+    }
+    {
+        let search = search.clone();
+        popover.connect_show(move |_| {
+            search.grab_focus();
+        });
+    }
+    row
+}
+
 /// The option rows of widget `i`.
 fn option_rows(state: &State, edit: &EditScreen, i: usize, w: &Widget) -> Vec<gtk::Widget> {
     let mut rows: Vec<gtk::Widget> = Vec::new();
@@ -459,18 +598,10 @@ fn option_rows(state: &State, edit: &EditScreen, i: usize, w: &Widget) -> Vec<gt
                     .upcast(),
             );
         }
-        Widget::Weather { place, fahrenheit } => {
-            let e = edit.clone();
-            rows.push(
-                entry("Town or City", &place, move |t| {
-                    edit_widget(&e, How::Typing("weather-place"), i, move |w| {
-                        if let Widget::Weather { place, .. } = w {
-                            *place = t;
-                        }
-                    })
-                })
-                .upcast(),
-            );
+        Widget::Weather {
+            place, fahrenheit, ..
+        } => {
+            rows.push(place_row(state, edit, i, &place).upcast());
             let e = edit.clone();
             rows.push(
                 switch("Fahrenheit", "", fahrenheit, move |v| {
@@ -698,6 +829,7 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
         rotate,
         background,
         accent,
+        media,
         ..
     } = screen
     else {
@@ -718,7 +850,11 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
     for (i, w) in widgets.iter().enumerate() {
         let exp = adw::ExpanderRow::builder()
             .title(w.title())
-            .subtitle(summary(w))
+            .subtitle(if i == 0 && n > 1 {
+                format!("Default · {}", summary(w))
+            } else {
+                summary(w)
+            })
             .build();
         exp.add_prefix(&widget_icon(state, w));
         state.remember_expanded(&exp, &format!("screen/widget{i}"));
@@ -759,6 +895,21 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
             });
         }
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        if i > 0 {
+            // The first widget is the default: the one the screen starts on and returns to.
+            let star = icon_button("non-starred-symbolic", "Make Default");
+            let (edit, state) = (edit.clone(), state.clone());
+            star.connect_clicked(move |_| {
+                edit_list(&edit, move |list| {
+                    if i < list.len() {
+                        let w = list.remove(i);
+                        list.insert(0, w);
+                    }
+                });
+                set_preview(&state, 0);
+            });
+            buttons.append(&star);
+        }
         if n > 1 {
             buttons.append(&up);
             buttons.append(&down);
@@ -780,7 +931,7 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
         let rot = adw::ComboRow::builder()
             .title("Rotation")
             .model(&gtk::StringList::new(&[
-                "Stay on the First",
+                "Stay on the Default",
                 "Every Few Seconds",
                 "Next One When Tapped",
             ]))
@@ -825,6 +976,46 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
                 },
             ));
         }
+    }
+
+    // Music takes the screen over, then the widgets come back.
+    let takeover = adw::SwitchRow::builder()
+        .title("Now Playing While Music Plays")
+        .subtitle("Shows the song, then goes back to the widgets after it stops")
+        .active(media.on)
+        .build();
+    {
+        let (e, m) = (edit.clone(), *media);
+        takeover.connect_active_notify(move |r| {
+            let on = r.is_active();
+            e(
+                How::Structure,
+                Box::new(move |s| {
+                    if let ScreenConfig::Custom { media, .. } = s {
+                        *media = ulanzi_core::model::MediaTakeover { on, ..m };
+                    }
+                }),
+            );
+        });
+    }
+    look.add(&takeover);
+    if media.on {
+        let e = edit.clone();
+        look.add(&spin(
+            "Back to the Widgets After (Seconds)",
+            (1.0, 600.0, 1.0),
+            media.back_after_s as f64,
+            move |v| {
+                e(
+                    How::Typing("media-back"),
+                    Box::new(move |s| {
+                        if let ScreenConfig::Custom { media, .. } = s {
+                            media.back_after_s = v as u32;
+                        }
+                    }),
+                );
+            },
+        ));
     }
 
     let bg = adw::ComboRow::builder()
@@ -1000,7 +1191,9 @@ mod tests {
         assert_eq!(
             summary(&Widget::Weather {
                 place: " ".into(),
-                fahrenheit: false
+                fahrenheit: false,
+                lat: None,
+                lon: None
             }),
             "Choose a place"
         );

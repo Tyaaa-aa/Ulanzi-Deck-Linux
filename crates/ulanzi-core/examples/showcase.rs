@@ -92,8 +92,10 @@ fn main() {
                         date: true,
                     },
                     Widget::Weather {
-                        place: "Oslo".into(),
+                        place: "Oslo, Norway".into(),
                         fahrenheit: false,
+                        lat: Some(59.91),
+                        lon: Some(10.75),
                     },
                 ],
                 Rotation::Every { secs: 15 },
@@ -108,6 +110,11 @@ fn main() {
             rotate,
             background,
             accent,
+            // Music takes the screen over everywhere but on Media Desk (where it already shows).
+            media: MediaTakeover {
+                on: p.name != "Media Desk",
+                back_after_s: 10,
+            },
         };
         if p.name == "Media Desk" {
             default = Some(p.id);

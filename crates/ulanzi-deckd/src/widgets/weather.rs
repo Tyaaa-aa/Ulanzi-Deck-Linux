@@ -76,6 +76,76 @@ fn get(url: &str) -> Result<String, String> {
         .map_err(|_| "unreadable reply".to_string())
 }
 
+/// A town found by name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Place {
+    pub name: String,
+    pub region: String,
+    pub country: String,
+    pub lat: f64,
+    pub lon: f64,
+}
+
+impl Place {
+    /// "Town, Region, Country", leaving out parts that repeat the town.
+    pub fn label(&self) -> String {
+        let mut parts = vec![self.name.clone()];
+        for p in [&self.region, &self.country] {
+            if !p.is_empty() && !parts.contains(p) {
+                parts.push(p.clone());
+            }
+        }
+        parts.join(", ")
+    }
+}
+
+/// The town part of a label ("Portland, Oregon, …" → "Portland"), for the widget.
+pub fn short_name(label: &str) -> &str {
+    label.split(',').next().unwrap_or(label).trim()
+}
+
+pub fn places_url(query: &str) -> String {
+    format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=8&language=en&format=json",
+        encode(query.trim())
+    )
+}
+
+pub fn parse_places(json: &str) -> Vec<Place> {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    let s =
+        |r: &serde_json::Value, k: &str| r.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    v.get("results")
+        .and_then(|r| r.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            Some(Place {
+                name: s(r, "name"),
+                region: s(r, "admin1"),
+                country: s(r, "country"),
+                lat: r.get("latitude")?.as_f64()?,
+                lon: r.get("longitude")?.as_f64()?,
+            })
+        })
+        .collect()
+}
+
+/// Towns matching `query` (blocking).
+pub fn search(query: &str) -> Result<Vec<Place>, String> {
+    if query.trim().chars().count() < 2 {
+        return Ok(Vec::new());
+    }
+    get(&places_url(query)).map(|j| parse_places(&j))
+}
+
+/// The weather at known coordinates (blocking); `place` is the label shown.
+pub fn fetch_at(place: &str, lat: f64, lon: f64, fahrenheit: bool) -> WeatherData {
+    get(&forecast_url(lat, lon, fahrenheit))
+        .and_then(|j| parse_forecast(&j, short_name(place)))
+        .unwrap_or_else(WeatherData::Err)
+}
+
 /// Look up `place` and fetch its weather (blocking; run it off the deck's task).
 pub fn fetch(place: &str, fahrenheit: bool) -> WeatherData {
     let found = get(&geocode_url(place))
@@ -109,6 +179,23 @@ mod tests {
         );
         assert!(geocode_url("São Paulo").contains("S%C3%A3o+Paulo"));
         assert!(forecast_url(1.0, 2.0, true).ends_with("&temperature_unit=fahrenheit"));
+    }
+
+    #[test]
+    fn places_list_town_region_and_country() {
+        let json = r#"{"results":[
+            {"name":"Portland","latitude":45.52,"longitude":-122.68,"admin1":"Oregon","country":"United States"},
+            {"name":"Portland","latitude":43.66,"longitude":-70.25,"admin1":"Maine","country":"United States"},
+            {"name":"Singapore","latitude":1.29,"longitude":103.85,"admin1":"Singapore","country":"Singapore"}]}"#;
+        let p = parse_places(json);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[0].label(), "Portland, Oregon, United States");
+        assert_eq!(p[1].lat, 43.66);
+        // No repeats when the region or country is the town itself.
+        assert_eq!(p[2].label(), "Singapore");
+        assert!(parse_places("{}").is_empty());
+        assert!(places_url("New York").contains("count=8"));
+        assert_eq!(short_name("Portland, Oregon, United States"), "Portland");
     }
 
     #[test]

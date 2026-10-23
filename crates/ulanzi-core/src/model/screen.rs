@@ -107,10 +107,16 @@ pub enum Widget {
         pomodoro: bool,
     },
     Weather {
+        /// "Town, Region, Country" as chosen, or a name typed by hand.
         #[serde(default)]
         place: String,
         #[serde(default)]
         fahrenheit: bool,
+        /// Where it is, when chosen from the place search (else `place` is looked up by name).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lat: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lon: Option<f64>,
     },
     Command {
         #[serde(default)]
@@ -166,6 +172,8 @@ impl Widget {
             Widget::Weather {
                 place: String::new(),
                 fahrenheit: false,
+                lat: None,
+                lon: None,
             },
             Widget::Command {
                 cmd: String::new(),
@@ -273,6 +281,30 @@ pub enum Background {
     Picture {
         path: String,
     },
+}
+
+/// Now Playing takes over the screen while music plays, and the widgets come back
+/// `back_after_s` seconds after it stops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MediaTakeover {
+    pub on: bool,
+    pub back_after_s: u32,
+}
+
+impl Default for MediaTakeover {
+    fn default() -> Self {
+        MediaTakeover {
+            on: false,
+            back_after_s: 10,
+        }
+    }
+}
+
+impl MediaTakeover {
+    pub fn is_off(&self) -> bool {
+        *self == MediaTakeover::default()
+    }
 }
 
 pub fn default_accent() -> Color {

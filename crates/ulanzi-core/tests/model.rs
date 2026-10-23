@@ -365,6 +365,8 @@ fn widgets_round_trip_with_options() {
             Widget::Weather {
                 place: "Singapore".into(),
                 fahrenheit: false,
+                lat: None,
+                lon: None,
             },
             Widget::Command {
                 cmd: "uptime -p".into(),
@@ -385,6 +387,10 @@ fn widgets_round_trip_with_options() {
             to: "#16213e".parse().expect("c"),
         },
         accent: "#ff7b63".parse().expect("c"),
+        media: MediaTakeover {
+            on: true,
+            back_after_s: 20,
+        },
     };
     #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
     struct Wrap {

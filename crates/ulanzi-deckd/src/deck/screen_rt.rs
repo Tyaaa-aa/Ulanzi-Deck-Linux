@@ -43,6 +43,8 @@ pub struct ScreenRuntime {
     /// The widget drawn last (for the screen's default tap).
     shown: Option<Widget>,
     overlay: Option<(u8, bool, String, Instant)>,
+    /// Now Playing holds the screen until then (music playing, or just stopped).
+    music_until: Option<Instant>,
     /// The last widget picture, for the overlay to lie on.
     base: Option<Vec<u8>>,
 }
@@ -71,6 +73,7 @@ impl ScreenRuntime {
             fonts: None,
             shown: None,
             overlay: None,
+            music_until: None,
             base: None,
         }
     }
@@ -94,6 +97,10 @@ impl ScreenRuntime {
     /// Default action for a screen tap when the profile sets none.
     pub fn default_tap(&self, p: &Profile) -> Option<Action> {
         let (list, rotate) = widgets(p)?;
+        // Music took the screen over: a tap plays or pauses.
+        if self.music_until.is_some() {
+            return Widget::now_playing().default_tap();
+        }
         if rotate == Rotation::OnPress && list.len() > 1 {
             return Some(Action::ScreenNext);
         }
@@ -116,6 +123,42 @@ impl ScreenRuntime {
             TimerOp::StartPause => self.timer.start_pause(now),
             TimerOp::Reset => self.timer.reset(),
             TimerOp::Add { minutes } => self.timer.add(minutes, now),
+        }
+    }
+
+    /// Now Playing while music plays (and `back_after_s` after it stops), when the profile asks
+    /// for it; the profile's own Now Playing widget if it has one. When it ends, the widgets
+    /// start again from the first (the default).
+    fn takeover(
+        &mut self,
+        p: &Profile,
+        list: &[Widget],
+        dynamic: &DynamicState,
+        now: Instant,
+    ) -> Option<Widget> {
+        let ScreenConfig::Custom { media, .. } = &p.screen else {
+            return None;
+        };
+        if !media.on {
+            self.music_until = None;
+            return None;
+        }
+        if dynamic.media.as_ref().is_some_and(|m| m.playing) {
+            self.music_until = Some(now + Duration::from_secs(media.back_after_s as u64));
+        }
+        match self.music_until {
+            Some(until) if now < until => Some(
+                list.iter()
+                    .find(|w| matches!(w, Widget::NowPlaying { .. }))
+                    .cloned()
+                    .unwrap_or_else(Widget::now_playing),
+            ),
+            Some(_) => {
+                self.music_until = None;
+                self.rot = Rotator::new(now.into_std());
+                None
+            }
+            None => None,
         }
     }
 
@@ -149,8 +192,10 @@ impl ScreenRuntime {
         };
         let base = match (&style, widgets(p)) {
             (Some(style), Some((list, rotate))) if !list.is_empty() => {
-                let i = self.rot.current(rotate, list.len(), now.into_std());
-                let w = list[i].clone();
+                let w = match self.takeover(p, list, dynamic, now) {
+                    Some(np) => np,
+                    None => list[self.rot.current(rotate, list.len(), now.into_std())].clone(),
+                };
                 let data = self.data(&w, list, dir, dynamic, now);
                 let fonts = self.fonts.get_or_insert_with(Fonts::system);
                 let png = render_widget(&w, style, &data, fonts);
@@ -203,9 +248,12 @@ impl ScreenRuntime {
         }
         data.timer = Some(self.timer_now(now));
         match w {
-            Widget::Weather { place, fahrenheit } => {
-                data.weather = Some(self.weather(place, *fahrenheit, now))
-            }
+            Widget::Weather {
+                place,
+                fahrenheit,
+                lat,
+                lon,
+            } => data.weather = Some(self.weather(place, *fahrenheit, lat.zip(*lon), now)),
             Widget::Command { cmd, every_s, .. } => data.command = Some(self.command(cmd, *every_s, now)),
             Widget::Pictures { paths, every_s } if !paths.is_empty() => {
                 let secs = chrono::Local::now().timestamp().max(0) as u64;
@@ -217,7 +265,7 @@ impl ScreenRuntime {
         data
     }
 
-    fn weather(&self, place: &str, fahrenheit: bool, now: Instant) -> WeatherData {
+    fn weather(&self, place: &str, fahrenheit: bool, at: Option<(f64, f64)>, now: Instant) -> WeatherData {
         let key = (place.to_string(), fahrenheit);
         let Ok(mut f) = self.fetched.lock() else {
             return WeatherData::Err("unavailable".into());
@@ -230,7 +278,10 @@ impl ScreenRuntime {
         if stale && f.in_flight.insert(flight.clone()) {
             let (fetched, wake) = (self.fetched.clone(), self.wake.clone());
             tokio::task::spawn_blocking(move || {
-                let w = weather::fetch(&key.0, key.1);
+                let w = match at {
+                    Some((lat, lon)) => weather::fetch_at(&key.0, lat, lon, key.1),
+                    None => weather::fetch(&key.0, key.1),
+                };
                 if let Ok(mut f) = fetched.lock() {
                     f.weather.insert(key, (w, Instant::now()));
                     f.in_flight.remove(&flight);
@@ -389,5 +440,43 @@ mod tests {
                 op: TimerOp::StartPause
             })
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn now_playing_takes_over_and_goes_back() {
+        use ulanzi_core::model::MediaTakeover;
+        use ulanzi_core::render::screen::MediaData;
+        let mut p = custom(vec![Widget::clock(), Widget::Blank], Rotation::Off);
+        if let ScreenConfig::Custom { media, .. } = &mut p.screen {
+            *media = MediaTakeover {
+                on: true,
+                back_after_s: 5,
+            };
+        }
+        let dynamic = |playing: bool| DynamicState {
+            media: Some(MediaData {
+                title: "Song".into(),
+                playing,
+                ..MediaData::default()
+            }),
+            ..DynamicState::default()
+        };
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut rt = ScreenRuntime::new(t0);
+        let dir = std::env::temp_dir();
+        rt.picture(&p, &dir, &DynamicState::default(), t0);
+        assert_eq!(rt.shown(), Some(&Widget::clock()));
+        rt.picture(&p, &dir, &dynamic(true), at(1));
+        assert!(matches!(rt.shown(), Some(Widget::NowPlaying { .. })));
+        // Paused: it stays a while, then the default widget comes back.
+        rt.picture(&p, &dir, &dynamic(false), at(4));
+        assert!(matches!(rt.shown(), Some(Widget::NowPlaying { .. })));
+        rt.picture(&p, &dir, &dynamic(false), at(7));
+        assert_eq!(rt.shown(), Some(&Widget::clock()));
+        // Off: music doesn't take over.
+        let off = custom(vec![Widget::clock()], Rotation::Off);
+        rt.picture(&off, &dir, &dynamic(true), at(8));
+        assert_eq!(rt.shown(), Some(&Widget::clock()));
     }
 }

@@ -1059,9 +1059,9 @@ pub fn render_widget(w: &Widget, style: &ScreenStyle, data: &ScreenData, fonts: 
         ),
         Widget::System { stats, graphs } => system(fonts, &mut pix, stats, *graphs, data.stats.as_ref(), a),
         Widget::Timer { minutes, .. } => timer(fonts, &mut pix, *minutes, data.timer.as_ref(), a),
-        Widget::Weather { place, fahrenheit } => {
-            weather(fonts, &mut pix, place, *fahrenheit, data.weather.as_ref(), a)
-        }
+        Widget::Weather {
+            place, fahrenheit, ..
+        } => weather(fonts, &mut pix, place, *fahrenheit, data.weather.as_ref(), a),
         Widget::Command { cmd, title, .. } => {
             command(fonts, &mut pix, title, cmd, data.command.as_deref(), a)
         }
