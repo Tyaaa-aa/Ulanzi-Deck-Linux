@@ -4,6 +4,7 @@ mod fonts;
 mod icons;
 mod key;
 mod nowplaying;
+pub mod screen;
 mod text;
 
 pub use fonts::{Fonts, TextStyle};

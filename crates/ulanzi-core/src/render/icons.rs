@@ -42,6 +42,32 @@ impl IconLibrary {
         map.into_iter().flat_map(|m| m.keys().copied())
     }
 
+    /// Draw an icon `size` px square with its top-left at (x, y).
+    pub fn draw_into(
+        &self,
+        pix: &mut Pixmap,
+        set: IconSet,
+        name: &str,
+        (x, y): (f32, f32),
+        size: f32,
+        fg: Color,
+    ) -> bool {
+        let Some(svg) = self.svg(set, name) else {
+            return false;
+        };
+        let Ok(tree) = usvg::Tree::from_str(&colorize(svg, fg), &usvg::Options::default()) else {
+            return false;
+        };
+        let s = tree.size();
+        let k = size / s.width().max(s.height());
+        resvg::render(
+            &tree,
+            Transform::from_scale(k, k).post_translate(x, y),
+            &mut pix.as_mut(),
+        );
+        true
+    }
+
     /// The icon alone, `px` square on transparent, as PNG (for pickers and previews).
     pub fn icon_png(&self, set: IconSet, name: &str, px: u32, fg: Color) -> Option<Vec<u8>> {
         let svg = colorize(self.svg(set, name)?, fg);
