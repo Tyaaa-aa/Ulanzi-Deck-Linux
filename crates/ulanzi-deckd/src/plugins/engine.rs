@@ -60,7 +60,7 @@ fn add_wasi(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
 }
 
 /// Stops the epoch ticker when the last `PluginEngine` clone is dropped.
-struct Ticker(JoinHandle<()>);
+pub(crate) struct Ticker(JoinHandle<()>);
 
 impl Drop for Ticker {
     fn drop(&mut self) {
@@ -146,7 +146,7 @@ impl PluginEngine {
             manifest: manifest.clone(),
             component,
             pre,
-            _ticker: Arc::clone(&self.ticker),
+            ticker: Arc::clone(&self.ticker),
         })
     }
 
@@ -162,5 +162,5 @@ pub struct LoadedPlugin {
     pub(crate) component: Component,
     pub(crate) pre: wasmtime::component::InstancePre<HostState>,
     /// Keeps the epoch ticker alive for as long as the plugin is.
-    _ticker: Arc<Ticker>,
+    pub(crate) ticker: Arc<Ticker>,
 }

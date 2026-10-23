@@ -2,11 +2,12 @@
 //! and feeds it events from a bounded queue, one guest call at a time. Host functions never block:
 //! state and status go out over an unbounded channel, timers are tokio tasks on the daemon's runtime.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -15,13 +16,14 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 use ulanzi_core::plugin::Manifest;
 use wasmtime::component::ResourceTable;
-use wasmtime::{Store, StoreLimits, StoreLimitsBuilder, Trap};
+use wasmtime::{Store, StoreLimits, StoreLimitsBuilder, Trap, UpdateDeadline};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_io::bytes::Bytes;
 use wasmtime_wasi_io::poll::Pollable;
 use wasmtime_wasi_io::streams::{OutputStream, StreamResult};
 
+use super::engine::Ticker;
 use super::ulanzi::plugin::types::{HttpResponse, LogLevel, Payload, Status};
 use super::ulanzi::plugin::{core, net, types};
 use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
@@ -30,12 +32,21 @@ use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
 const EVENT_QUEUE: usize = 1024;
 /// Per guest call: 50 epoch ticks of 10 ms = 500 ms.
 const CALL_DEADLINE: u64 = 50;
+/// A running guest call checks for a stop request this often (in epoch ticks).
+const STOP_CHECK: u64 = 5;
+/// An idle instance re-checks its stop flag this often, in case the wake-up event was lost.
+const STOP_POLL: Duration = Duration::from_millis(200);
+const MAX_SECRETS: usize = 256;
+/// Longest key for `set-state` and secrets, in bytes.
+const MAX_KEY: usize = 256;
+/// Longest value for `set-state` and secrets, in bytes.
+const MAX_VALUE: usize = 64 * 1024;
 const MEMORY_LIMIT: usize = 64 << 20;
 /// Live timers per instance. Far above what a sane plugin needs, low enough to bound memory.
 const MAX_TIMERS: usize = 4096;
 /// Repeating timers fire at most this often.
 const MIN_REPEAT: Duration = Duration::from_millis(10);
-/// A guest stdout/stderr line longer than this is logged in pieces.
+/// A guest stdout/stderr line longer than this is logged in pieces; a longer `log` is truncated.
 const MAX_LOG_LINE: usize = 4096;
 
 /// What the host asks a plugin instance to do, in order.
@@ -57,8 +68,8 @@ pub enum Event {
     Stop,
 }
 
-/// What a plugin instance reports back.
-#[derive(Debug, Clone, PartialEq)]
+/// What a plugin instance reports back. `Debug` never shows secret values.
+#[derive(Clone, PartialEq)]
 pub enum Output {
     State {
         key: String,
@@ -72,6 +83,37 @@ pub enum Output {
     SecretsChanged(BTreeMap<String, String>),
 }
 
+impl fmt::Debug for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Output::State { key, value } => f
+                .debug_struct("State")
+                .field("key", key)
+                .field("value", value)
+                .finish(),
+            Output::Status { status, message } => f
+                .debug_struct("Status")
+                .field("status", status)
+                .field("message", message)
+                .finish(),
+            Output::SecretsChanged(secrets) => {
+                f.debug_tuple("SecretsChanged").field(&Redacted(secrets)).finish()
+            }
+        }
+    }
+}
+
+/// Secret keys with their values hidden.
+struct Redacted<'a>(&'a BTreeMap<String, String>);
+
+impl fmt::Debug for Redacted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|k| (k, "<redacted>")))
+            .finish()
+    }
+}
+
 /// Why an instance's thread ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Exit {
@@ -80,15 +122,37 @@ pub enum Exit {
     Crashed(String),
 }
 
-/// A running instance. The thread ends on [`Event::Stop`] or a crash; `exited` then resolves.
+/// A running instance. The thread ends on [`InstanceHandle::stop`] (also called on drop),
+/// [`Event::Stop`] or a crash; `exited` then resolves.
+///
+/// The instance is gone (treat it as `<name> stopped working`) when an action's reply receiver
+/// errs with `RecvError` (the event was dropped: queue full, or the instance already ended) or
+/// when `exited` errs (the thread ended without reporting, which should not happen).
+/// Await `exited` through `&mut handle.exited`: the handle stops the instance when dropped.
 pub struct InstanceHandle {
     /// Bounded (1024). Prefer [`InstanceHandle::post`], which never blocks.
     pub events: SyncSender<Event>,
     pub exited: oneshot::Receiver<Exit>,
     queue: Queue,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for InstanceHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 impl InstanceHandle {
+    /// Ask the instance to stop, without blocking. A guest call in progress is cut short within
+    /// about 50 ms; queued actions are answered `the <name> plugin is turned off`. The instance
+    /// then exits with `Exit::Stopped`, even when its queue is full.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        // Best effort wake-up; when the queue is full the flag is seen before the next event.
+        let _ = self.queue.tx.try_send(Event::Stop);
+    }
+
     /// Queue an event without blocking. When the queue is full the event is dropped (an action's
     /// reply sender with it) and one warning is logged per overflow episode. False when dropped.
     pub fn post(&self, event: Event) -> bool {
@@ -146,9 +210,19 @@ pub struct HostState {
     pub(crate) queue: Queue,
     out: mpsc::UnboundedSender<Output>,
     secrets: BTreeMap<String, String>,
+    /// Secrets changed during the current guest call; reported once when it returns.
+    secrets_dirty: bool,
     timers: HashMap<u32, TimerEntry>,
     last_timer: u32,
     timers_full_warned: bool,
+    /// Limits already warned about (one warning per instance and kind).
+    warned: BTreeSet<&'static str>,
+    /// Set by `InstanceHandle::stop`; checked between events and during guest calls.
+    stop: Arc<AtomicBool>,
+    /// Epoch ticks left in the current guest call's budget.
+    ticks_left: u64,
+    /// A running instance keeps the epoch ticker alive.
+    _ticker: Arc<Ticker>,
 }
 
 impl WasiView for HostState {
@@ -172,6 +246,19 @@ impl HostState {
     fn emit(&self, output: Output) {
         // The receiver is gone only while the daemon shuts down; nothing to do then.
         let _ = self.out.send(output);
+    }
+
+    fn warn_once(&mut self, kind: &'static str, message: &str) {
+        if self.warned.insert(kind) {
+            tracing::warn!(target: "plugin", plugin = %self.plugin, "{message}");
+        }
+    }
+
+    /// Report the secret map once per guest call, not once per change.
+    fn flush_secrets(&mut self) {
+        if std::mem::take(&mut self.secrets_dirty) {
+            self.emit(Output::SecretsChanged(self.secrets.clone()));
+        }
     }
 
     fn next_timer_id(&mut self) -> u32 {
@@ -250,6 +337,11 @@ impl core::Host for HostState {
     }
 
     fn set_state(&mut self, key: String, value: String) {
+        if key.len() > MAX_KEY || value.len() > MAX_VALUE {
+            let msg = format!("state over {MAX_KEY} B key / {MAX_VALUE} B value is ignored");
+            self.warn_once("state-size", &msg);
+            return;
+        }
         self.emit(Output::State { key, value });
     }
 
@@ -258,15 +350,25 @@ impl core::Host for HostState {
     }
 
     fn secret_set(&mut self, key: String, value: String) {
+        if key.len() > MAX_KEY || value.len() > MAX_VALUE {
+            let msg = format!("secret over {MAX_KEY} B key / {MAX_VALUE} B value is ignored");
+            self.warn_once("secret-size", &msg);
+            return;
+        }
+        if !self.secrets.contains_key(&key) && self.secrets.len() >= MAX_SECRETS {
+            let msg = format!("more than {MAX_SECRETS} secrets; new secrets are ignored");
+            self.warn_once("secret-count", &msg);
+            return;
+        }
         if self.secrets.get(&key) != Some(&value) {
             self.secrets.insert(key, value);
-            self.emit(Output::SecretsChanged(self.secrets.clone()));
+            self.secrets_dirty = true;
         }
     }
 
     fn secret_delete(&mut self, key: String) {
         if self.secrets.remove(&key).is_some() {
-            self.emit(Output::SecretsChanged(self.secrets.clone()));
+            self.secrets_dirty = true;
         }
     }
 
@@ -275,6 +377,7 @@ impl core::Host for HostState {
     }
 
     fn log(&mut self, level: LogLevel, message: String) {
+        let message = truncate(&message, MAX_LOG_LINE);
         let plugin = &*self.plugin;
         match level {
             LogLevel::Debug => tracing::debug!(target: "plugin", plugin = %plugin, "{message}"),
@@ -319,6 +422,7 @@ pub fn spawn_instance(
         .map_err(|e| PluginError::Load(format!("{} is not a valid plugin: {e:#}", manifest.name)))?;
 
     let (tx, rx) = std::sync::mpsc::sync_channel(EVENT_QUEUE);
+    let stop = Arc::new(AtomicBool::new(false));
     let queue = Queue {
         tx: tx.clone(),
         overflowing: Arc::new(AtomicBool::new(false)),
@@ -350,12 +454,29 @@ pub fn spawn_instance(
         queue: queue.clone(),
         out,
         secrets,
+        secrets_dirty: false,
         timers: HashMap::new(),
         last_timer: 0,
         timers_full_warned: false,
+        warned: BTreeSet::new(),
+        stop: Arc::clone(&stop),
+        ticks_left: CALL_DEADLINE,
+        _ticker: Arc::clone(&loaded.ticker),
     };
     let mut store = Store::new(engine.engine(), state);
     store.limiter(|s| &mut s.limits);
+    // The deadline fires every STOP_CHECK ticks: stop when asked, trap when the budget is spent.
+    store.epoch_deadline_callback(|mut cx| {
+        let s = cx.data_mut();
+        if s.stop.load(Ordering::Relaxed) {
+            return Err(wasmtime::Error::new(Stopping));
+        }
+        s.ticks_left = s.ticks_left.saturating_sub(STOP_CHECK);
+        if s.ticks_left == 0 {
+            return Ok(UpdateDeadline::Interrupt);
+        }
+        Ok(UpdateDeadline::Continue(STOP_CHECK.min(s.ticks_left)))
+    });
 
     let (exit_tx, exited) = oneshot::channel();
     std::thread::Builder::new()
@@ -369,22 +490,67 @@ pub fn spawn_instance(
         events: tx,
         exited,
         queue,
+        stop,
     })
 }
 
-/// The instance thread: instantiate, then one guest call per event until `Stop` or a trap.
+/// Returned from the epoch callback when the instance is asked to stop during a guest call.
+#[derive(Debug)]
+struct Stopping;
+
+impl fmt::Display for Stopping {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("stopped")
+    }
+}
+
+impl std::error::Error for Stopping {}
+
+/// Give the next guest call its full budget, checked for stop requests every `STOP_CHECK` ticks.
+fn arm(store: &mut Store<HostState>) {
+    store.data_mut().ticks_left = CALL_DEADLINE;
+    store.set_epoch_deadline(STOP_CHECK);
+}
+
+/// How a failed guest call ends the instance.
+fn ended(e: &wasmtime::Error) -> Exit {
+    if e.downcast_ref::<Stopping>().is_some() {
+        Exit::Stopped
+    } else {
+        Exit::Crashed(crash_reason(e))
+    }
+}
+
+/// The instance thread: instantiate, then one guest call per event until stopped or a trap.
 fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Event>) -> Exit {
     let plugin = Arc::clone(&store.data().plugin);
-    let failed = PluginError::Failed(store.data().manifest.name.clone()).to_string();
+    let stop = Arc::clone(&store.data().stop);
+    let name = store.data().manifest.name.clone();
+    let refusal = |exit: &Exit| match exit {
+        Exit::Stopped => PluginError::Off(name.clone()).to_string(),
+        Exit::Crashed(_) => PluginError::Failed(name.clone()).to_string(),
+    };
 
-    store.set_epoch_deadline(CALL_DEADLINE);
-    let exit = match pre.instantiate(&mut store) {
-        Err(e) => Exit::Crashed(crash_reason(&e)),
+    arm(&mut store);
+    let instantiated = pre.instantiate(&mut store);
+    store.data_mut().flush_secrets();
+    let mut unanswered = None;
+    let exit = match instantiated {
+        Err(e) => ended(&e),
         Ok(guest) => loop {
-            let Ok(event) = rx.recv() else {
+            if stop.load(Ordering::Relaxed) {
                 break Exit::Stopped;
+            }
+            let event = match rx.recv_timeout(STOP_POLL) {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break Exit::Stopped,
             };
-            store.set_epoch_deadline(CALL_DEADLINE);
+            if stop.load(Ordering::Relaxed) {
+                unanswered = Some(event);
+                break Exit::Stopped;
+            }
+            arm(&mut store);
             let s = &mut store;
             let called = match event {
                 Event::Stop => break Exit::Stopped,
@@ -403,7 +569,7 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
                         Ok(())
                     }
                     Err(e) => {
-                        let _ = reply.send(Err(failed.clone()));
+                        let _ = reply.send(Err(refusal(&ended(&e))));
                         Err(e)
                     }
                 },
@@ -418,19 +584,22 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
                     false => Ok(()),
                 },
             };
+            // Secrets set before a trap still count.
+            store.data_mut().flush_secrets();
             if let Err(e) = called {
-                break Exit::Crashed(crash_reason(&e));
+                break ended(&e);
             }
         },
     };
 
     if let Exit::Crashed(why) = &exit {
         tracing::warn!(target: "plugin", plugin = %plugin, "crashed: {why}");
-        // Nothing queued behind the crash runs; actions waiting on a reply get the error.
-        while let Ok(event) = rx.try_recv() {
-            if let Event::Action { reply, .. } = event {
-                let _ = reply.send(Err(failed.clone()));
-            }
+    }
+    // Nothing queued runs any more; actions waiting on a reply get the reason.
+    let message = refusal(&exit);
+    for event in unanswered.into_iter().chain(rx.try_iter()) {
+        if let Event::Action { reply, .. } = event {
+            let _ = reply.send(Err(message.clone()));
         }
     }
     // Dropping the store aborts the instance's timers before anyone learns it exited.
@@ -453,6 +622,18 @@ fn crash_reason(e: &wasmtime::Error) -> String {
             .unwrap_or("unknown error")
             .to_string(),
     }
+}
+
+/// At most `max` bytes of `s`, cut at a character boundary.
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Guest stdout (info) or stderr (warn), logged line by line with the plugin's id.

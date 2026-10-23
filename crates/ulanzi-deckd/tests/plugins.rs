@@ -136,8 +136,9 @@ impl Running {
         }
     }
 
-    async fn exit(self) -> Exit {
-        tokio::time::timeout(PROMPTLY, self.handle.exited)
+    async fn exit(mut self) -> Exit {
+        // The handle stops the instance when dropped, so `exited` is awaited by reference.
+        tokio::time::timeout(PROMPTLY, &mut self.handle.exited)
             .await
             .expect("instance exits in time")
             .expect("exit reported")
@@ -255,27 +256,26 @@ async fn stop_ends_the_instance() {
 #[tokio::test]
 async fn flood_is_bounded() {
     let mut p = probe();
-    let reply = p.queue("flood", json!({}));
-    // The test's own runtime stays responsive while the plugin floods the host.
-    let tick = Instant::now();
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert!(
-        tick.elapsed() < Duration::from_millis(500),
-        "runtime stalled for {:?}",
-        tick.elapsed()
-    );
-
+    let mut reply = p.queue("flood", json!({}));
     let started = Instant::now();
-    let reply = tokio::time::timeout(Duration::from_secs(2), reply)
-        .await
-        .expect("flood finishes or crashes within 2 s")
-        .expect("reply sent");
+    // While the plugin floods the host, the test's own runtime keeps running 10 ms sleeps on time.
+    let reply = loop {
+        let tick = Instant::now();
+        tokio::select! {
+            r = &mut reply => break r.expect("reply sent"),
+            () = tokio::time::sleep(Duration::from_millis(10)) => {
+                let late = tick.elapsed();
+                assert!(late < Duration::from_millis(500), "runtime stalled for {late:?}");
+                let total = started.elapsed();
+                assert!(total < Duration::from_secs(2), "flood still running after {total:?}");
+            }
+        }
+    };
     match reply {
         Ok(()) => assert!(p.saw(&state("flood", "9999"), PROMPTLY).await),
         Err(e) => assert_eq!(e, "Probe stopped working"),
     }
-    assert!(started.elapsed() < Duration::from_secs(2));
-    // Still responsive after 2 000 pending timers.
+    // Still responsive with 2 000 pending timers.
     let tick = Instant::now();
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(
@@ -283,6 +283,70 @@ async fn flood_is_bounded() {
         "runtime stalled for {:?}",
         tick.elapsed()
     );
+}
+
+#[tokio::test]
+async fn stop_works_with_a_full_queue() {
+    let mut p = probe();
+    let busy = p.queue("spin", json!({}));
+    let queued = p.queue("state", json!({"k": "a", "v": "b"}));
+    // Fill the queue behind the spinning call; the timer id is unknown, so these do nothing.
+    while p.handle.events.try_send(Event::Timer(u32::MAX)).is_ok() {}
+    p.handle.stop();
+    let exit = tokio::time::timeout(Duration::from_secs(1), &mut p.handle.exited)
+        .await
+        .expect("stops within 1 s")
+        .expect("exit reported");
+    assert_eq!(exit, Exit::Stopped);
+    let off = Err("the Probe plugin is turned off".to_string());
+    for rx in [busy, queued] {
+        let reply = tokio::time::timeout(PROMPTLY, rx).await.expect("reply in time");
+        assert_eq!(reply, Ok(off.clone()));
+    }
+}
+
+#[tokio::test]
+async fn dropping_the_handle_ends_the_instance() {
+    let Running {
+        handle,
+        mut out,
+        _engine,
+        _dir,
+        _cache,
+    } = probe();
+    drop(handle);
+    // The thread drops the store, and with it the output sender, when it ends.
+    let closed = tokio::time::timeout(Duration::from_secs(1), async {
+        while out.recv().await.is_some() {}
+    })
+    .await;
+    assert!(closed.is_ok(), "instance still running");
+}
+
+#[tokio::test]
+async fn oversized_state_is_ignored() {
+    let mut p = probe();
+    let big = "x".repeat(64 * 1024 + 1);
+    assert_eq!(p.act("state", json!({"k": "big", "v": big})).await, Ok(()));
+    assert_eq!(p.act("state", json!({"k": "after", "v": "1"})).await, Ok(()));
+    loop {
+        let o = tokio::time::timeout(PROMPTLY, p.out.recv())
+            .await
+            .expect("output in time")
+            .expect("output");
+        match o {
+            Output::State { key, .. } if key == "big" => panic!("oversized state was sent"),
+            o if o == state("after", "1") => break,
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn secrets_changed_debug_hides_values() {
+    let o = Output::SecretsChanged(BTreeMap::from([("token".into(), "hunter2".into())]));
+    let shown = format!("{o:?}");
+    assert!(shown.contains("token") && !shown.contains("hunter2"), "{shown}");
 }
 
 #[tokio::test]
