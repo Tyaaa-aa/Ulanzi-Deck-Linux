@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How long daemon start waits for the Secret Service before using the file instead.
+use futures_util::future::BoxFuture;
+
+/// How long the first plugin that needs its secrets waits for the Secret Service before the
+/// file is used instead.
 const KEYRING_TIMEOUT: Duration = Duration::from_secs(3);
 /// Keyring item attribute naming this application.
 const APPLICATION: &str = "ulanzi-deck";
@@ -157,4 +160,48 @@ pub async fn system_secrets(config_dir: &Path) -> Arc<dyn SecretStore> {
         path.display()
     );
     Arc::new(FileSecrets::new(path))
+}
+
+/// Makes the real store on first use (once, shared by every caller), so starting the daemon never
+/// waits for the keyring: only a plugin start that needs its secrets does.
+pub struct LazySecrets {
+    make: Box<dyn Fn() -> BoxFuture<'static, Arc<dyn SecretStore>> + Send + Sync>,
+    store: tokio::sync::OnceCell<Arc<dyn SecretStore>>,
+}
+
+impl LazySecrets {
+    pub fn new<F, Fut>(make: F) -> LazySecrets
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Arc<dyn SecretStore>> + Send + 'static,
+    {
+        LazySecrets {
+            make: Box::new(move || Box::pin(make())),
+            store: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// [`system_secrets`] for `config_dir`, on first use.
+    pub fn system(config_dir: &Path) -> LazySecrets {
+        let dir = config_dir.to_path_buf();
+        LazySecrets::new(move || {
+            let dir = dir.clone();
+            async move { system_secrets(&dir).await }
+        })
+    }
+
+    async fn store(&self) -> &Arc<dyn SecretStore> {
+        self.store.get_or_init(|| (self.make)()).await
+    }
+}
+
+#[async_trait::async_trait]
+impl SecretStore for LazySecrets {
+    async fn load(&self, plugin: &str) -> Result<BTreeMap<String, String>, String> {
+        self.store().await.load(plugin).await
+    }
+
+    async fn save(&self, plugin: &str, secrets: &BTreeMap<String, String>) -> Result<(), String> {
+        self.store().await.save(plugin, secrets).await
+    }
 }

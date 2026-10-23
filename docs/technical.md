@@ -169,7 +169,10 @@ Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `
 Plugins are WebAssembly components run by wasmtime inside `ulanzi-deckd`, one instance each, with
 64 MiB of memory, 500 ms per call and no access to files or sockets except through the host, which
 checks every connection against the plugin's permissions. A crash restarts the plugin once; a second
-one within 5 minutes leaves it `failed`. The contract, permissions and limits are in the
+one within 5 minutes leaves it `failed`. The deck starts first; the plugins are loaded and compiled
+in the background (a plugin key pressed meanwhile reports "plugins are still starting", and the D-Bus
+plugin methods "plugins are not running yet"), and the keyring is asked only when a plugin first needs
+its secrets. The contract, permissions and limits are in the
 [plugin guide](plugins.md). Each plugin has `[plugins.<id>]` in `settings.toml` (`enabled`, plus a `[plugins.<id>.settings]` subtable passed to the plugin); a plugin's state
 reaches key labels as `{<id>.<key>}`.
 

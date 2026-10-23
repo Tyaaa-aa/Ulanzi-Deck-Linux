@@ -13,6 +13,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   list|install|remove|enable|disable|restart|dev-mode` and new D-Bus methods; install from a folder
   needs Developer mode. Includes the plugin SDK (`ulanzi-plugin`), a hello example and the
   [plugin guide](docs/plugins.md).
+  The deck starts without waiting for plugins: they come up in the background, and the keyring
+  is asked only when a plugin first needs its secrets.
 
 ## [2.0.0] - 2026-10-23
 

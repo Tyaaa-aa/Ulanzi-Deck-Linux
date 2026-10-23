@@ -13,7 +13,7 @@ use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals, reload};
 use ulanzi_deckd::deck::{DeckEvent, DeckMsg, start_deck};
-use ulanzi_deckd::plugins::{PluginHost, system_secrets};
+use ulanzi_deckd::plugins::{LazySecrets, PluginHost, PluginSlot};
 use ulanzi_deckd::screen::Sampler;
 use ulanzi_deckd::transport::{DeviceState, Hidraw, probe, watch_dev};
 
@@ -129,20 +129,17 @@ async fn main() -> ExitCode {
         tracing::error!("cannot install signal handlers");
         return ExitCode::FAILURE;
     };
-    let plugins = start_plugins(&store, &settings, tx.clone()).await;
-    match conn
-        .object_server()
-        .interface::<_, DeckService>(OBJECT_PATH)
-        .await
-    {
-        Ok(iface) => iface.get_mut().await.set_plugins(plugins.clone()),
-        Err(e) => tracing::error!("plugins are not on D-Bus: {e}"),
-    }
-    tokio::spawn(ulanzi_deckd::dbus::forward_plugins(conn.clone(), plugins.clone()));
+    // The deck does not wait for the plugins: they come up in the background, and a plugin key
+    // pressed meanwhile says so.
+    let plugins = {
+        let (store, settings, deck) = (store.clone(), settings.clone(), tx.clone());
+        PluginSlot::start(async move { start_plugins(&store, &settings, deck).await })
+    };
+    tokio::spawn(plugins_ready(conn.clone(), plugins.clone(), store.clone()));
     let executor = Arc::new(
         Executor::new(Some(conn.clone()))
             .with_obs(obs.clone())
-            .with_plugins(plugins.clone()),
+            .with_plugin_slot(plugins.clone()),
     );
     {
         let ex = executor.clone();
@@ -204,8 +201,8 @@ async fn main() -> ExitCode {
             _ = hup.recv() => {
                 tracing::info!("reloading configuration");
                 reload(&tx, &store).await;
-                if let Ok(s) = store.load_settings() {
-                    plugins.apply_settings(&s).await;
+                if let (Some(host), Ok(s)) = (plugins.get(), store.load_settings()) {
+                    host.apply_settings(&s).await;
                 }
             }
         }
@@ -216,6 +213,26 @@ async fn main() -> ExitCode {
     plugins.shutdown().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     ExitCode::SUCCESS
+}
+
+/// Once the plugin host is ready: offer it on D-Bus, signal the list, and give it settings saved
+/// while it was starting.
+async fn plugins_ready(conn: zbus::Connection, plugins: PluginSlot, store: Store) {
+    let Some(host) = plugins.wait().await else {
+        return;
+    };
+    match conn
+        .object_server()
+        .interface::<_, DeckService>(OBJECT_PATH)
+        .await
+    {
+        Ok(iface) => iface.get_mut().await.set_plugins(host.clone()),
+        Err(e) => tracing::error!("plugins are not on D-Bus: {e}"),
+    }
+    if let Ok(s) = store.load_settings() {
+        host.apply_settings(&s).await;
+    }
+    ulanzi_deckd::dbus::forward_plugins(conn, host).await;
 }
 
 /// Load the installed plugins and start the ones that run in the background or that a profile
@@ -240,7 +257,8 @@ async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<De
     PluginHost::start(
         dir,
         store.cache_dir().join("plugins"),
-        system_secrets(store.root()).await,
+        // The keyring is asked only when a plugin first needs its secrets.
+        Arc::new(LazySecrets::system(store.root())),
         settings,
         &used,
         deck,

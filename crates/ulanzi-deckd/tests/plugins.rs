@@ -17,8 +17,8 @@ use ulanzi_core::model::{PluginEntry, Settings};
 use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::deck::DeckMsg;
 use ulanzi_deckd::plugins::{
-    Event, Exit, FileSecrets, InstanceHandle, Output, PluginEngine, PluginError, PluginHost, PluginStatus,
-    SecretStore, spawn_instance,
+    Event, Exit, FileSecrets, InstanceHandle, LazySecrets, Output, PluginEngine, PluginError, PluginHost,
+    PluginSlot, PluginStatus, SecretStore, spawn_instance,
 };
 
 const HELLO_PACKAGE: &str = "ulanzi-plugin-hello";
@@ -365,6 +365,23 @@ async fn a_long_sleep_is_over_budget() {
     );
     assert!(
         started.elapsed() < Duration::from_millis(1000),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(p.exit().await, Exit::Crashed("took longer than 500 ms".into()));
+}
+
+#[tokio::test]
+async fn waiting_counts_toward_the_budget_of_busy_work() {
+    // 490 ms asleep, then a busy loop: the call ends at about 500 ms in all, not about 950 ms.
+    let p = probe();
+    let started = Instant::now();
+    assert_eq!(
+        p.act("sleep_spin", json!({"ms": 490})).await,
+        Err("Probe stopped working".to_string())
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(850),
         "took {:?}",
         started.elapsed()
     );
@@ -1376,4 +1393,155 @@ async fn install_refuses_symlinks() {
         "nothing left behind"
     );
     assert!(h.host.list().is_empty());
+}
+
+#[tokio::test]
+async fn a_slow_reply_is_busy_not_broken() {
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let h = host_with(setup, &Settings::default(), &["probe"], mem_secrets()).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    // Five 450 ms calls queued at once: the last reply comes after the 2 s an action waits.
+    let sleeps = (0..5).map(|_| h.host.action("probe", "sleep", json!({"ms": 450})));
+    let late = async {
+        tokio::task::yield_now().await;
+        h.host.action("probe", "state", json!({"k": "a", "v": "b"})).await
+    };
+    let (sleeps, late) = tokio::join!(futures_util::future::join_all(sleeps), late);
+    assert_eq!(
+        late,
+        Err(PluginError::Action("Probe is busy".into())),
+        "{sleeps:?}"
+    );
+    assert!(sleeps.iter().any(|r| r.is_ok()), "{sleeps:?}");
+    assert_eq!(h.status("probe"), Some(PluginStatus::Running));
+    h.host.shutdown().await;
+}
+
+/// A lazy store that counts how often its real store is made (each one takes `delay`).
+fn counted(made: Arc<std::sync::atomic::AtomicUsize>, delay: Duration) -> LazySecrets {
+    LazySecrets::new(move || {
+        let made = made.clone();
+        async move {
+            made.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(delay).await;
+            Arc::new(MemSecrets::default()) as Arc<dyn SecretStore>
+        }
+    })
+}
+
+#[tokio::test]
+async fn secrets_store_is_made_on_first_use_once() {
+    let made = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let lazy = counted(made.clone(), Duration::from_millis(100));
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let h = host_with(setup, &Settings::default(), &[], Arc::new(lazy)).await;
+    assert_eq!(
+        made.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "not at host start"
+    );
+    let kv = json!({"k": "k", "v": "v"});
+    let (a, b) = tokio::join!(
+        h.host.action("probe", "secret_set", kv.clone()),
+        h.host.action("probe", "secret_get", json!({"k": "k"}))
+    );
+    assert_eq!((a, b), (Ok(()), Ok(())));
+    assert_eq!(h.host.restart("probe").await, Ok(()));
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    assert_eq!(made.load(std::sync::atomic::Ordering::SeqCst), 1, "made once");
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_while_a_plugin_waits_for_its_secrets() {
+    let made = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let lazy = counted(made.clone(), Duration::from_secs(2));
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let h = host_with(setup, &Settings::default(), &["probe"], Arc::new(lazy)).await;
+    assert_eq!(h.status("probe"), Some(PluginStatus::Starting));
+    let started = Instant::now();
+    h.host.shutdown().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    // The secrets arrive after the shutdown: the instance never starts.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(h.status("probe"), Some(PluginStatus::Off));
+}
+
+fn press(plugin: &str, action: &str) -> ulanzi_core::model::Action {
+    ulanzi_core::model::Action::Plugin {
+        plugin: plugin.into(),
+        action: action.into(),
+        params: toml::Table::new(),
+    }
+}
+
+#[tokio::test]
+async fn keys_work_before_the_plugins_are_ready() {
+    use ulanzi_deckd::actions::{ActionError, ActionRunner, Executor};
+    let dir = tempfile::tempdir().expect("dir");
+    let cache = tempfile::tempdir().expect("cache");
+    hello_folder(dir.path());
+    let (tx, _deck) = mpsc::channel(4096);
+    let (go, ready) = oneshot::channel::<()>();
+    let slot = {
+        let (dir, cache) = (dir.path().to_path_buf(), cache.path().to_path_buf());
+        PluginSlot::start(async move {
+            let _ = ready.await;
+            PluginHost::start(
+                dir,
+                cache,
+                mem_secrets(),
+                &Settings::default(),
+                &BTreeSet::new(),
+                tx,
+            )
+            .await
+        })
+    };
+    let ex = Executor::new(None).with_plugin_slot(slot.clone());
+    // Other actions run as usual; a plugin key says why it does nothing yet.
+    let media = ulanzi_core::model::Action::Media {
+        control: ulanzi_core::model::MediaControl::PlayPause,
+        player: None,
+    };
+    assert!(matches!(ex.run(&media).await, Err(ActionError::Unavailable(_))));
+    assert_eq!(
+        ex.run(&press("hello", "count")).await,
+        Err(ActionError::Unavailable("plugins are still starting".into()))
+    );
+    assert!(slot.get().is_none());
+    go.send(()).expect("start");
+    let host = tokio::time::timeout(PROMPTLY, slot.wait())
+        .await
+        .expect("ready in time")
+        .expect("started");
+    assert_eq!(ex.run(&press("hello", "count")).await, Ok(()));
+    assert_eq!(
+        ex.run(&press("nope", "count")).await,
+        Err(ActionError::Unavailable(
+            "the nope plugin is not installed".into()
+        ))
+    );
+    slot.shutdown().await;
+    assert_eq!(host.list()[0].status, PluginStatus::Off, "shut down");
+}
+
+#[tokio::test]
+async fn shutdown_while_the_plugins_start() {
+    let slot = PluginSlot::start(std::future::pending());
+    let started = Instant::now();
+    tokio::time::timeout(PROMPTLY, slot.shutdown())
+        .await
+        .expect("shutdown in time");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(slot.wait().await.is_none(), "never ready");
+    assert!(slot.get().is_none());
 }

@@ -10,16 +10,17 @@ mod supervisor;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use ulanzi_core::model::Settings;
 
 use crate::deck::DeckMsg;
 
 pub use engine::{LoadedPlugin, PluginEngine};
 pub use instance::{Dropped, Event, Exit, HostState, InstanceHandle, Output, spawn_instance};
-pub use secrets::{FileSecrets, KeyringSecrets, SecretStore, system_secrets};
+pub use secrets::{FileSecrets, KeyringSecrets, LazySecrets, SecretStore, system_secrets};
 pub use ulanzi_core::plugin::ManifestError;
 
 // The generated bindings cover the whole contract; not every item is used yet.
@@ -171,5 +172,97 @@ impl PluginHost {
     /// Stop every instance and wait (briefly) for them to end.
     pub async fn shutdown(&self) {
         self.inner.shutdown().await
+    }
+}
+
+/// The plugin host as it comes up in the background, so the deck never waits for it: empty
+/// until it is ready. Cheap to clone.
+#[derive(Clone)]
+pub struct PluginSlot {
+    inner: Arc<Slot>,
+}
+
+struct Slot {
+    stage: watch::Sender<Stage>,
+    /// The task bringing the host up, until `shutdown` takes it.
+    starting: Mutex<Option<JoinHandle<()>>>,
+}
+
+#[derive(Clone)]
+enum Stage {
+    Starting,
+    Ready(PluginHost),
+    /// Shut down before the host was ready.
+    Stopped,
+}
+
+impl PluginSlot {
+    fn with(stage: Stage) -> PluginSlot {
+        PluginSlot {
+            inner: Arc::new(Slot {
+                stage: watch::Sender::new(stage),
+                starting: Mutex::new(None),
+            }),
+        }
+    }
+
+    /// Bring the host up in a spawned task; `start` returns it ready. Must run inside tokio.
+    pub fn start(start: impl Future<Output = PluginHost> + Send + 'static) -> PluginSlot {
+        let slot = PluginSlot::with(Stage::Starting);
+        let inner = Arc::clone(&slot.inner);
+        let task = tokio::spawn(async move {
+            let host = start.await;
+            inner.stage.send_replace(Stage::Ready(host));
+        });
+        *slot.lock_starting() = Some(task);
+        slot
+    }
+
+    /// A host that is ready already.
+    pub fn ready(host: PluginHost) -> PluginSlot {
+        PluginSlot::with(Stage::Ready(host))
+    }
+
+    fn lock_starting(&self) -> std::sync::MutexGuard<'_, Option<JoinHandle<()>>> {
+        self.inner.starting.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The host, once it is ready.
+    pub fn get(&self) -> Option<PluginHost> {
+        match &*self.inner.stage.borrow() {
+            Stage::Ready(host) => Some(host.clone()),
+            Stage::Starting | Stage::Stopped => None,
+        }
+    }
+
+    /// Wait until the host is ready; `None` when it was shut down first.
+    pub async fn wait(&self) -> Option<PluginHost> {
+        let mut rx = self.inner.stage.subscribe();
+        let stage = rx.wait_for(|s| !matches!(s, Stage::Starting)).await.ok()?.clone();
+        match stage {
+            Stage::Ready(host) => Some(host),
+            Stage::Starting | Stage::Stopped => None,
+        }
+    }
+
+    /// Stop the plugins: cancel a start still in progress, or shut the ready host down.
+    pub async fn shutdown(&self) {
+        let task = self.lock_starting().take();
+        if let Some(task) = task {
+            // A host still being made is dropped (which stops anything it began); one that is
+            // made is in the slot by now: nothing awaits between the two.
+            task.abort();
+            let _ = task.await;
+        }
+        self.inner.stage.send_if_modified(|s| {
+            let starting = matches!(s, Stage::Starting);
+            if starting {
+                *s = Stage::Stopped;
+            }
+            starting
+        });
+        if let Some(host) = self.get() {
+            host.shutdown().await;
+        }
     }
 }

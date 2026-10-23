@@ -48,7 +48,7 @@ pub struct Executor {
     media: Option<MediaClient>,
     keyboard: Arc<Mutex<Option<VirtualKeyboard>>>,
     obs: Option<crate::obs::ObsHandle>,
-    plugins: Option<crate::plugins::PluginHost>,
+    plugins: Option<crate::plugins::PluginSlot>,
 }
 
 impl Executor {
@@ -69,8 +69,13 @@ impl Executor {
     }
 
     /// Run plugin actions through this host.
-    pub fn with_plugins(mut self, host: crate::plugins::PluginHost) -> Executor {
-        self.plugins = Some(host);
+    pub fn with_plugins(self, host: crate::plugins::PluginHost) -> Executor {
+        self.with_plugin_slot(crate::plugins::PluginSlot::ready(host))
+    }
+
+    /// Run plugin actions through the host in `slot` once it is ready (it starts in the background).
+    pub fn with_plugin_slot(mut self, slot: crate::plugins::PluginSlot) -> Executor {
+        self.plugins = Some(slot);
         self
     }
 
@@ -236,11 +241,12 @@ impl ActionRunner for Executor {
                 plugin,
                 action,
                 params,
-            } => match &self.plugins {
-                Some(host) => host
+            } => match self.plugins.as_ref().map(|slot| slot.get()) {
+                Some(Some(host)) => host
                     .action(plugin, action, table_to_json(params))
                     .await
                     .map_err(plugin_error),
+                Some(None) => Err(ActionError::Unavailable("plugins are still starting".into())),
                 None => Err(plugin_error(PluginError::NotInstalled(plugin.clone()))),
             },
             Action::Obs(o) => match &self.obs {

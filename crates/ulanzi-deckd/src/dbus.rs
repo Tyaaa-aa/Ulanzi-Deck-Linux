@@ -67,7 +67,8 @@ impl DeckService {
         self
     }
 
-    /// Give the already published service the plugin host (it starts after the bus name is ours).
+    /// Give the already published service the plugin host (it comes up in the background, after
+    /// the deck has started).
     pub fn set_plugins(&mut self, host: PluginHost) {
         self.plugins = Some(host);
     }
@@ -871,14 +872,16 @@ pub async fn forward_obs(
     }
 }
 
-/// Send `PluginsChanged` whenever the plugin list or a status changes, at most once per
-/// `PLUGINS_CHANGED_EVERY` (changes meanwhile are folded into the next signal).
+/// Send `PluginsChanged` now (the host has just come up) and whenever the plugin list or a status
+/// changes, at most once per `PLUGINS_CHANGED_EVERY` (changes meanwhile are folded into the next
+/// signal).
 pub async fn forward_plugins(conn: Connection, host: PluginHost) {
     const PLUGINS_CHANGED_EVERY: std::time::Duration = std::time::Duration::from_millis(200);
     let Ok(emitter) = SignalEmitter::new(&conn, OBJECT_PATH) else {
         return;
     };
     let mut changes = host.watch();
+    changes.mark_changed();
     while changes.changed().await.is_ok() {
         changes.borrow_and_update();
         if let Err(e) = DeckService::plugins_changed(&emitter).await {

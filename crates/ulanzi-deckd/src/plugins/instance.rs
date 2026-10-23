@@ -34,7 +34,7 @@ use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
 const EVENT_QUEUE: usize = 1024;
 /// Per guest call: 50 epoch ticks of 10 ms = 500 ms.
 const CALL_DEADLINE: u64 = 50;
-/// The same budget in wall time, for blocking WASI waits (no epoch ticks are counted in them).
+/// The same budget in wall time, waiting included: blocking WASI waits are not counted in ticks.
 const CALL_BUDGET: Duration = Duration::from_millis(500);
 /// A blocking WASI wait checks the stop flag and the call budget this often.
 const WAIT_SLICE: Duration = Duration::from_millis(10);
@@ -517,7 +517,8 @@ pub fn spawn_instance(
             return Err(wasmtime::Error::new(Stopping));
         }
         s.ticks_left = s.ticks_left.saturating_sub(STOP_CHECK);
-        if s.ticks_left == 0 {
+        // Ticks pass only while wasm runs; blocking WASI waits count through the wall clock.
+        if s.ticks_left == 0 || s.call_started.elapsed() >= CALL_BUDGET {
             return Ok(UpdateDeadline::Interrupt);
         }
         Ok(UpdateDeadline::Continue(STOP_CHECK.min(s.ticks_left)))

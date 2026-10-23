@@ -113,6 +113,15 @@ impl Plugin for Probe {
                 let ms = params["ms"].as_u64().ok_or("sleep needs ms")?;
                 std::thread::sleep(Duration::from_millis(ms));
             }
+            "sleep_spin" => {
+                // A blocking wait, then busy work: both count against the call's budget.
+                let ms = params["ms"].as_u64().ok_or("sleep_spin needs ms")?;
+                std::thread::sleep(Duration::from_millis(ms));
+                let mut n = 0u64;
+                loop {
+                    n = black_box(n).wrapping_add(1);
+                }
+            }
             "fetch" => {
                 let request = HttpRequest {
                     method: "GET".into(),

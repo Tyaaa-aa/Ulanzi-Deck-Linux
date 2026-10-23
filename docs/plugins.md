@@ -44,7 +44,8 @@ The sandbox is strict:
   keep working.
 
 A plugin starts the first time one of its actions is pressed, or when the daemon starts if a profile
-uses it or its manifest says `background = true`.
+uses it or its manifest says `background = true`. The deck never waits for plugins: they load in the
+background after it starts, and a plugin key pressed before that reports "plugins are still starting".
 
 ## The contract
 
@@ -210,7 +211,7 @@ The service enforces these for every plugin.
 |---|---|
 | Time per call into the plugin | 500 ms, waiting included (`std::thread::sleep` counts); the call is then ended and the plugin counts as crashed |
 | Memory | 64 MiB per plugin |
-| Events waiting for the plugin | 1024; when full, new events are dropped and one warning is logged per overflow. A key pressed meanwhile reports "<name> is busy" |
+| Events waiting for the plugin | 1024; when full, new events are dropped and one warning is logged per overflow. A key pressed meanwhile, or one whose action is not answered within 2 s, reports "<name> is busy" |
 | Timers | 4096 per plugin; repeating timers at most every 10 ms |
 | Open sockets | 64; requests in flight: 64 |
 | Message size | 1 MiB per WebSocket message |
@@ -236,9 +237,9 @@ installing or enabling the plugin later brings the key back.
 ## Secrets
 
 Use `secret-set` for passwords, tokens and keys, never `set-state` or a settings value. Secrets are
-stored for you in the system keyring (Secret Service: KWallet, GNOME Keyring). If no keyring answers
-within 3 seconds when the service starts, they go to `~/.config/ulanzi-deck/plugin-secrets.toml`
-(mode 0600) instead. They are never logged, never sent over D-Bus and not part of profile exports or
+stored for you in the system keyring (Secret Service: KWallet, GNOME Keyring), which the service
+first asks when a plugin starts. If it does not answer within 3 seconds, they go to
+`~/.config/ulanzi-deck/plugin-secrets.toml` (mode 0600) instead. They are never logged, never sent over D-Bus and not part of profile exports or
 backups. Removing a plugin deletes its secrets; reinstalling it from a folder keeps them.
 
 ## Building and installing

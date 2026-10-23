@@ -346,6 +346,9 @@ impl Host {
     /// Start an instance of `e` in the background: `Starting` now, `Running` once it runs.
     /// Called with the state lock held.
     fn launch(&self, id: &str, e: &mut Entry) {
+        // A new run: the stopped instance has ended (or timed out), and its late outputs
+        // must not overwrite what the new one does.
+        e.draining = None;
         let Some(loaded) = e.loaded.clone() else {
             return;
         };
@@ -545,8 +548,9 @@ impl Host {
             return Err(PluginError::Action(format!("{name} is busy")));
         }
         let Ok(replied) = tokio::time::timeout(REPLY_WAIT, rx).await else {
+            // Still working through earlier events (each call is bounded, so it is not stuck).
             tracing::warn!(target: "plugin", plugin = %plugin, "no reply to an action within {} s", REPLY_WAIT.as_secs());
-            return Err(PluginError::Failed(name));
+            return Err(PluginError::Action(format!("{name} is busy")));
         };
         match replied {
             Ok(Ok(())) => Ok(()),
@@ -883,6 +887,14 @@ mod tests {
         host.output("ghost", 7, secrets()).await;
         assert!(saves.0.lock().expect("saves").is_empty());
         // The instance being stopped still saves its last change.
+        host.output("ghost", 3, secrets()).await;
+        assert_eq!(*saves.0.lock().expect("saves"), ["ghost"]);
+        // Once a new run is launched, the stopped instance's late secrets no longer count.
+        {
+            let mut st = host.state();
+            let e = st.plugins.get_mut("ghost").expect("ghost");
+            host.launch("ghost", e);
+        }
         host.output("ghost", 3, secrets()).await;
         assert_eq!(*saves.0.lock().expect("saves"), ["ghost"]);
     }
