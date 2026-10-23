@@ -35,7 +35,7 @@ done_step() { # idx file
   [ $board = 1 ] && { sb_cell "$1" 2 "$(basename "$2")"; sb_cell "$1" 3 "$size"; sb_ok; }
   echo "   -> $(basename "$2") $size"
 }
-skip_step() { [ $board = 1 ] && { sb_cell "$1" 1 "$2"; sb_warn "$3"; }; echo "== $2 skipped: $3"; }
+skip_step() { [ $board = 1 ] && { sb_start "$1" "$2" "?"; sb_cell "$1" 1 "$2"; sb_warn "$3"; }; echo "== $2 skipped: $3"; }
 fail() { [ $board = 1 ] && { sb_fail "$1"; sb_finish; }; echo "FAILED: $1" >&2; exit 1; }
 trap 'fail "step failed (see the terminal output)"' ERR
 
