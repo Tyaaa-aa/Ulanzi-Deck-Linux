@@ -82,6 +82,14 @@ pub enum DeckMsg {
     Focus(ulanzi_core::autoswitch::Window),
     /// Turn auto profile switching on or off (tray).
     ToggleAutoSwitch,
+    /// A plugin set a state value (`<plugin>.<key>` in labels).
+    PluginState {
+        plugin: String,
+        key: String,
+        value: String,
+    },
+    /// A plugin instance ended (stopped, crashed, replaced or removed): forget its state values.
+    PluginCleared(String),
     Shutdown,
 }
 
@@ -460,6 +468,8 @@ impl Deck {
                 self.focused = Some(w);
                 self.auto_switch().await;
             }
+            // Plugin state reaches keys in a later task; until then it is ignored.
+            DeckMsg::PluginState { .. } | DeckMsg::PluginCleared(_) => {}
             DeckMsg::Shutdown => {}
         }
     }

@@ -1,6 +1,7 @@
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -12,8 +13,13 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use ulanzi_core::model::{PluginEntry, Settings};
 use ulanzi_core::plugin::Manifest;
-use ulanzi_deckd::plugins::{Event, Exit, InstanceHandle, Output, PluginEngine, PluginError, spawn_instance};
+use ulanzi_deckd::deck::DeckMsg;
+use ulanzi_deckd::plugins::{
+    Event, Exit, FileSecrets, InstanceHandle, Output, PluginEngine, PluginError, PluginHost, PluginStatus,
+    SecretStore, spawn_instance,
+};
 
 const HELLO_PACKAGE: &str = "ulanzi-plugin-hello";
 const HELLO_MANIFEST: &str = include_str!("../../../examples/plugins/hello/plugin.toml");
@@ -823,5 +829,374 @@ async fn data_sent_before_close_arrives() {
         started.elapsed() < Duration::from_secs(3),
         "took {:?}",
         started.elapsed()
+    );
+}
+
+// ---- Plugin host: secrets, supervisor, install ----
+
+/// Secrets kept in memory, for tests that must not touch the system keyring.
+#[derive(Default)]
+struct MemSecrets(std::sync::Mutex<BTreeMap<String, BTreeMap<String, String>>>);
+
+#[async_trait::async_trait]
+impl SecretStore for MemSecrets {
+    async fn load(&self, plugin: &str) -> Result<BTreeMap<String, String>, String> {
+        let all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(all.get(plugin).cloned().unwrap_or_default())
+    }
+    async fn save(&self, plugin: &str, secrets: &BTreeMap<String, String>) -> Result<(), String> {
+        let mut all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        all.insert(plugin.to_string(), secrets.clone());
+        Ok(())
+    }
+}
+
+/// Put a plugin folder `<dir>/<folder>/` with `manifest` and `package`'s wasm (`None`: no wasm).
+fn plugin_folder(dir: &std::path::Path, folder: &str, manifest: &str, package: Option<&str>) {
+    let to = dir.join(folder);
+    std::fs::create_dir_all(&to).expect("mkdir");
+    std::fs::write(to.join("plugin.toml"), manifest).expect("write manifest");
+    if let Some(package) = package {
+        std::fs::copy(common::plugins::wasm(package), to.join("plugin.wasm")).expect("copy wasm");
+    }
+}
+
+/// A host over a temporary plugins dir, with its deck channel and the temp dirs it needs.
+struct Host {
+    host: PluginHost,
+    deck: mpsc::Receiver<DeckMsg>,
+    dir: tempfile::TempDir,
+    _cache: tempfile::TempDir,
+}
+
+async fn host_with(
+    setup: impl FnOnce(&std::path::Path),
+    settings: &Settings,
+    used: &[&str],
+    secrets: Arc<dyn SecretStore>,
+) -> Host {
+    let dir = tempfile::tempdir().expect("dir");
+    let cache = tempfile::tempdir().expect("cache");
+    setup(dir.path());
+    let (tx, deck) = mpsc::channel(4096);
+    let used: BTreeSet<String> = used.iter().map(|s| s.to_string()).collect();
+    let host = PluginHost::start(
+        dir.path().to_path_buf(),
+        cache.path().to_path_buf(),
+        secrets,
+        settings,
+        &used,
+        tx,
+    )
+    .await;
+    Host {
+        host,
+        deck,
+        dir,
+        _cache: cache,
+    }
+}
+
+fn hello_folder(dir: &std::path::Path) {
+    plugin_folder(dir, "hello", HELLO_MANIFEST, Some(HELLO_PACKAGE));
+}
+
+impl Host {
+    fn status(&self, id: &str) -> Option<PluginStatus> {
+        self.host
+            .list()
+            .into_iter()
+            .find(|p| p.id == id)
+            .map(|p| p.status)
+    }
+
+    /// Wait until `id`'s status satisfies `want`; panics after `PROMPTLY`.
+    async fn wait_status(&self, id: &str, want: impl Fn(&PluginStatus) -> bool) -> PluginStatus {
+        let mut rx = self.host.watch();
+        let deadline = tokio::time::Instant::now() + PROMPTLY;
+        loop {
+            rx.borrow_and_update();
+            if let Some(s) = self.status(id).filter(|s| want(s)) {
+                return s;
+            }
+            if tokio::time::timeout_at(deadline, rx.changed()).await.is_err() {
+                panic!("{id} never reached the wanted status; now {:?}", self.status(id));
+            }
+        }
+    }
+
+    /// Read deck messages until `want` matches one; false when `PROMPTLY` runs out.
+    async fn deck_saw(&mut self, want: impl Fn(&DeckMsg) -> bool) -> bool {
+        let deadline = tokio::time::Instant::now() + PROMPTLY;
+        loop {
+            match tokio::time::timeout_at(deadline, self.deck.recv()).await {
+                Ok(Some(m)) if want(&m) => return true,
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return false,
+            }
+        }
+    }
+
+    async fn saw_state(&mut self, plugin: &str, key: &str, value: &str) -> bool {
+        self.deck_saw(|m| {
+            matches!(m, DeckMsg::PluginState { plugin: p, key: k, value: v }
+                if p == plugin && k == key && v == value)
+        })
+        .await
+    }
+}
+
+fn mem_secrets() -> Arc<dyn SecretStore> {
+    Arc::new(MemSecrets::default())
+}
+
+#[tokio::test]
+async fn file_secrets_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("plugin-secrets.toml");
+    let store = FileSecrets::new(path.clone());
+    assert_eq!(store.load("one").await, Ok(BTreeMap::new()));
+    let one = BTreeMap::from([("token".to_string(), "s3cret".to_string())]);
+    let two = BTreeMap::from([("key".to_string(), "other".to_string())]);
+    store.save("one", &one).await.expect("save one");
+    store.save("two", &two).await.expect("save two");
+    assert_eq!(store.load("one").await, Ok(one.clone()));
+    assert_eq!(store.load("two").await, Ok(two));
+    let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    // A second store over the same file sees the same data.
+    assert_eq!(FileSecrets::new(path).load("one").await, Ok(one));
+    // Saving nothing forgets the plugin.
+    store.save("one", &BTreeMap::new()).await.expect("clear");
+    assert_eq!(store.load("one").await, Ok(BTreeMap::new()));
+}
+
+#[tokio::test]
+async fn broken_folders_do_not_stop_others() {
+    let setup = |dir: &std::path::Path| {
+        hello_folder(dir);
+        plugin_folder(dir, "bad_toml", "id = \"bad_toml\"\nname = ", Some(HELLO_PACKAGE));
+        let manifest = |id: &str, name: &str, contract: &str| {
+            format!("id = \"{id}\"\nname = \"{name}\"\nversion = \"1.0.0\"\ncontract = \"{contract}\"\n")
+        };
+        plugin_folder(dir, "no_wasm", &manifest("no_wasm", "No wasm", "1.0"), None);
+        plugin_folder(dir, "garbage", &manifest("garbage", "Garbage", "1.0"), None);
+        std::fs::write(dir.join("garbage/plugin.wasm"), b"").expect("garbage wasm");
+        // A future contract may come with a manifest shape this host does not know.
+        let future = format!("{}[future_table]\nx = 1\n", manifest("future", "Future", "2.0"));
+        plugin_folder(dir, "future", &future, Some(HELLO_PACKAGE));
+        plugin_folder(
+            dir,
+            "mismatch",
+            &manifest("hello2", "Hello 2", "1.0"),
+            Some(HELLO_PACKAGE),
+        );
+        // Leftovers of an interrupted install are not plugins.
+        plugin_folder(dir, "hello.new", HELLO_MANIFEST, Some(HELLO_PACKAGE));
+        plugin_folder(dir, ".hidden", HELLO_MANIFEST, Some(HELLO_PACKAGE));
+    };
+    let h = host_with(setup, &Settings::default(), &["hello"], mem_secrets()).await;
+    h.wait_status("hello", |s| *s == PluginStatus::Running).await;
+    let list = h.host.list();
+    let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["bad_toml", "future", "garbage", "hello", "mismatch", "no_wasm"]
+    );
+    for p in &list {
+        if p.id == "hello" {
+            assert_eq!(p.name, "Hello");
+            assert_eq!(p.version, "1.0.0");
+            continue;
+        }
+        assert!(
+            matches!(&p.status, PluginStatus::Incompatible(why) if !why.is_empty()),
+            "{p:?}"
+        );
+        assert_eq!(p.status.id(), "incompatible");
+        assert!(!p.status.detail().is_empty());
+    }
+    let future = list.iter().find(|p| p.id == "future").expect("future");
+    assert_eq!(future.status.detail(), "Future needs a newer Ulanzi Deck");
+}
+
+#[tokio::test]
+async fn action_messages() {
+    let mut settings = Settings::default();
+    settings.plugins.insert(
+        "hello".into(),
+        PluginEntry {
+            enabled: false,
+            ..PluginEntry::default()
+        },
+    );
+    let h = host_with(hello_folder, &settings, &["hello"], mem_secrets()).await;
+    let err = h
+        .host
+        .action("nope", "count", json!({}))
+        .await
+        .expect_err("unknown");
+    assert_eq!(err.to_string(), "the nope plugin is not installed");
+    assert_eq!(h.status("hello"), Some(PluginStatus::Off));
+    let err = h.host.action("hello", "count", json!({})).await.expect_err("off");
+    assert_eq!(err.to_string(), "the Hello plugin is turned off");
+    // The plugin's own refusal comes back as its message.
+    h.host.apply_settings(&Settings::default()).await;
+    let err = h
+        .host
+        .action("hello", "greet", json!({}))
+        .await
+        .expect_err("refused");
+    assert_eq!(err.to_string(), "greet needs a name");
+}
+
+#[tokio::test]
+async fn lazy_start() {
+    let mut h = host_with(hello_folder, &Settings::default(), &[], mem_secrets()).await;
+    assert_eq!(h.status("hello"), Some(PluginStatus::Ready));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(h.deck.try_recv().is_err(), "nothing runs before the first action");
+    assert_eq!(h.host.action("hello", "count", json!({})).await, Ok(()));
+    assert_eq!(h.status("hello"), Some(PluginStatus::Running));
+    assert!(h.saw_state("hello", "count", "1").await);
+}
+
+#[tokio::test]
+async fn crash_policy() {
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let mut h = host_with(setup, &Settings::default(), &["probe"], mem_secrets()).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    let cleared = |m: &DeckMsg| matches!(m, DeckMsg::PluginCleared(id) if id == "probe");
+
+    let err = h
+        .host
+        .action("probe", "panic", json!({}))
+        .await
+        .expect_err("panics");
+    assert_eq!(err.to_string(), "Probe stopped working");
+    assert!(h.deck_saw(cleared).await, "a crash clears the plugin's state");
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    let kv = json!({"k": "a", "v": "b"});
+    assert_eq!(h.host.action("probe", "state", kv.clone()).await, Ok(()));
+
+    let err = h
+        .host
+        .action("probe", "panic", json!({}))
+        .await
+        .expect_err("panics");
+    assert_eq!(err.to_string(), "Probe stopped working");
+    assert!(h.deck_saw(cleared).await);
+    let failed = h
+        .wait_status("probe", |s| matches!(s, PluginStatus::Failed(_)))
+        .await;
+    assert_eq!(failed.id(), "failed");
+    assert!(!failed.detail().is_empty());
+    let err = h
+        .host
+        .action("probe", "state", kv.clone())
+        .await
+        .expect_err("failed");
+    assert_eq!(err.to_string(), "Probe stopped working");
+
+    assert_eq!(h.host.restart("probe").await, Ok(()));
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    assert_eq!(h.host.action("probe", "state", kv).await, Ok(()));
+    assert!(h.saw_state("probe", "a", "b").await);
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn reinstall_keeps_secrets() {
+    let mut h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let src = common::plugins::fixture(PROBE_PACKAGE, PROBE_MANIFEST);
+    assert_eq!(
+        h.host.install_dir(src.path(), true).await,
+        Ok("probe".to_string())
+    );
+    assert!(h.dir.path().join("probe/plugin.wasm").is_file());
+    let kv = json!({"k": "k", "v": "v"});
+    assert_eq!(h.host.action("probe", "secret_set", kv).await, Ok(()));
+    assert_eq!(
+        h.host.install_dir(src.path(), true).await,
+        Ok("probe".to_string())
+    );
+    assert!(
+        h.deck_saw(|m| matches!(m, DeckMsg::PluginCleared(id) if id == "probe"))
+            .await
+    );
+    assert_eq!(
+        h.host.action("probe", "secret_get", json!({"k": "k"})).await,
+        Ok(())
+    );
+    assert!(h.saw_state("probe", "secret", "v").await);
+    let left: Vec<String> = std::fs::read_dir(h.dir.path())
+        .expect("read dir")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["probe"], "no leftovers of the replaced install");
+
+    assert_eq!(h.host.remove("probe").await, Ok(()));
+    assert!(!h.dir.path().join("probe").exists());
+    assert!(h.status("probe").is_none());
+    let err = h
+        .host
+        .action("probe", "state", json!({}))
+        .await
+        .expect_err("gone");
+    assert_eq!(err.to_string(), "the probe plugin is not installed");
+}
+
+#[tokio::test]
+async fn install_needs_developer_mode() {
+    let h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let src = common::plugins::fixture(HELLO_PACKAGE, HELLO_MANIFEST);
+    let err = h.host.install_dir(src.path(), false).await.expect_err("refused");
+    assert_eq!(
+        err.to_string(),
+        "Turn on Developer mode to install plugins from a folder"
+    );
+    assert!(h.host.list().is_empty());
+    // A broken folder is refused before anything is installed.
+    let bad = tempfile::tempdir().expect("bad");
+    std::fs::write(bad.path().join("plugin.toml"), HELLO_MANIFEST).expect("manifest");
+    std::fs::write(bad.path().join("plugin.wasm"), b"").expect("wasm");
+    assert!(h.host.install_dir(bad.path(), true).await.is_err());
+    assert_eq!(std::fs::read_dir(h.dir.path()).expect("dir").count(), 0);
+}
+
+#[tokio::test]
+async fn state_reaches_the_deck() {
+    let mut h = host_with(hello_folder, &Settings::default(), &["hello"], mem_secrets()).await;
+    assert_eq!(h.host.action("hello", "count", json!({})).await, Ok(()));
+    assert!(h.saw_state("hello", "count", "1").await);
+}
+
+#[tokio::test]
+async fn changed_settings_reach_a_running_plugin() {
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let mut h = host_with(setup, &Settings::default(), &["probe"], mem_secrets()).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    let mut settings = Settings::default();
+    let mut table = toml::Table::new();
+    table.insert("room".into(), toml::Value::String("office".into()));
+    settings.plugins.insert(
+        "probe".into(),
+        PluginEntry {
+            enabled: true,
+            settings: table,
+        },
+    );
+    h.host.apply_settings(&settings).await;
+    assert_eq!(h.host.action("probe", "settings", json!({})).await, Ok(()));
+    assert!(h.saw_state("probe", "settings", r#"{"room":"office"}"#).await);
+    // Turned off: stopped, and its state cleared from the deck.
+    settings.plugins.get_mut("probe").expect("entry").enabled = false;
+    h.host.apply_settings(&settings).await;
+    assert_eq!(h.status("probe"), Some(PluginStatus::Off));
+    assert!(
+        h.deck_saw(|m| matches!(m, DeckMsg::PluginCleared(id) if id == "probe"))
+            .await
     );
 }
