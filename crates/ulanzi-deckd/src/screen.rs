@@ -210,6 +210,7 @@ impl Sampler {
             playing: media.as_ref().map(|m| m.status == PlaybackStatus::Playing),
             stats: Some(self.stats.clone()),
             media: media_data,
+            obs: None,
             screen_png: None,
         }
     }

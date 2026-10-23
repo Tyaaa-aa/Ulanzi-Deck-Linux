@@ -309,9 +309,7 @@ async fn label_style_request_is_answered() {
 async fn unchanged_page_not_resent() {
     let r = rig().await;
     r.mock.clear();
-    r.tx.send(DeckMsg::Dynamic(DynamicState::default()))
-        .await
-        .expect("send");
+    r.tx.send(DeckMsg::Dynamic(Box::default())).await.expect("send");
     tokio::time::sleep(Duration::from_secs(5)).await;
     assert!(!r.mock.commands().contains(&BUTTONS), "{:?}", r.mock.commands());
 }
@@ -403,7 +401,9 @@ async fn live_changes_use_partial_updates() {
         playing: Some(true),
         ..DynamicState::default()
     };
-    r.tx.send(DeckMsg::Dynamic(playing)).await.expect("send");
+    r.tx.send(DeckMsg::Dynamic(Box::new(playing)))
+        .await
+        .expect("send");
     tokio::time::sleep(Duration::from_millis(100)).await;
     let cmds = r.mock.commands();
     assert!(cmds.contains(&PARTIAL), "{cmds:?}");
@@ -614,7 +614,9 @@ async fn no_busy_loop_when_the_deck_goes_away_with_an_upload_pending() {
         playing: Some(true),
         ..DynamicState::default()
     };
-    tx.send(DeckMsg::Dynamic(playing)).await.expect("dynamic");
+    tx.send(DeckMsg::Dynamic(Box::new(playing)))
+        .await
+        .expect("dynamic");
     tokio::time::sleep(Duration::from_millis(100)).await;
     // ...then the deck disappears.
     mock.inject

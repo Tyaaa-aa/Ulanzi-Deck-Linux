@@ -69,9 +69,22 @@ async fn main() -> ExitCode {
 
     // Calls that arrive before the deck starts wait in this channel.
     let (tx, rx) = mpsc::channel(256);
+    // OBS: connects in the background and keeps trying (it is fine for OBS to be closed).
+    let obs_settings = store.load_settings().map(|s| s.obs).unwrap_or_default();
+    let (renames_tx, renames_rx) = mpsc::unbounded_channel();
+    let probe = ulanzi_deckd::obs::system_probe();
+    let obs = ulanzi_deckd::obs::ObsHandle::spawn(
+        obs_settings,
+        probe.clone(),
+        ulanzi_deckd::obs::Timing::default(),
+        renames_tx,
+    );
     if let Err(e) = conn
         .object_server()
-        .at(OBJECT_PATH, DeckService::new(tx.clone(), store.clone()))
+        .at(
+            OBJECT_PATH,
+            DeckService::new(tx.clone(), store.clone()).with_obs(obs.clone(), probe),
+        )
         .await
     {
         tracing::error!("cannot publish the D-Bus API: {e}");
@@ -104,7 +117,7 @@ async fn main() -> ExitCode {
         tracing::error!("settings unreadable, using defaults: {e}");
         Default::default()
     });
-    let executor = Arc::new(Executor::new(Some(conn.clone())));
+    let executor = Arc::new(Executor::new(Some(conn.clone())).with_obs(obs.clone()));
     {
         let ex = executor.clone();
         tokio::task::spawn_blocking(move || ex.prepare_keyboard());
@@ -113,6 +126,23 @@ async fn main() -> ExitCode {
     let events = start_deck(store.clone(), settings, executor, rx);
 
     tokio::spawn(forward_signals(conn.clone(), events.resubscribe()));
+    tokio::spawn(ulanzi_deckd::dbus::forward_obs(
+        conn.clone(),
+        obs.clone(),
+        renames_rx,
+    ));
+    {
+        // OBS's state goes to the deck (live keys, variables, the OBS widget).
+        let (tx, mut live) = (tx.clone(), obs.watch_live());
+        tokio::spawn(async move {
+            while live.changed().await.is_ok() {
+                let l = live.borrow_and_update().clone();
+                if tx.send(DeckMsg::Obs(Box::new(l))).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let quit = Arc::new(tokio::sync::Notify::new());
     tokio::spawn(ulanzi_deckd::tray::run(
         tx.clone(),
@@ -281,7 +311,7 @@ async fn sample_loop(tx: mpsc::Sender<DeckMsg>, mut sampler: Sampler) {
     loop {
         t.tick().await;
         let d = sampler.sample().await;
-        if tx.send(DeckMsg::Dynamic(d)).await.is_err() {
+        if tx.send(DeckMsg::Dynamic(Box::new(d))).await.is_err() {
             break;
         }
     }

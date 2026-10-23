@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use ulanzi_core::model::{Action, ImageSource, KeyLook, MediaControl, Profile};
+use ulanzi_core::Color;
+use ulanzi_core::model::{Action, ImageSource, KeyLook, MediaControl, ObsAction, Profile};
 use ulanzi_core::render::{RenderCtx, look_hash, render_key};
 use ulanzi_proto::{ButtonEntry, ButtonImage};
 
@@ -21,6 +22,8 @@ pub struct DynamicState {
     pub stats: Option<ulanzi_core::render::screen::StatsData>,
     /// The playing track, for the Now Playing widget.
     pub media: Option<ulanzi_core::render::screen::MediaData>,
+    /// OBS Studio's state, once the OBS connection has reported.
+    pub obs: Option<ulanzi_core::obs::ObsLive>,
     /// The wide-screen picture (widget mode, or the volume overlay). Set by the deck, not the sampler.
     pub screen_png: Option<Vec<u8>>,
 }
@@ -58,6 +61,47 @@ impl Default for RenderCache {
     }
 }
 
+/// Variables the deck itself fills (the sampler doesn't know them).
+pub const DECK_VARS: [&str; 5] = [
+    "obs_scene",
+    "obs_rec_time",
+    "obs_stream_time",
+    "timer",
+    "timer_running",
+];
+
+impl DynamicState {
+    /// Take over what the deck owns from `old`: the screen picture, OBS state and the deck's variables.
+    pub fn keep_deck_fields(&mut self, old: &DynamicState) {
+        self.screen_png = old.screen_png.clone();
+        self.obs = old.obs.clone();
+        for k in DECK_VARS {
+            if let Some(v) = old.vars.get(k) {
+                self.vars.insert(k.to_string(), v.clone());
+            }
+        }
+    }
+
+    /// Variables for OBS (`{obs_scene}` and the timers).
+    pub fn set_obs(&mut self, live: ulanzi_core::obs::ObsLive) {
+        use ulanzi_core::obs::clock;
+        let rec = if live.recording {
+            clock(live.rec_secs)
+        } else {
+            String::new()
+        };
+        let stream = if live.streaming {
+            clock(live.stream_secs)
+        } else {
+            String::new()
+        };
+        self.vars.insert("obs_scene".into(), live.program.clone());
+        self.vars.insert("obs_rec_time".into(), rec);
+        self.vars.insert("obs_stream_time".into(), stream);
+        self.obs = Some(live);
+    }
+}
+
 /// A page ready to upload, with a hash for "did anything change".
 pub struct BuiltPage {
     pub entries: BTreeMap<u8, ButtonEntry>,
@@ -75,16 +119,93 @@ fn is_play_pause(a: &Option<Action>) -> bool {
     )
 }
 
-/// Swap a `play` icon for `pause` on play/pause keys while media is playing.
+const ON_AIR: Color = Color([0x26, 0xa2, 0x69, 0xff]);
+const RED: Color = Color([0xc0, 0x1c, 0x28, 0xff]);
+const AMBER: Color = Color([0xc6, 0x46, 0x00, 0xff]);
+const BLUE: Color = Color([0x1c, 0x71, 0xd8, 0xff]);
+const DIMMED: Color = Color([0x5e, 0x5c, 0x64, 0xff]);
+
+fn set_label(look: &mut KeyLook, text: String) {
+    if look.label.visible && !look.label.text.is_empty() {
+        look.label.text = text;
+    }
+}
+
+fn swap_icon(look: &mut KeyLook, from: &str, to: &str) {
+    if let ImageSource::Icon { name, .. } = &mut look.source
+        && name == from
+    {
+        *name = to.into();
+    }
+}
+
+/// OBS keys follow OBS: recording red with its time, the scene on air green, muted inputs red,
+/// hidden sources dimmed, and every OBS key dimmed while OBS is not connected.
+fn obs_look(look: &mut KeyLook, o: &ObsAction, l: &ulanzi_core::obs::ObsLive) {
+    use ulanzi_core::obs::clock;
+    if !l.connected {
+        look.foreground = DIMMED;
+        return;
+    }
+    match o {
+        ObsAction::ToggleRecord | ObsAction::StartRecord | ObsAction::StopRecord if l.recording => {
+            if l.rec_paused {
+                look.background = AMBER;
+                set_label(look, "PAUSED".into());
+            } else {
+                look.background = RED;
+                set_label(look, format!("REC {}", clock(l.rec_secs)));
+            }
+        }
+        ObsAction::PauseRecord if l.rec_paused => look.background = AMBER,
+        ObsAction::ToggleStream | ObsAction::StartStream | ObsAction::StopStream if l.streaming => {
+            look.background = RED;
+            set_label(look, format!("LIVE {}", clock(l.stream_secs)));
+        }
+        ObsAction::ToggleReplay if l.replay => look.background = ON_AIR,
+        ObsAction::ToggleVirtualCam if l.vcam => look.background = BLUE,
+        ObsAction::SetScene { scene, .. } if *scene == l.program => look.background = ON_AIR,
+        ObsAction::SetScene { scene, .. } if l.preview.as_deref() == Some(scene.as_str()) => {
+            look.background = AMBER
+        }
+        ObsAction::ToggleScenes { a, b } if l.program == *a || l.program == *b => {
+            set_label(look, l.program.clone())
+        }
+        ObsAction::ToggleSource { scene, source } if l.hidden.contains(&(scene.clone(), source.clone())) => {
+            look.foreground = DIMMED;
+            swap_icon(look, "eye", "eye-off");
+        }
+        ObsAction::ToggleMute { input } if l.muted.contains(input) => {
+            look.background = RED;
+            swap_icon(look, "mic", "mic-off");
+        }
+        _ => {}
+    }
+}
+
+/// The key as it looks now: play/pause swaps, OBS state, the timer's time left.
 fn live_look(look: &KeyLook, tap: &Option<Action>, dynamic: &DynamicState) -> KeyLook {
     let mut look = look.clone();
-    if look.dynamic
-        && dynamic.playing == Some(true)
-        && is_play_pause(tap)
-        && let ImageSource::Icon { name, .. } = &mut look.source
-        && name == "play"
-    {
-        *name = "pause".into();
+    if !look.dynamic {
+        return look;
+    }
+    if dynamic.playing == Some(true) && is_play_pause(tap) {
+        swap_icon(&mut look, "play", "pause");
+    }
+    match tap {
+        Some(Action::Obs(o)) => {
+            if let Some(l) = &dynamic.obs {
+                obs_look(&mut look, o, l);
+            }
+        }
+        Some(Action::Timer {
+            op: ulanzi_core::model::TimerOp::StartPause,
+        }) if dynamic.vars.get("timer_running").is_some_and(|v| v == "1") => {
+            if let Some(t) = dynamic.vars.get("timer") {
+                set_label(&mut look, t.clone());
+            }
+        }
+        _ => {}
     }
     look
 }
@@ -341,5 +462,67 @@ mod tests {
         let b = build_page(&p, 0, &ctx(), &d, &mut cache);
         // A new value means a new picture.
         assert_ne!(a.entries[&6].icon, b.entries[&6].icon);
+    }
+
+    #[test]
+    fn obs_and_timer_keys_show_live_state() {
+        use ulanzi_core::model::{ObsAction, TimerOp};
+        use ulanzi_core::obs::ObsLive;
+        let look = |label: &str| {
+            let mut l = KeyLook::default();
+            l.label.text = label.into();
+            l.label.visible = true;
+            l
+        };
+        let rec = Some(Action::Obs(ObsAction::ToggleRecord));
+        let mut d = DynamicState::default();
+        // Nothing known about OBS: unchanged.
+        assert_eq!(live_look(&look("Record"), &rec, &d), look("Record"));
+        d.obs = Some(ObsLive {
+            connected: true,
+            recording: true,
+            rec_secs: 83,
+            ..ObsLive::default()
+        });
+        let l = live_look(&look("Record"), &rec, &d);
+        assert_eq!(l.label.text, "REC 01:23");
+        assert_ne!(l.background, look("Record").background);
+        // A key whose look is fixed stays as it is.
+        let mut fixed = look("Record");
+        fixed.dynamic = false;
+        assert_eq!(live_look(&fixed, &rec, &d), fixed);
+        // The scene on air is highlighted; offline keys are dimmed.
+        let scene = Some(Action::Obs(ObsAction::SetScene {
+            scene: "A".into(),
+            preview: false,
+        }));
+        d.obs = Some(ObsLive {
+            connected: true,
+            program: "A".into(),
+            ..ObsLive::default()
+        });
+        assert_ne!(live_look(&look("A"), &scene, &d).background, look("A").background);
+        d.obs = Some(ObsLive::default());
+        assert_ne!(live_look(&look("A"), &scene, &d).foreground, look("A").foreground);
+        // A muted input.
+        let mute = Some(Action::Obs(ObsAction::ToggleMute { input: "Mic".into() }));
+        let mut muted = ObsLive {
+            connected: true,
+            ..ObsLive::default()
+        };
+        muted.muted.insert("Mic".into());
+        d.obs = Some(muted);
+        assert_ne!(
+            live_look(&look("Mic"), &mute, &d).background,
+            look("Mic").background
+        );
+        // The timer key shows the time left while it runs.
+        let t = Some(Action::Timer {
+            op: TimerOp::StartPause,
+        });
+        d.vars.insert("timer".into(), "18:42".into());
+        assert_eq!(live_look(&look("Timer"), &t, &d).label.text, "Timer");
+        d.vars.insert("timer_running".into(), "1".into());
+        assert_eq!(live_look(&look("Timer"), &t, &d).label.text, "18:42");
     }
 }

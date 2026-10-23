@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{Action, Background, KeyLook, Rotation, Widget};
+use super::{Action, Background, KeyLook, ObsAction, Rotation, Widget};
 use crate::Color;
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -194,6 +194,79 @@ pub struct Key {
     pub tap: Option<Action>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hold: Option<Action>,
+}
+
+/// Which kind of OBS name changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObsRename {
+    Scene,
+    /// An input or other source.
+    Input,
+}
+
+fn rename_in(a: &mut Action, kind: ObsRename, old: &str, new: &str) -> bool {
+    let mut hit = false;
+    let mut swap = |s: &mut String| {
+        if s == old {
+            *s = new.to_string();
+            hit = true;
+        }
+    };
+    match a {
+        Action::Multi { steps } => {
+            for st in steps {
+                hit |= rename_in(&mut st.action, kind, old, new);
+            }
+        }
+        Action::Obs(o) => match (kind, o) {
+            (ObsRename::Scene, ObsAction::SetScene { scene, .. }) => swap(scene),
+            (ObsRename::Scene, ObsAction::ToggleScenes { a, b }) => {
+                swap(a);
+                swap(b);
+            }
+            (ObsRename::Scene, ObsAction::ToggleSource { scene, .. }) => swap(scene),
+            // Scenes can be sources inside other scenes, so sources follow scene renames too.
+            (_, ObsAction::ToggleSource { source, .. }) | (_, ObsAction::ToggleFilter { source, .. }) => {
+                swap(source)
+            }
+            (ObsRename::Input, ObsAction::ToggleMute { input })
+            | (ObsRename::Input, ObsAction::InputVolume { input, .. }) => swap(input),
+            _ => {}
+        },
+        _ => {}
+    }
+    hit
+}
+
+impl Profile {
+    /// Follow a name change in OBS everywhere in this profile; true if anything changed.
+    pub fn rename_obs(&mut self, kind: ObsRename, old: &str, new: &str) -> bool {
+        let mut hit = false;
+        let mut each = |a: &mut Option<Action>| {
+            if let Some(a) = a {
+                hit |= rename_in(a, kind, old, new);
+            }
+        };
+        for page in &mut self.pages {
+            for k in page.keys.values_mut() {
+                each(&mut k.tap);
+                each(&mut k.hold);
+            }
+            for d in &mut page.dials {
+                each(&mut d.press);
+                each(&mut d.left);
+                each(&mut d.right);
+                each(&mut d.hold);
+            }
+        }
+        each(&mut self.small_buttons.left);
+        each(&mut self.small_buttons.right);
+        if let ScreenConfig::Custom { tap, hold, .. } = &mut self.screen {
+            each(tap);
+            each(hold);
+        }
+        hit
+    }
 }
 
 impl Profile {

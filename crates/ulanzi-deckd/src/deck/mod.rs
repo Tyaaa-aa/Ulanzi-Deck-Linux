@@ -74,7 +74,9 @@ pub enum DeckMsg {
     NextPage,
     PrevPage,
     Brightness(BrightnessOp),
-    Dynamic(DynamicState),
+    Dynamic(Box<DynamicState>),
+    /// OBS's state changed (or a second passed while recording or streaming).
+    Obs(Box<ulanzi_core::obs::ObsLive>),
     Query(oneshot::Sender<DeckSnapshot>),
     /// The desktop says another window is in front (auto profile switching).
     Focus(ulanzi_core::autoswitch::Window),
@@ -403,14 +405,20 @@ impl Deck {
             DeckMsg::Brightness(op) => {
                 self.internal(&Action::Brightness { op }).await;
             }
-            DeckMsg::Dynamic(mut d) => {
+            DeckMsg::Dynamic(d) => {
+                let mut d = *d;
                 // The sampler sends values only; the screen picture is ours.
-                d.screen_png = self.dynamic.screen_png.clone();
+                d.keep_deck_fields(&self.dynamic);
                 let changed = d != self.dynamic;
                 self.dynamic = d;
                 if self.update_screen() || changed {
                     self.push_page(false).await;
                 }
+            }
+            DeckMsg::Obs(live) => {
+                self.dynamic.set_obs(*live);
+                self.update_screen();
+                self.push_page(false).await;
             }
             DeckMsg::Query(reply) => {
                 let p = self.profile();
@@ -671,11 +679,19 @@ impl Deck {
 
     /// Redraw the wide-screen picture; true if it changed.
     fn update_screen(&mut self) -> bool {
+        // Timer keys show the time left, so a ticking timer counts as a change.
+        let t = self.screen.timer_now(Instant::now());
+        let text = format!("{:02}:{:02}", t.remaining_s / 60, t.remaining_s % 60);
+        let timer_changed = t.running && self.dynamic.vars.get("timer") != Some(&text);
+        self.dynamic.vars.insert("timer".into(), text);
+        self.dynamic
+            .vars
+            .insert("timer_running".into(), if t.running { "1" } else { "0" }.into());
         let p = &self.profiles[self.active];
         let dir = self.store.profile_dir(p.id);
         let png = self.screen.picture(p, &dir, &self.dynamic, Instant::now());
         if !screen_rt::changed(&mut self.screen_hash, png.as_deref()) {
-            return false;
+            return timer_changed;
         }
         self.dynamic.screen_png = png;
         true

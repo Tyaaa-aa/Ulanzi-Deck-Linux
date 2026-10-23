@@ -126,6 +126,11 @@ pub enum Widget {
         #[serde(default = "ten")]
         every_s: u32,
     },
+    /// OBS Studio: the scene on air, recording and streaming timers.
+    Obs {
+        #[serde(default = "yes")]
+        stats: bool,
+    },
 }
 
 impl Widget {
@@ -171,6 +176,7 @@ impl Widget {
                 paths: Vec::new(),
                 every_s: 10,
             },
+            Widget::Obs { stats: true },
             Widget::Blank,
         ]
     }
@@ -185,6 +191,7 @@ impl Widget {
             Widget::Weather { .. } => "Weather",
             Widget::Command { .. } => "Command Output",
             Widget::Pictures { .. } => "Pictures",
+            Widget::Obs { .. } => "OBS Studio",
         }
     }
 
@@ -199,6 +206,7 @@ impl Widget {
             Widget::Weather { .. } => "cloud-sun",
             Widget::Command { .. } => "terminal",
             Widget::Pictures { .. } => "image",
+            Widget::Obs { .. } => "clapperboard",
         }
     }
 

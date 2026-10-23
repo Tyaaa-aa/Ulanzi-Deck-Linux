@@ -119,6 +119,15 @@ impl ScreenRuntime {
         }
     }
 
+    /// The timer now (plays a sound when it runs out).
+    pub fn timer_now(&mut self, now: Instant) -> ulanzi_core::render::screen::TimerData {
+        let (t, finished) = self.timer.tick(now.into_std());
+        if finished {
+            play_finished();
+        }
+        t
+    }
+
     /// The picture for the wide screen now: the widget (in widget mode) with the overlay on top
     /// while it is up; `None` when a firmware mode shows and no overlay is up.
     pub fn picture(
@@ -181,22 +190,18 @@ impl ScreenRuntime {
             now: chrono::Local::now().naive_local(),
             stats: dynamic.stats.clone(),
             media: dynamic.media.clone(),
+            obs: dynamic.obs.clone(),
             ..ScreenData::default()
         };
-        // The timer keeps running while another widget shows.
+        // The timer follows the first Timer widget's settings and keeps running while another shows.
         if let Some(Widget::Timer { minutes, pomodoro }) =
             list.iter().find(|w| matches!(w, Widget::Timer { .. }))
+            && self.timer_cfg != Some((*minutes, *pomodoro))
         {
-            if self.timer_cfg != Some((*minutes, *pomodoro)) {
-                self.timer.configure(*minutes, *pomodoro);
-                self.timer_cfg = Some((*minutes, *pomodoro));
-            }
-            let (t, finished) = self.timer.tick(now.into_std());
-            if finished {
-                play_finished();
-            }
-            data.timer = Some(t);
+            self.timer.configure(*minutes, *pomodoro);
+            self.timer_cfg = Some((*minutes, *pomodoro));
         }
+        data.timer = Some(self.timer_now(now));
         match w {
             Widget::Weather { place, fahrenheit } => {
                 data.weather = Some(self.weather(place, *fahrenheit, now))

@@ -42,6 +42,8 @@ pub struct DeckService {
     revisions: Mutex<HashMap<Uuid, u64>>,
     /// The window in front, for the app's "add the app in front" button.
     focused: Mutex<ulanzi_core::autoswitch::Window>,
+    obs: Option<crate::obs::ObsHandle>,
+    obs_probe: crate::obs::client::ProbeFn,
 }
 
 impl DeckService {
@@ -51,7 +53,52 @@ impl DeckService {
             store,
             revisions: Mutex::default(),
             focused: Mutex::default(),
+            obs: None,
+            obs_probe: crate::obs::system_probe(),
         }
+    }
+
+    /// Give the service the OBS connection (and how to look for OBS on this machine).
+    pub fn with_obs(mut self, obs: crate::obs::ObsHandle, probe: crate::obs::client::ProbeFn) -> DeckService {
+        self.obs = Some(obs);
+        self.obs_probe = probe;
+        self
+    }
+
+    fn obs(&self) -> Result<&crate::obs::ObsHandle> {
+        self.obs
+            .as_ref()
+            .ok_or_else(|| DeckError::Unavailable("OBS support is off".into()))
+    }
+
+    /// Follow a name change in OBS in every profile. Returns whether any profile changed.
+    pub async fn obs_rename(&self, r: &crate::obs::protocol::Rename) -> bool {
+        use crate::obs::protocol::Rename;
+        use ulanzi_core::model::ObsRename;
+        let (kind, old, new) = match r {
+            Rename::Scene(o, n) => (ObsRename::Scene, o, n),
+            Rename::Input(o, n) => (ObsRename::Input, o, n),
+        };
+        let mut changed = Vec::new();
+        for l in self.store.list_profiles() {
+            let ProfileLoad::Ok(mut p) = l else { continue };
+            if p.rename_obs(kind, old, new) {
+                if let Err(e) = self.store.save_profile(&p) {
+                    tracing::warn!("could not save {} after an OBS rename: {e}", p.name);
+                    continue;
+                }
+                changed.push(p.id);
+                let _ = self.send(DeckMsg::Apply { profile: p }).await;
+            }
+        }
+        if !changed.is_empty() {
+            tracing::info!(
+                "OBS renamed “{old}” to “{new}”: updated {} profile(s)",
+                changed.len()
+            );
+            self.bump(&changed);
+        }
+        !changed.is_empty()
     }
 
     async fn send(&self, m: DeckMsg) -> Result<()> {
@@ -397,11 +444,147 @@ impl DeckService {
                 .map_err(|e| DeckError::Unavailable(e.to_string()))?;
             s.obs.password = old.obs.password;
         }
+        let old_obs = self.store.load_settings().map(|o| o.obs).ok();
         self.store
             .save_settings(&s)
             .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        if old_obs.as_ref() != Some(&s.obs)
+            && let Some(obs) = &self.obs
+        {
+            obs.set_settings(s.obs.clone()).await;
+        }
         self.send(DeckMsg::Settings(Box::new(s))).await
     }
+
+    /// The OBS connection: (state id, title, detail). See spec §6 for the states.
+    async fn obs_status(&self) -> Result<(String, String, String)> {
+        let s = self.obs()?.status();
+        Ok((s.id().into(), s.title(), s.detail()))
+    }
+
+    /// Names from OBS for the pickers. `kind`: scenes, inputs, sources (of scene `arg`),
+    /// filters (of source `arg`), collections, profiles.
+    async fn obs_list(&self, kind: String, arg: String) -> Result<Vec<String>> {
+        use serde_json::{Value, json};
+        let obs = self.obs()?;
+        let names = |v: &Value, list: &str, key: &str| -> Vec<String> {
+            v.get(list)
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|i| i.get(key).and_then(Value::as_str).or_else(|| i.as_str()))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let fail = DeckError::Unavailable;
+        let out = match kind.as_str() {
+            "scenes" => obs.watch_live().borrow().scenes.clone(),
+            "inputs" => names(
+                &obs.request("GetInputList", json!({})).await.map_err(fail)?,
+                "inputs",
+                "inputName",
+            ),
+            "sources" => names(
+                &obs.request("GetSceneItemList", json!({"sceneName": arg}))
+                    .await
+                    .map_err(fail)?,
+                "sceneItems",
+                "sourceName",
+            ),
+            "filters" => names(
+                &obs.request("GetSourceFilterList", json!({"sourceName": arg}))
+                    .await
+                    .map_err(fail)?,
+                "filters",
+                "filterName",
+            ),
+            "collections" => names(
+                &obs.request("GetSceneCollectionList", json!({}))
+                    .await
+                    .map_err(fail)?,
+                "sceneCollections",
+                "",
+            ),
+            "profiles" => names(
+                &obs.request("GetProfileList", json!({})).await.map_err(fail)?,
+                "profiles",
+                "",
+            ),
+            other => return Err(DeckError::Invalid(format!("unknown list {other}"))),
+        };
+        Ok(out)
+    }
+
+    /// Read OBS's own WebSocket settings and use them (port and password). The password stays in
+    /// the service. Returns what was found, in words.
+    async fn obs_use_detected(&self) -> Result<String> {
+        let p = (self.obs_probe)();
+        let Some(c) = p.config else {
+            return Err(DeckError::NotFound(if p.installed {
+                "OBS hasn’t saved WebSocket settings yet. Open OBS once, then try again.".into()
+            } else {
+                "OBS Studio isn’t installed.".into()
+            }));
+        };
+        let mut s = self
+            .store
+            .load_settings()
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        s.obs.port = c.port;
+        s.obs.host = "localhost".into();
+        s.obs.password = (c.auth && !c.password.is_empty()).then(|| c.password.clone());
+        self.store
+            .save_settings(&s)
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        if let Some(obs) = &self.obs {
+            obs.set_settings(s.obs.clone()).await;
+        }
+        self.send(DeckMsg::Settings(Box::new(s))).await?;
+        Ok(match (c.enabled, c.auth) {
+            (false, _) => format!(
+                "Found OBS’s settings (port {}), but its WebSocket server is off.",
+                c.port
+            ),
+            (true, true) => format!("Using port {} and OBS’s password.", c.port),
+            (true, false) => format!("Using port {} (no password).", c.port),
+        })
+    }
+
+    /// Turn on OBS's WebSocket server in its config (only while OBS is closed).
+    async fn obs_enable_server(&self) -> Result<String> {
+        let p = (self.obs_probe)();
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let xdg = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from);
+        let path = p
+            .config
+            .map(|c| c.path)
+            .unwrap_or_else(|| crate::obs::detect::config_paths(&home, xdg.as_deref())[0].clone());
+        let c = crate::obs::detect::enable_server(&path, p.running).map_err(DeckError::Invalid)?;
+        Ok(format!(
+            "OBS’s WebSocket server will be on (port {}) the next time OBS starts.",
+            c.port
+        ))
+    }
+
+    /// Try to connect to OBS now.
+    async fn obs_reconnect(&self) -> Result<()> {
+        self.obs()?.reconnect().await;
+        Ok(())
+    }
+
+    #[zbus(signal)]
+    async fn obs_status_changed(
+        e: &SignalEmitter<'_>,
+        state: &str,
+        title: &str,
+        detail: &str,
+    ) -> zbus::Result<()>;
 
     /// Create an empty profile and return its id.
     async fn create_profile(
@@ -470,6 +653,38 @@ fn kind_name(k: InputKind) -> &'static str {
         InputKind::Release => "release",
         InputKind::TurnLeft => "left",
         InputKind::TurnRight => "right",
+    }
+}
+
+/// Send `ObsStatusChanged` whenever the OBS connection changes, and apply OBS renames.
+pub async fn forward_obs(
+    conn: Connection,
+    obs: crate::obs::ObsHandle,
+    mut renames: mpsc::UnboundedReceiver<crate::obs::protocol::Rename>,
+) {
+    let Ok(emitter) = SignalEmitter::new(&conn, OBJECT_PATH) else {
+        return;
+    };
+    let mut status = obs.watch_status();
+    loop {
+        tokio::select! {
+            r = status.changed() => {
+                if r.is_err() {
+                    return;
+                }
+                let s = status.borrow_and_update().clone();
+                let _ = DeckService::obs_status_changed(&emitter, s.id(), &s.title(), &s.detail()).await;
+            }
+            r = renames.recv() => {
+                let Some(r) = r else { return };
+                let Ok(iface) = conn.object_server().interface::<_, DeckService>(OBJECT_PATH).await else {
+                    continue;
+                };
+                if iface.get().await.obs_rename(&r).await {
+                    let _ = DeckService::profiles_changed(&emitter).await;
+                }
+            }
+        }
     }
 }
 

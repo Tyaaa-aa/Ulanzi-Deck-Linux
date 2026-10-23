@@ -46,6 +46,7 @@ pub async fn run_multi(runner: &dyn ActionRunner, steps: &[Step]) -> Result<(), 
 pub struct Executor {
     media: Option<MediaClient>,
     keyboard: Arc<Mutex<Option<VirtualKeyboard>>>,
+    obs: Option<crate::obs::ObsHandle>,
 }
 
 impl Executor {
@@ -54,7 +55,14 @@ impl Executor {
         Executor {
             media: session.map(MediaClient::new),
             keyboard: Arc::default(),
+            obs: None,
         }
+    }
+
+    /// Run OBS actions through this connection.
+    pub fn with_obs(mut self, obs: crate::obs::ObsHandle) -> Executor {
+        self.obs = Some(obs);
+        self
     }
 
     /// Create the virtual keyboard now. The compositor needs a moment to pick up a new input
@@ -139,7 +147,10 @@ impl ActionRunner for Executor {
                 limit_100,
             } => audio::volume(target, op, *step, *limit_100).await,
             Action::Multi { steps } => run_multi(self, steps).await,
-            Action::Obs(_) => Err(ActionError::NotYet("M3")),
+            Action::Obs(o) => match &self.obs {
+                Some(obs) => obs.action(o).await.map_err(ActionError::Failed),
+                None => Err(ActionError::Unavailable("OBS support is off".into())),
+            },
             Action::NextPage
             | Action::PrevPage
             | Action::GoToPage { .. }

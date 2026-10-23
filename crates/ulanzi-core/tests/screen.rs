@@ -153,6 +153,7 @@ fn each_widget_draws_with_and_without_data() {
         }),
         command: Some("up 3 hours".into()),
         picture: None,
+        obs: None,
     };
     for w in Widget::all_kinds() {
         for d in [&full, &data()] {
@@ -189,4 +190,40 @@ fn volume_overlay_draws_over_a_picture() {
     assert!(img.pixels().any(|p| p.0[0] > 200 && p.0[1] < 60));
     let muted = decode(&volume_overlay(None, 45, true, Color::rgb(255, 0, 0), &mut fonts));
     assert!(colours(&muted) > 10);
+}
+
+#[test]
+fn obs_widget_draws_connected_and_offline() {
+    let mut fonts = Fonts::system();
+    let w = Widget::Obs { stats: true };
+    let offline = decode(&render_widget(&w, &style(), &data(), &mut fonts));
+    let live = ulanzi_core::obs::ObsLive {
+        connected: true,
+        program: "Gameplay".into(),
+        recording: true,
+        rec_secs: 754,
+        streaming: true,
+        stream_secs: 3725,
+        stats: Some(ulanzi_core::obs::ObsStats {
+            fps: 60,
+            cpu: 4,
+            dropped_permille: 2,
+        }),
+        ..Default::default()
+    };
+    let d = ScreenData {
+        obs: Some(live),
+        ..data()
+    };
+    let on = decode(&render_widget(&w, &style(), &d, &mut fonts));
+    assert!(colours(&on) > 3);
+    assert_ne!(offline, on);
+    // The REC pill is red while recording.
+    assert!(on.pixels().any(|p| p.0[0] > 180 && p.0[1] < 60 && p.0[2] < 60));
+    assert_eq!(Widget::Obs { stats: true }.title(), "OBS Studio");
+    assert!(
+        Widget::all_kinds()
+            .iter()
+            .any(|w| matches!(w, Widget::Obs { .. }))
+    );
 }

@@ -459,3 +459,51 @@ fn obs_actions_round_trip_and_old_ones_parse() {
         assert_eq!(toml::from_str::<Key>(&text).expect("parse"), k, "{text}");
     }
 }
+
+#[test]
+fn obs_renames_reach_every_action() {
+    let mut p = Profile::new_default("T", Model::D200X);
+    let scene = |s: &str| {
+        Action::Obs(ObsAction::SetScene {
+            scene: s.into(),
+            preview: false,
+        })
+    };
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(scene("Game")),
+            hold: Some(Action::Multi {
+                steps: vec![Step {
+                    action: Action::Obs(ObsAction::ToggleMute { input: "Mic".into() }),
+                    delay_ms: 0,
+                }],
+            }),
+            ..Key::default()
+        },
+    );
+    p.pages[0].dials[1].left = Some(Action::Obs(ObsAction::InputVolume {
+        input: "Mic".into(),
+        op: VolumeOp::Down,
+        step: 2,
+    }));
+    p.small_buttons.left = Some(Action::Obs(ObsAction::ToggleScenes {
+        a: "Game".into(),
+        b: "Chat".into(),
+    }));
+    assert!(p.rename_obs(ObsRename::Scene, "Game", "Gaming"));
+    assert!(p.rename_obs(ObsRename::Input, "Mic", "Microphone"));
+    assert!(!p.rename_obs(ObsRename::Scene, "Nope", "X"));
+    let k = &p.pages[0].keys[&0];
+    assert_eq!(k.tap, Some(scene("Gaming")));
+    assert!(
+        matches!(&k.hold, Some(Action::Multi { steps }) if matches!(&steps[0].action,
+        Action::Obs(ObsAction::ToggleMute { input }) if input == "Microphone"))
+    );
+    assert!(
+        matches!(&p.pages[0].dials[1].left, Some(Action::Obs(ObsAction::InputVolume { input, .. })) if input == "Microphone")
+    );
+    assert!(
+        matches!(&p.small_buttons.left, Some(Action::Obs(ObsAction::ToggleScenes { a, b })) if a == "Gaming" && b == "Chat")
+    );
+}

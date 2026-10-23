@@ -87,6 +87,7 @@ pub struct ScreenData {
     pub command: Option<String>,
     /// The picture the Pictures widget shows now (absolute).
     pub picture: Option<PathBuf>,
+    pub obs: Option<crate::obs::ObsLive>,
 }
 
 impl Default for ScreenData {
@@ -99,6 +100,7 @@ impl Default for ScreenData {
             weather: None,
             command: None,
             picture: None,
+            obs: None,
         }
     }
 }
@@ -680,18 +682,16 @@ fn system(
             Stat::Net => ("Network", format!("↓ {}", rate(d.net_down)), &[]),
         };
         text(fonts, pix, label, (x + 14.0, 20.0), 18.0, false, dim());
-        let size = fit(fonts, &value, 44.0, tile - 24.0, true);
-        text(fonts, pix, &value, (x + 14.0, 46.0), size, true, WHITE);
         if **st == Stat::Net {
-            text(
-                fonts,
-                pix,
-                &format!("↑ {}", rate(d.net_up)),
-                (x + 14.0, 108.0),
-                18.0,
-                false,
-                dim(),
-            );
+            // Two rates, the same size, both inside the tile.
+            let up = format!("↑ {}", rate(d.net_up));
+            let size =
+                fit(fonts, &value, 26.0, tile - 24.0, true).min(fit(fonts, &up, 26.0, tile - 24.0, true));
+            text(fonts, pix, &value, (x + 14.0, 50.0), size, true, WHITE);
+            text(fonts, pix, &up, (x + 14.0, 54.0 + size * 1.3), size, true, dim());
+        } else {
+            let size = fit(fonts, &value, 44.0, tile - 24.0, true);
+            text(fonts, pix, &value, (x + 14.0, 46.0), size, true, WHITE);
         }
         if graphs {
             spark(pix, hist, x + 12.0, 128.0, tile - 24.0, 46.0, accent);
@@ -897,6 +897,84 @@ fn pictures(fonts: &mut Fonts, pix: &mut Pixmap, picture: Option<&Path>) {
 }
 
 /// Draw `w` with `data` and encode it as PNG (458×196).
+/// A pill with a dot and a word (and a timer when on): REC, LIVE.
+fn output_pill(fonts: &mut Fonts, pix: &mut Pixmap, x: f32, word: &str, on: Option<(Color, String)>) {
+    let (y, w, h) = (126.0, 196.0, 46.0);
+    match &on {
+        Some((c, _)) => rounded(pix, x, y, w, h, h / 2.0, &paint(*c, 1.0)),
+        None => rounded(pix, x, y, w, h, h / 2.0, &paint(WHITE, 0.08)),
+    }
+    let fg = if on.is_some() { WHITE } else { dim() };
+    circle(pix, x + 24.0, y + h / 2.0, 7.0, &paint(fg, 1.0));
+    let label = match &on {
+        Some((_, t)) => format!("{word}  {t}"),
+        None => word.to_string(),
+    };
+    text(fonts, pix, &label, (x + 40.0, y + 11.0), 21.0, true, fg);
+}
+
+fn obs(fonts: &mut Fonts, pix: &mut Pixmap, stats: bool, live: Option<&crate::obs::ObsLive>, accent: Color) {
+    let Some(l) = live.filter(|l| l.connected) else {
+        message(fonts, pix, "clapperboard", "OBS is closed");
+        return;
+    };
+    text(fonts, pix, "ON AIR", (24.0, 18.0), 15.0, true, accent);
+    let scene = if l.program.is_empty() {
+        "—"
+    } else {
+        l.program.as_str()
+    };
+    let size = fit(fonts, scene, 44.0, if stats { 300.0 } else { 410.0 }, true);
+    text(fonts, pix, scene, (24.0, 40.0), size, true, WHITE);
+    if let Some(p) = l.preview.as_deref().filter(|p| *p != l.program) {
+        text(
+            fonts,
+            pix,
+            &format!("Preview · {p}"),
+            (24.0, 92.0),
+            17.0,
+            false,
+            dim(),
+        );
+    }
+    let red = Color::rgb(0xe0, 0x1b, 0x24);
+    let amber = Color::rgb(0xe5, 0xa5, 0x0a);
+    let rec = l.recording.then(|| {
+        if l.rec_paused {
+            (amber, "paused".to_string())
+        } else {
+            (red, crate::obs::clock(l.rec_secs))
+        }
+    });
+    output_pill(fonts, pix, 24.0, "REC", rec);
+    let live_pill = l.streaming.then(|| (red, crate::obs::clock(l.stream_secs)));
+    output_pill(fonts, pix, 236.0, "LIVE", live_pill);
+    if stats && let Some(st) = &l.stats {
+        let lines = [
+            format!("{} fps", st.fps),
+            format!("CPU {}%", st.cpu),
+            format!("{:.1}% dropped", st.dropped_permille as f32 / 10.0),
+        ];
+        for (i, line) in lines.iter().enumerate() {
+            let w = fonts.measure(line, 15.0, false);
+            let c = if i == 2 && st.dropped_permille >= 10 {
+                amber
+            } else {
+                dim()
+            };
+            text(
+                fonts,
+                pix,
+                line,
+                (WF - 24.0 - w, 20.0 + i as f32 * 22.0),
+                15.0,
+                false,
+                c,
+            );
+        }
+    }
+}
+
 pub fn render_widget(w: &Widget, style: &ScreenStyle, data: &ScreenData, fonts: &mut Fonts) -> Vec<u8> {
     let Some(mut pix) = Pixmap::new(W, H) else {
         return Vec::new();
@@ -931,6 +1009,7 @@ pub fn render_widget(w: &Widget, style: &ScreenStyle, data: &ScreenData, fonts: 
             command(fonts, &mut pix, title, cmd, data.command.as_deref(), a)
         }
         Widget::Pictures { .. } => pictures(fonts, &mut pix, data.picture.as_deref()),
+        Widget::Obs { stats } => obs(fonts, &mut pix, *stats, data.obs.as_ref(), a),
     }
     pix.encode_png().unwrap_or_default()
 }

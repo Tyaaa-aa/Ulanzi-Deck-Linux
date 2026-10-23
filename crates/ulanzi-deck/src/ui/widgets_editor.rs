@@ -93,6 +93,7 @@ pub fn summary(w: &Widget) -> String {
             1 => "1 picture".into(),
             n => format!("{n} pictures"),
         },
+        Widget::Obs { .. } => "Scene on air, recording and streaming time".into(),
     }
 }
 
@@ -140,6 +141,18 @@ pub fn demo_data(now: chrono::NaiveDateTime, place: &str) -> ScreenData {
         }),
         command: Some("Output of your command\nshows here".into()),
         picture: None,
+        obs: Some(ulanzi_core::obs::ObsLive {
+            connected: true,
+            program: "Gameplay".into(),
+            recording: true,
+            rec_secs: 754,
+            stats: Some(ulanzi_core::obs::ObsStats {
+                fps: 60,
+                cpu: 4,
+                dropped_permille: 1,
+            }),
+            ..Default::default()
+        }),
     }
 }
 
@@ -291,7 +304,7 @@ fn choose_pictures(
 fn option_rows(state: &State, edit: &EditScreen, i: usize, w: &Widget) -> Vec<gtk::Widget> {
     let mut rows: Vec<gtk::Widget> = Vec::new();
     match w.clone() {
-        Widget::Blank => {}
+        Widget::Blank | Widget::Obs { .. } => {}
         Widget::Clock {
             face,
             hour24,
@@ -591,6 +604,25 @@ fn option_rows(state: &State, edit: &EditScreen, i: usize, w: &Widget) -> Vec<gt
                 .upcast(),
             );
         }
+    }
+
+    if let Widget::Obs { stats } = w {
+        let e = edit.clone();
+        rows.push(
+            switch(
+                "Show Stats",
+                "Frame rate, CPU and dropped frames",
+                *stats,
+                move |v| {
+                    edit_widget(&e, How::Set, i, move |w| {
+                        if let Widget::Obs { stats } = w {
+                            *stats = v;
+                        }
+                    })
+                },
+            )
+            .upcast(),
+        );
     }
 
     /// A change that adds or removes rows.
