@@ -9,6 +9,7 @@ For using the app, see the [user guide](user-guide.md).
 [Files on disk](#files-on-disk) ·
 [Profile format](#profile-format) ·
 [D-Bus API](#d-bus-api) ·
+[Plugins](#plugins) ·
 [Command line](#command-line) ·
 [Environment variables](#environment-variables) ·
 [Logs](#logs) ·
@@ -34,6 +35,7 @@ flowchart LR
         Act["Actions<br/>media, audio, keys, commands"]
         Screen["Wide screen<br/>widgets, overlay"]
         OBS["OBS client<br/>obs-websocket 5"]
+        Plug["Plugin host<br/>wasmtime sandbox"]
         Focus["Focus watcher<br/>KWin · GNOME · Hyprland · Sway · X11"]
     end
     Store[("~/.config/ulanzi-deck<br/>profiles + settings")]
@@ -48,6 +50,7 @@ flowchart LR
     Deck --> Act
     Deck --> Screen
     OBS --> Deck
+    Plug <-->|actions, state| Deck
     Focus --> Deck
     Act -->|MPRIS, wpctl/pactl, uinput| session
 ```
@@ -67,12 +70,14 @@ flowchart LR
 |---|---|---|
 | `ulanzi-proto` | lib | The deck's USB protocol: report framing, commands, input parsing, the ZIP the deck expects |
 | `ulanzi-core` | lib | Profile and settings model, storage, key and wide-screen rendering, icons, catalog of actions, bundles, templates, backups, migration from version 1 |
-| `ulanzi-deckd` | bin + lib | The service: device I/O and hot-plug, deck actor, actions, OBS client, widgets data, focus tracking, tray, D-Bus API |
-| `ulanzictl` | bin | Command-line client, plus `probe` for talking to the deck directly |
+| `ulanzi-plugin` | lib | The plugin SDK and the contract (`wit/plugin.wit`, package `ulanzi:plugin@1.0.0`); plugins build to WebAssembly, and a test harness runs them natively |
+| `ulanzi-deckd` | bin + lib | The service: device I/O and hot-plug, deck actor, actions, OBS client, plugin host, widgets data, focus tracking, tray, D-Bus API |
+| `ulanzictl` | bin | Command-line client (including `plugin`), plus `probe` for talking to the deck directly |
 | `ulanzi-deck` | bin + lib | The GTK app |
 
-Rust edition 2024, toolchain pinned in `rust-toolchain.toml`. Main dependencies: gtk4-rs/libadwaita,
-zbus (D-Bus), tokio, resvg/tiny-skia and cosmic-text (drawing), tokio-tungstenite (OBS), ureq (weather,
+Rust edition 2024, toolchain pinned in `rust-toolchain.toml`. Examples live in `examples/plugins/`
+(`hello`). Main dependencies: gtk4-rs/libadwaita,
+zbus (D-Bus), tokio, wasmtime (plugins), oo7 (plugin secrets), resvg/tiny-skia and cosmic-text (drawing), tokio-tungstenite (OBS), ureq (weather,
 album art), ksni (tray), x11rb (X11 focus), evdev (virtual keyboard).
 
 ## Files on disk
@@ -85,6 +90,9 @@ album art), ksni (tray), x11rb (X11 focus), evdev (virtual keyboard).
 | `~/.local/state/ulanzi-deck/snapshots/` | Backups (`YYYYmmdd-HHMMSS-NNN-reason.ulanzideck`, newest 20 kept) |
 | `~/.local/state/ulanzi-deck/onboarded` | Set when the first-run setup was finished |
 | `~/.local/state/ulanzi-deck/kwin-focus.js` | The KWin script used for auto-switch on Plasma |
+| `~/.config/ulanzi-deck/plugin-secrets.toml` | Plugin secrets when no system keyring answers (mode 0600) |
+| `~/.local/share/ulanzi-deck/plugins/<id>/` | An installed plugin: `plugin.toml`, `plugin.wasm`, optional `assets/` |
+| `~/.cache/ulanzi-deck/plugins/` | Compiled plugins (safe to delete) |
 | `~/.cache/ulanzi-deck/art/` | Album art (downloaded or copied from players; newest 100 kept) |
 | `~/.local/share/ulanzi-deck/templates/` | Your own templates (`.ulanzideck`) |
 | `/etc/udev/rules.d/70-ulanzi-deck.rules` (or `/usr/lib/udev/rules.d/`) | Lets the logged-in user open the deck and `/dev/uinput` |
@@ -151,9 +159,19 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). Explore it with
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
 | OBS | `ObsStatus`, `ObsList`, `ObsUseDetected`, `ObsEnableServer`, `ObsReconnect` |
 | Widgets | `NowPlaying`, `WeatherPlaces`, `WeatherNow` |
+| Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart` |
 
 Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
-`ActionFailed`, `ObsStatusChanged`.
+`ActionFailed`, `ObsStatusChanged`, `PluginsChanged`.
+
+## Plugins
+
+Plugins are WebAssembly components run by wasmtime inside `ulanzi-deckd`, one instance each, with
+64 MiB of memory, 500 ms per call and no access to files or sockets except through the host, which
+checks every connection against the plugin's permissions. A crash restarts the plugin once; a second
+one within 5 minutes leaves it `failed`. The contract, permissions and limits are in the
+[plugin guide](plugins.md). Plugin settings are `[plugins.<id>]` in `settings.toml`; a plugin's state
+reaches key labels as `{<id>.<key>}`.
 
 ## Command line
 
@@ -165,6 +183,7 @@ ulanzictl brightness <0-100>
 ulanzictl export <file> [--profile <name>]   ulanzictl import <file> [--skip|--replace]
 ulanzictl snapshots              ulanzictl restore <name>
 ulanzictl validate [file]        check profile files
+ulanzictl plugin list|install|remove|enable|disable|restart|dev-mode on|off
 ulanzictl monitor                print presses, page changes and action errors live
 ulanzictl diagnostics            versions, session, device and recent logs (for bug reports)
 ulanzictl migrate                import version 1's ~/.config/ulanzi/config.yaml

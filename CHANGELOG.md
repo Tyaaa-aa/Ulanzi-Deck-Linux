@@ -5,6 +5,15 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+- Plugin host: plugins are sandboxed WebAssembly programs that add actions to keys. They can use
+  timers, secrets (system keyring), status, WebSocket, TCP/TLS and HTTP connections limited by the
+  hosts and local-network access they declare, and show live values on key labels as `{<plugin>.<key>}`.
+  A plugin that crashes is restarted once, then left off. Managed with `ulanzictl plugin
+  list|install|remove|enable|disable|restart|dev-mode` and new D-Bus methods; install from a folder
+  needs Developer mode. Includes the plugin SDK (`ulanzi-plugin`), a hello example and the
+  [plugin guide](docs/plugins.md).
+
 ## [2.0.0] - 2026-10-23
 
 A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python) lives on the

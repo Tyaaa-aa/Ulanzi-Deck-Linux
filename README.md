@@ -122,6 +122,7 @@ Building it yourself is a `cargo build --release` away; see the [technical guide
 | 📘 [**User guide**](docs/user-guide.md) | Everything in the app, step by step: keys, actions, dials, widgets, profiles, OBS, backups |
 | 🩺 [**Troubleshooting**](docs/troubleshooting.md) | The deck isn't found, OBS won't connect, auto-switch, and more |
 | 🛠️ [**Technical guide**](docs/technical.md) | Architecture, files on disk, profile format, D-Bus API, CLI, building, testing, packaging |
+| 🧩 [**Writing plugins**](docs/plugins.md) | The plugin contract, permissions, limits and a worked example |
 | 🔌 [**Hardware notes**](docs/hardware-notes.md) | The deck's USB protocol, measured on real hardware |
 | 🧪 [**Testing before a release**](TESTING.md) | The hands-on checklist |
 
