@@ -168,6 +168,7 @@ pub fn build(state: &State) -> gtk::Box {
         .css_classes(["navigation-sidebar"])
         .build();
 
+    column.append(&auto_switch_row(state));
     {
         let state = state.clone();
         column.append(&profiles_heading(&state));
@@ -743,4 +744,60 @@ fn attach_page_menu(state: &State, row: &gtk::ListBoxRow, index: usize, count: u
     let long = gtk::GestureLongPress::new();
     long.connect_pressed(move |_, x, y| show(x, y));
     row.add_controller(long);
+}
+
+/// "Auto-Switch" on/off above the profiles: profiles follow the app in front.
+fn auto_switch_row(state: &State) -> gtk::Box {
+    let row = gtk::Box::builder()
+        .spacing(8)
+        .margin_start(14)
+        .margin_end(12)
+        .margin_top(8)
+        .margin_bottom(2)
+        .tooltip_text(
+            "Switch to a profile when its app comes to the front (set the apps from a profile's menu)",
+        )
+        .build();
+    row.append(&gtk::Image::from_icon_name("view-refresh-symbolic"));
+    row.append(
+        &gtk::Label::builder()
+            .label("Auto-Switch")
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+    let switch = gtk::Switch::builder()
+        .active(state.settings.borrow().auto_switch)
+        .valign(gtk::Align::Center)
+        .build();
+    row.append(&switch);
+    // Set from outside (tray, settings reload): don't send it back.
+    let quiet = std::rc::Rc::new(std::cell::Cell::new(false));
+    {
+        let (state, quiet) = (state.clone(), quiet.clone());
+        switch.connect_active_notify(move |sw| {
+            if quiet.get() {
+                return;
+            }
+            let v = sw.is_active();
+            crate::ui::preferences::change_boxed(&state, Box::new(move |s| s.auto_switch = v));
+        });
+    }
+    {
+        let (st, sw) = (state.clone(), switch.downgrade());
+        state.on(move |c| {
+            if c != Change::Settings {
+                return;
+            }
+            if let Some(sw) = sw.upgrade() {
+                let v = st.settings.borrow().auto_switch;
+                if sw.is_active() != v {
+                    quiet.set(true);
+                    sw.set_active(v);
+                    quiet.set(false);
+                }
+            }
+        });
+    }
+    row
 }

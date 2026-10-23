@@ -15,6 +15,8 @@ use crate::deck::{DeckEvent, DeckMsg};
 const APP_ICON: &str = "io.github.tyaaa_aa.UlanziDeck";
 /// One colour, so the panel can tint it to match (KDE and GNOME both recolour it).
 const TRAY_ICON: &str = "io.github.tyaaa_aa.UlanziDeck-symbolic";
+/// The same icon with an accent-coloured dot: profiles follow the app in front.
+const TRAY_ICON_AUTO: &str = "io.github.tyaaa_aa.UlanziDeck-auto-symbolic";
 const LEVELS: [u8; 4] = [25, 50, 75, 100];
 
 /// The tray menu, independent of the toolkit.
@@ -81,11 +83,10 @@ struct View {
     auto_switch: bool,
 }
 
-/// Emblem on the tray icon while profiles follow the app in front.
-const AUTO_EMBLEM: &str = "emblem-synchronizing";
-
-fn overlay_icon(auto_switch: bool) -> &'static str {
-    if auto_switch { AUTO_EMBLEM } else { "" }
+/// The tray icon: with an accent dot while profiles follow the app in front. (A separate icon,
+/// not an overlay emblem: Plasma's tray doesn't draw emblems.)
+fn tray_icon(auto_switch: bool) -> &'static str {
+    if auto_switch { TRAY_ICON_AUTO } else { TRAY_ICON }
 }
 
 fn tooltip_text(state: &str, model: &str, auto_switch: bool) -> String {
@@ -117,10 +118,7 @@ impl ksni::Tray for DeckTray {
         "Ulanzi Deck".into()
     }
     fn icon_name(&self) -> String {
-        TRAY_ICON.into()
-    }
-    fn overlay_icon_name(&self) -> String {
-        overlay_icon(self.view.auto_switch).into()
+        tray_icon(self.view.auto_switch).into()
     }
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
@@ -282,8 +280,8 @@ mod tests {
 
     #[test]
     fn auto_switch_shows_on_the_icon() {
-        assert_eq!(overlay_icon(true), AUTO_EMBLEM);
-        assert_eq!(overlay_icon(false), "");
+        assert_eq!(tray_icon(true), TRAY_ICON_AUTO);
+        assert_eq!(tray_icon(false), TRAY_ICON);
         assert!(tooltip_text("ready", "D200X", true).contains("Auto-switch on"));
         assert!(!tooltip_text("ready", "D200X", false).contains("Auto-switch on"));
     }

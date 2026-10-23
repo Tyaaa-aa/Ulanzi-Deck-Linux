@@ -44,7 +44,29 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Album art: local files directly, remote URLs downloaded once in the background.
+/// The art shown for the song playing: a song keeps its cover while the player drops it for a
+/// moment (around track changes); a new song never shows the previous song's cover.
+#[derive(Debug, Default)]
+pub struct ArtMemory {
+    title: String,
+    art: Option<PathBuf>,
+}
+
+impl ArtMemory {
+    pub fn pick(&mut self, title: &str, fresh: Option<PathBuf>) -> Option<PathBuf> {
+        if title != self.title {
+            self.title = title.to_string();
+            self.art = None;
+        }
+        if fresh.is_some() {
+            self.art = fresh;
+        }
+        self.art.clone()
+    }
+}
+
+/// Album art: local files copied into the cache (players delete their temp files at the next
+/// track), remote URLs downloaded once in the background.
 #[derive(Clone)]
 pub struct ArtCache {
     dir: PathBuf,
@@ -59,11 +81,32 @@ impl ArtCache {
         }
     }
 
+    /// A copy of a player's local art file in the cache, named by its path, size and time.
+    fn copy_local(&self, src: &Path) -> Option<PathBuf> {
+        let meta = std::fs::metadata(src)
+            .ok()
+            .filter(|m| m.is_file() && m.len() > 0)?;
+        let stamp = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let key = format!("{}|{}|{stamp}", src.display(), meta.len());
+        let dest = art_cache_path(&self.dir, &key);
+        if !dest.is_file() {
+            let bytes = std::fs::read(src).ok()?;
+            std::fs::create_dir_all(dest.parent()?).ok()?;
+            ulanzi_core::store::write_atomic(&dest, &bytes).ok()?;
+            prune(dest.parent()?, KEEP_ART);
+        }
+        Some(dest)
+    }
+
     /// A local path for `url` if available now; starts a download otherwise.
     pub fn get(&self, url: &str) -> Option<PathBuf> {
         if let Some(p) = url.strip_prefix("file://") {
-            let p = PathBuf::from(percent_decode(p));
-            return p.is_file().then_some(p);
+            return self.copy_local(&PathBuf::from(percent_decode(p)));
         }
         if !(url.starts_with("http://") || url.starts_with("https://")) {
             let p = PathBuf::from(url);
@@ -90,6 +133,26 @@ impl ArtCache {
             });
         }
         None
+    }
+}
+
+/// Covers kept in the cache.
+const KEEP_ART: usize = 100;
+
+/// Remove all but the newest `keep` files in our own art cache folder.
+fn prune(dir: &Path, keep: usize) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "img"))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    if files.len() <= keep {
+        return;
+    }
+    files.sort();
+    for (_, p) in &files[..files.len() - keep] {
+        let _ = std::fs::remove_file(p);
     }
 }
 
@@ -140,6 +203,7 @@ pub struct Sampler {
     media: Option<MediaClient>,
     art: ArtCache,
     stats: StatsData,
+    art_memory: ArtMemory,
     prev_net: Option<(u64, u64, std::time::Instant)>,
 }
 
@@ -150,6 +214,7 @@ impl Sampler {
             media,
             art: ArtCache::new(cache_dir),
             stats: StatsData::default(),
+            art_memory: ArtMemory::default(),
             prev_net: None,
         }
     }
@@ -202,7 +267,9 @@ impl Sampler {
         let media_data = media.as_ref().map(|m| MediaData {
             title: m.title.clone(),
             artist: m.artist.clone(),
-            art: m.art_url.as_deref().and_then(|u| self.art.get(u)),
+            art: self
+                .art_memory
+                .pick(&m.title, m.art_url.as_deref().and_then(|u| self.art.get(u))),
             position_s: m.position_us.map(|u| (u / 1_000_000) as u32),
             length_s: m.length_us.map(|u| (u / 1_000_000) as u32),
             playing: m.status == PlaybackStatus::Playing,
@@ -238,5 +305,32 @@ mod tests {
         assert_eq!(rate(1000, 3000, 2.0), 1000);
         assert_eq!(rate(5000, 10, 1.0), 0);
         assert_eq!(rate(0, 10, 0.0), 0);
+    }
+
+    #[test]
+    fn art_stays_for_the_same_song() {
+        let mut m = ArtMemory::default();
+        let a = PathBuf::from("/cache/a.img");
+        assert_eq!(m.pick("Song 1", Some(a.clone())), Some(a.clone()));
+        // The player drops the art for a moment: keep it for the same song.
+        assert_eq!(m.pick("Song 1", None), Some(a.clone()));
+        // A new song without art yet shows none (not the old song's cover).
+        assert_eq!(m.pick("Song 2", None), None);
+        let b = PathBuf::from("/cache/b.img");
+        assert_eq!(m.pick("Song 2", Some(b.clone())), Some(b));
+    }
+
+    #[test]
+    fn local_art_is_copied_into_the_cache() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let src = dir.path().join("artwork_x.jpg");
+        std::fs::write(&src, b"jpegbytes").expect("write");
+        let cache = ArtCache::new(dir.path().join("cache"));
+        let url = format!("file://{}", src.display());
+        let got = cache.get(&url).expect("cached copy");
+        assert!(got.starts_with(dir.path().join("cache")));
+        // The player deletes its temp file: our copy stays.
+        std::fs::remove_file(&src).expect("rm");
+        assert_eq!(std::fs::read(&got).expect("read"), b"jpegbytes");
     }
 }

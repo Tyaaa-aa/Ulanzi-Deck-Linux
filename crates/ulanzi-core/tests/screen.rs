@@ -235,3 +235,13 @@ fn obs_widget_draws_connected_and_offline() {
             .any(|w| matches!(w, Widget::Obs { .. }))
     );
 }
+
+#[test]
+fn clock_digits_have_one_width() {
+    let mut fonts = Fonts::system();
+    let w = |s: &str, f: &mut Fonts| tabular_width(f, s, 96.0, true);
+    let a = w("11:11:11", &mut fonts);
+    assert!(a > 0.0);
+    assert_eq!(a, w("00:00:00", &mut fonts));
+    assert_eq!(a, w("14:05:37", &mut fonts));
+}

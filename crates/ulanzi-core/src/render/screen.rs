@@ -292,6 +292,62 @@ fn text_centered(
     text(fonts, pix, s, (cx - w / 2.0, y), size, bold, c);
 }
 
+/// Width of the widest digit: every digit gets this much room in [`tabular_text`].
+fn digit_cell(fonts: &mut Fonts, size: f32, bold: bool) -> f32 {
+    ('0'..='9')
+        .map(|d| fonts.measure(&d.to_string(), size, bold))
+        .fold(0.0, f32::max)
+}
+
+/// Width of `s` drawn by [`tabular_text`]: the same for every time of day.
+pub fn tabular_width(fonts: &mut Fonts, s: &str, size: f32, bold: bool) -> f32 {
+    let cell = digit_cell(fonts, size, bold);
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_digit() {
+                cell
+            } else {
+                fonts.measure(&c.to_string(), size, bold)
+            }
+        })
+        .sum()
+}
+
+/// Text with every digit in a cell of the same width, so a ticking clock doesn't move.
+fn tabular_text(
+    fonts: &mut Fonts,
+    pix: &mut Pixmap,
+    s: &str,
+    (x, y): (f32, f32),
+    size: f32,
+    bold: bool,
+    c: Color,
+) -> f32 {
+    let cell = digit_cell(fonts, size, bold);
+    let mut at = x;
+    for ch in s.chars() {
+        let one = ch.to_string();
+        let w = fonts.measure(&one, size, bold);
+        if ch.is_ascii_digit() {
+            text(fonts, pix, &one, (at + (cell - w) / 2.0, y), size, bold, c);
+            at += cell;
+        } else {
+            text(fonts, pix, &one, (at, y), size, bold, c);
+            at += w;
+        }
+    }
+    at - x
+}
+
+/// [`fit`] for [`tabular_text`].
+fn fit_tabular(fonts: &mut Fonts, s: &str, max: f32, width: f32, bold: bool) -> f32 {
+    let mut size = max;
+    while size > 12.0 && tabular_width(fonts, s, size, bold) > width {
+        size -= 2.0;
+    }
+    size
+}
+
 /// The largest size up to `max` at which `s` fits in `width`.
 fn fit(fonts: &mut Fonts, s: &str, max: f32, width: f32, bold: bool) -> f32 {
     let mut size = max;
@@ -416,15 +472,15 @@ fn clock(
     let date_line = now.format("%A, %-d %B").to_string();
     match face {
         ClockFace::Digital => {
-            let size = fit(fonts, &t, 96.0, WF - 70.0, true);
-            let w = fonts.measure(&t, size, true);
+            let size = fit_tabular(fonts, &t, 96.0, WF - 70.0, true);
+            let w = tabular_width(fonts, &t, size, true);
             let ap_w = ampm
                 .as_ref()
                 .map(|a| fonts.measure(a, 24.0, true) + 8.0)
                 .unwrap_or(0.0);
             let x = (WF - w - ap_w) / 2.0;
             let top = if show_date { 22.0 } else { 40.0 };
-            text(fonts, pix, &t, (x, top), size, true, WHITE);
+            tabular_text(fonts, pix, &t, (x, top), size, true, WHITE);
             if let Some(a) = &ampm {
                 text(
                     fonts,
@@ -507,7 +563,7 @@ fn clock(
                     dim(),
                 );
             }
-            text(
+            tabular_text(
                 fonts,
                 pix,
                 &(t.clone() + ampm.as_deref().map(|a| format!(" {a}")).as_deref().unwrap_or("")),
@@ -518,9 +574,10 @@ fn clock(
             );
         }
         ClockFace::Minimal => {
-            let size = fit(fonts, &t, 110.0, WF - 40.0, false);
+            let size = fit_tabular(fonts, &t, 110.0, WF - 40.0, false);
             let top = if show_date { 18.0 } else { 34.0 };
-            text_centered(fonts, pix, &t, WF / 2.0, top, size, false, WHITE);
+            let w = tabular_width(fonts, &t, size, false);
+            tabular_text(fonts, pix, &t, ((WF - w) / 2.0, top), size, false, WHITE);
             let mut line_text = String::new();
             if let Some(a) = &ampm {
                 line_text.push_str(a);
@@ -545,9 +602,9 @@ fn clock(
             }
         }
         ClockFace::Split => {
-            let size = fit(fonts, &t, 84.0, 260.0, true);
-            let w = fonts.measure(&t, size, true);
-            text(
+            let size = fit_tabular(fonts, &t, 84.0, 260.0, true);
+            let w = tabular_width(fonts, &t, size, true);
+            tabular_text(
                 fonts,
                 pix,
                 &t,
@@ -779,8 +836,8 @@ fn timer(fonts: &mut Fonts, pix: &mut Pixmap, minutes: u32, d: Option<&TimerData
     };
     let t = d.unwrap_or(&fallback);
     let mm = format!("{:02}:{:02}", t.remaining_s / 60, t.remaining_s % 60);
-    let size = fit(fonts, &mm, 92.0, 270.0, true);
-    text(
+    let size = fit_tabular(fonts, &mm, 92.0, 270.0, true);
+    tabular_text(
         fonts,
         pix,
         &mm,
@@ -910,7 +967,7 @@ fn output_pill(fonts: &mut Fonts, pix: &mut Pixmap, x: f32, word: &str, on: Opti
         Some((_, t)) => format!("{word}  {t}"),
         None => word.to_string(),
     };
-    text(fonts, pix, &label, (x + 40.0, y + 11.0), 21.0, true, fg);
+    tabular_text(fonts, pix, &label, (x + 40.0, y + 11.0), 21.0, true, fg);
 }
 
 fn obs(fonts: &mut Fonts, pix: &mut Pixmap, stats: bool, live: Option<&crate::obs::ObsLive>, accent: Color) {

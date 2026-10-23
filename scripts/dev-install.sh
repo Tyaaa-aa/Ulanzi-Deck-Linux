@@ -20,7 +20,7 @@ mkdir -p "$data/mime/packages"
 install -m 0644 "$gui/io.github.tyaaa_aa.UlanziDeck.mime.xml" "$data/mime/packages/"
 update-mime-database "$data/mime" 2>/dev/null || true
 install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck.svg" "$icons/scalable/apps/"
-install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck-symbolic.svg" "$icons/symbolic/apps/"
+install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck-symbolic.svg" "$gui/icons/io.github.tyaaa_aa.UlanziDeck-auto-symbolic.svg" "$icons/symbolic/apps/"
 update-desktop-database -q "$data/applications" 2>/dev/null || true
 gtk-update-icon-cache -q -t "$icons" 2>/dev/null || true
 sed "s|@BINDIR@|$bin|" packaging/systemd/ulanzi-deckd.service >"$units/ulanzi-deckd.service"
