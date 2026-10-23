@@ -24,8 +24,9 @@ use wasmtime_wasi_io::poll::Pollable;
 use wasmtime_wasi_io::streams::{OutputStream, StreamResult};
 
 use super::engine::Ticker;
+use super::net::Net;
 use super::ulanzi::plugin::types::{HttpResponse, LogLevel, Payload, Status};
-use super::ulanzi::plugin::{core, net, types};
+use super::ulanzi::plugin::{core, types};
 use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
 
 /// Events waiting for a plugin; when full, new events are dropped (one warning per episode).
@@ -160,7 +161,7 @@ impl InstanceHandle {
     }
 }
 
-/// The sending side of an instance's event queue, shared by the handle, timers (and sockets).
+/// The sending side of an instance's event queue, shared by the handle, timers and sockets.
 #[derive(Clone)]
 pub(crate) struct Queue {
     tx: SyncSender<Event>,
@@ -205,9 +206,11 @@ pub struct HostState {
     /// Plugin id; log lines carry it as the `plugin` field.
     pub(crate) plugin: Arc<str>,
     pub(crate) manifest: Manifest,
-    /// The daemon's runtime: timers (and sockets) run here.
+    /// The daemon's runtime: timers, sockets and HTTP requests run here.
     pub(crate) rt: Handle,
     pub(crate) queue: Queue,
+    /// Sockets and HTTP requests; dropped (and so closed) with the Store.
+    pub(crate) net: Net,
     out: mpsc::UnboundedSender<Output>,
     secrets: BTreeMap<String, String>,
     /// Secrets changed during the current guest call; reported once when it returns.
@@ -388,24 +391,6 @@ impl core::Host for HostState {
     }
 }
 
-// The network arrives in Task 6 (net.rs), which replaces these bodies. Permission checks read
-// `self.manifest.permissions`; socket tasks run on `self.rt` and report through `self.queue`.
-impl net::Host for HostState {
-    fn ws_open(&mut self, _url: String) -> Result<u32, String> {
-        Err("not available".into())
-    }
-    fn tcp_open(&mut self, _host: String, _port: u16, _tls: bool) -> Result<u32, String> {
-        Err("not available".into())
-    }
-    fn send(&mut self, _socket: u32, _data: Payload) -> Result<(), String> {
-        Err("not available".into())
-    }
-    fn close(&mut self, _socket: u32) {}
-    fn fetch(&mut self, _request: types::HttpRequest) -> Result<u32, String> {
-        Err("not available".into())
-    }
-}
-
 /// Start an instance of `loaded` on its own thread. `secrets` are the plugin's stored secrets;
 /// `out` receives its state, status and secret changes; timers run on `rt`. Instantiation happens
 /// on the new thread, so a guest that traps while starting shows up as `Exit::Crashed`.
@@ -452,6 +437,7 @@ pub fn spawn_instance(
         manifest,
         rt,
         queue: queue.clone(),
+        net: Net::default(),
         out,
         secrets,
         secrets_dirty: false,
@@ -575,8 +561,12 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
                 },
                 Event::Open(socket) => guest.call_on_open(s, socket),
                 Event::Message(socket, data) => guest.call_on_message(s, socket, &data),
-                Event::Closed(socket, reason) => guest.call_on_closed(s, socket, &reason),
+                Event::Closed(socket, reason) => {
+                    s.data_mut().net.socket_closed(socket);
+                    guest.call_on_closed(s, socket, &reason)
+                }
                 Event::Http(id, response) => {
+                    s.data_mut().net.fetch_done(id);
                     guest.call_on_http(s, id, response.as_ref().map_err(String::as_str))
                 }
                 Event::Timer(id) => match s.data_mut().timer_due(id) {

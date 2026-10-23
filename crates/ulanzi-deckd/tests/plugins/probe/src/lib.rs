@@ -8,6 +8,8 @@ use ulanzi_plugin::{Cx, HttpRequest, HttpResponse, Payload, Plugin, Request, Soc
 #[derive(Default)]
 pub struct Probe {
     settings: Value,
+    /// The most recently opened socket.
+    socket: Option<Socket>,
 }
 
 fn text<'a>(params: &'a Value, key: &str, action: &str) -> Result<&'a str, String> {
@@ -62,6 +64,20 @@ impl Plugin for Probe {
             "ws" => {
                 cx.ws_open(text(&params, "url", action)?)?;
             }
+            "tcp" => {
+                let host = text(&params, "host", action)?;
+                let port = params["port"].as_u64().ok_or("tcp needs port")?;
+                let port = u16::try_from(port).map_err(|_| "bad port")?;
+                cx.tcp_open(host, port, false)?;
+            }
+            "close" => {
+                // Close twice (must be harmless), then sending must fail.
+                let socket = self.socket.ok_or("no socket")?;
+                cx.close(socket);
+                cx.close(socket);
+                let sent = cx.send(socket, Payload::Text("late".into()));
+                cx.set_state("send", sent.err().unwrap_or_else(|| "ok".into()));
+            }
             "fetch" => {
                 let request = HttpRequest {
                     method: "GET".into(),
@@ -81,14 +97,16 @@ impl Plugin for Probe {
     }
 
     fn opened(&mut self, cx: &mut Cx, socket: Socket) {
+        self.socket = Some(socket);
         if let Err(e) = cx.send(socket, Payload::Text("ping".into())) {
             cx.set_state("ws_error", e);
         }
     }
 
     fn message(&mut self, cx: &mut Cx, _socket: Socket, data: Payload) {
-        if let Payload::Text(t) = data {
-            cx.set_state("ws", t);
+        match data {
+            Payload::Text(t) => cx.set_state("ws", t),
+            Payload::Binary(b) => cx.set_state("bin", String::from_utf8_lossy(&b)),
         }
     }
 

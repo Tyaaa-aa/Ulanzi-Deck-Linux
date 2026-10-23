@@ -44,6 +44,14 @@ id = "ws"
 name = "WebSocket"
 
 [[actions]]
+id = "tcp"
+name = "TCP"
+
+[[actions]]
+id = "close"
+name = "Close"
+
+[[actions]]
 id = "fetch"
 name = "Fetch"
 

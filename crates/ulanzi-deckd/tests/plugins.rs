@@ -3,8 +3,14 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::plugins::{Event, Exit, InstanceHandle, Output, PluginEngine, PluginError, spawn_instance};
 
@@ -362,4 +368,240 @@ async fn refuses_undeclared_network() {
         .err()
         .expect("must fail");
     assert!(matches!(err, PluginError::Permission(_)), "{err:?}");
+}
+
+// ---- Network ----
+
+/// A local WebSocket server; each connection runs `serve`. Returns the `ws://` URL.
+async fn ws_server<F, Fut>(serve: F) -> String
+where
+    F: Fn(WebSocketStream<TcpStream>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            if let Ok(ws) = tokio_tungstenite::accept_async(tcp).await {
+                tokio::spawn(serve(ws));
+            }
+        }
+    });
+    format!("ws://127.0.0.1:{port}")
+}
+
+/// A local HTTP/1.1 server that answers every request with `response` (raw bytes) and closes.
+async fn http_server(response: Vec<u8>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            let response = response.clone();
+            tokio::spawn(async move {
+                let mut seen = Vec::new();
+                let mut buf = [0u8; 4096];
+                while !seen.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match tcp.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => seen.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = tcp.write_all(&response).await;
+                let _ = tcp.shutdown().await;
+            });
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// Read outputs until a state for `key` shows up; its value, or None when `within` runs out.
+async fn state_of(p: &mut Running, key: &str, within: Duration) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        match tokio::time::timeout_at(deadline, p.out.recv()).await {
+            Ok(Some(Output::State { key: k, value })) if k == key => return Some(value),
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => return None,
+        }
+    }
+}
+
+async fn echo(mut ws: WebSocketStream<TcpStream>) {
+    while let Some(Ok(m)) = ws.next().await {
+        if (m.is_text() || m.is_binary()) && ws.send(m).await.is_err() {
+            return;
+        }
+    }
+}
+
+#[tokio::test]
+async fn ws_round_trip() {
+    let url = ws_server(echo).await;
+    let mut p = probe();
+    assert_eq!(p.act("ws", json!({"url": url})).await, Ok(()));
+    assert!(p.saw(&state("ws", "ping"), PROMPTLY).await);
+}
+
+#[tokio::test]
+async fn ws_close_reported() {
+    let url = ws_server(|mut ws| async move {
+        // Wait for the probe's "ping", then close with a reason.
+        let _ = ws.next().await;
+        let _ = ws
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "bye".into(),
+            }))
+            .await;
+        while ws.next().await.is_some() {}
+    })
+    .await;
+    let mut p = probe();
+    assert_eq!(p.act("ws", json!({"url": url})).await, Ok(()));
+    assert!(p.saw(&state("ws_closed", "bye"), PROMPTLY).await);
+}
+
+#[tokio::test]
+async fn closed_sockets_refuse_sends() {
+    let url = ws_server(echo).await;
+    let mut p = probe();
+    assert_eq!(p.act("ws", json!({"url": url})).await, Ok(()));
+    assert!(p.saw(&state("ws", "ping"), PROMPTLY).await);
+    // `close` closes twice (harmless), then a send must fail.
+    assert_eq!(p.act("close", json!({})).await, Ok(()));
+    let sent = state_of(&mut p, "send", PROMPTLY).await.expect("send state");
+    assert_ne!(sent, "ok");
+    // The plugin closed it itself: no `on-closed` for that.
+    assert_eq!(
+        state_of(&mut p, "ws_closed", Duration::from_millis(300)).await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn wss_handshake_failure_is_reported() {
+    // A plain TCP server that answers the TLS hello with garbage: the TLS path runs and fails.
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        while let Ok((mut tcp, _)) = listener.accept().await {
+            let _ = tcp.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n").await;
+        }
+    });
+    let mut p = probe();
+    let url = format!("wss://127.0.0.1:{port}");
+    assert_eq!(p.act("ws", json!({"url": url})).await, Ok(()));
+    let reason = state_of(&mut p, "ws_closed", PROMPTLY).await.expect("on-closed");
+    assert!(reason.starts_with("cannot open"), "{reason}");
+}
+
+#[tokio::test]
+async fn tcp_round_trip() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        if let Ok((mut tcp, _)) = listener.accept().await {
+            let mut buf = [0u8; 64];
+            while let Ok(n) = tcp.read(&mut buf).await {
+                if n == 0 || tcp.write_all(&buf[..n]).await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    let mut p = probe();
+    assert_eq!(
+        p.act("tcp", json!({"host": "127.0.0.1", "port": port})).await,
+        Ok(())
+    );
+    assert!(p.saw(&state("bin", "ping"), PROMPTLY).await);
+}
+
+#[tokio::test]
+async fn fetch_status() {
+    let url = http_server(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".to_vec()).await;
+    let mut p = probe();
+    assert_eq!(p.act("fetch", json!({"url": url})).await, Ok(()));
+    assert!(p.saw(&state("http", "204"), PROMPTLY).await);
+}
+
+#[tokio::test]
+async fn fetch_does_not_follow_redirects() {
+    let url = http_server(
+        b"HTTP/1.1 302 Found\r\nLocation: http://example.com/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .to_vec(),
+    )
+    .await;
+    let mut p = probe();
+    assert_eq!(p.act("fetch", json!({"url": url})).await, Ok(()));
+    assert!(p.saw(&state("http", "302"), PROMPTLY).await);
+}
+
+#[tokio::test]
+async fn fetch_caps_the_body() {
+    let size = 8 * 1024 * 1024 + 1;
+    let mut response =
+        format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n").into_bytes();
+    response.resize(response.len() + size, b'x');
+    let url = http_server(response).await;
+    let mut p = probe();
+    assert_eq!(p.act("fetch", json!({"url": url})).await, Ok(()));
+    assert!(p.saw(&state("http", "error: response too large"), PROMPTLY).await);
+}
+
+#[tokio::test]
+async fn refuses_hosts_outside_permissions() {
+    let mut p = probe();
+    let refused = Err("not allowed: example.com".to_string());
+    assert_eq!(p.act("ws", json!({"url": "ws://example.com"})).await, refused);
+    assert_eq!(
+        p.act("fetch", json!({"url": "https://Example.COM/x"})).await,
+        Err("not allowed: example.com".to_string())
+    );
+    assert_eq!(
+        p.act("tcp", json!({"host": "example.com", "port": 80})).await,
+        refused
+    );
+    // Other schemes are refused too.
+    assert!(p.act("ws", json!({"url": "http://127.0.0.1/"})).await.is_err());
+    assert!(p.act("fetch", json!({"url": "ftp://127.0.0.1/"})).await.is_err());
+    assert_eq!(state_of(&mut p, "ws", Duration::from_millis(300)).await, None);
+}
+
+#[tokio::test]
+async fn sockets_close_when_instance_stops() {
+    let (opened_tx, opened) = oneshot::channel::<()>();
+    let (closed_tx, closed) = oneshot::channel::<()>();
+    let slots = std::sync::Arc::new(std::sync::Mutex::new(Some((opened_tx, closed_tx))));
+    let url = ws_server(move |mut ws| {
+        let slot = slots.lock().ok().and_then(|mut s| s.take());
+        async move {
+            let Some((opened_tx, closed_tx)) = slot else {
+                return;
+            };
+            // The probe's "ping" shows the socket is open.
+            let _ = ws.next().await;
+            let _ = opened_tx.send(());
+            loop {
+                match ws.next().await {
+                    Some(Ok(m)) if !m.is_close() => {}
+                    _ => break,
+                }
+            }
+            let _ = closed_tx.send(());
+        }
+    })
+    .await;
+    let p = probe();
+    assert_eq!(p.act("ws", json!({"url": url})).await, Ok(()));
+    tokio::time::timeout(PROMPTLY, opened)
+        .await
+        .expect("socket opens")
+        .expect("server saw ping");
+    p.send(Event::Stop);
+    tokio::time::timeout(Duration::from_secs(1), closed)
+        .await
+        .expect("server sees the close within 1 s")
+        .expect("close reported");
+    assert_eq!(p.exit().await, Exit::Stopped);
 }

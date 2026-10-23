@@ -2,6 +2,7 @@
 
 mod engine;
 mod instance;
+mod net;
 
 pub use engine::{LoadedPlugin, PluginEngine};
 pub use instance::{Event, Exit, HostState, InstanceHandle, Output, spawn_instance};
