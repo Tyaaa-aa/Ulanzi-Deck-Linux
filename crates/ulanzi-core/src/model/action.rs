@@ -48,6 +48,17 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         player: Option<String>,
     },
+    /// Jump forward (positive) or back (negative) in the playing track.
+    Seek {
+        seconds: i32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        player: Option<String>,
+    },
+    /// Make the next of these outputs the default (all outputs when empty).
+    SwitchOutput {
+        #[serde(default)]
+        devices: Vec<String>,
+    },
     Volume {
         target: AudioTarget,
         op: VolumeOp,

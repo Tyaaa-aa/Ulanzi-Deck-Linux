@@ -243,3 +243,41 @@ fn text_becomes_key_presses() {
     assert_eq!(plan_typing(&"x".repeat(500)), Typing::Paste);
     assert_eq!(plan_typing(""), Typing::Keys(vec![]));
 }
+
+#[test]
+fn outputs_cycle_through_the_chosen_ones() {
+    use ulanzi_deckd::actions::audio::{next_output, parse_sinks};
+    let json = r#"[{"index":50,"name":"usb.headset","description":"Headset"},
+                   {"index":61,"name":"hdmi.monitor","description":"Monitor"},
+                   {"index":70,"name":"speakers","description":"Speakers"}]"#;
+    let sinks = parse_sinks(json);
+    assert_eq!(sinks.len(), 3);
+    assert_eq!(sinks[1], ("hdmi.monitor".to_string(), "Monitor".to_string()));
+    let names: Vec<String> = sinks.iter().map(|s| s.0.clone()).collect();
+    // Every output when none are chosen.
+    assert_eq!(
+        next_output("usb.headset", &names, &[]),
+        Some("hdmi.monitor".into())
+    );
+    assert_eq!(next_output("speakers", &names, &[]), Some("usb.headset".into()));
+    // Only the chosen ones, skipping those that are unplugged.
+    let chosen = vec![
+        "speakers".to_string(),
+        "gone".to_string(),
+        "usb.headset".to_string(),
+    ];
+    assert_eq!(
+        next_output("usb.headset", &names, &chosen),
+        Some("speakers".into())
+    );
+    assert_eq!(
+        next_output("speakers", &names, &chosen),
+        Some("usb.headset".into())
+    );
+    // The current one isn't in the list: start at the first.
+    assert_eq!(
+        next_output("hdmi.monitor", &names, &chosen),
+        Some("speakers".into())
+    );
+    assert_eq!(next_output("x", &[], &[]), None);
+}

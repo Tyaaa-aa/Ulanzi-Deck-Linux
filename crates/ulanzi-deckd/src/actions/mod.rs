@@ -201,6 +201,13 @@ impl ActionRunner for Executor {
                     "media control needs the session bus".into(),
                 )),
             },
+            Action::Seek { seconds, player } => match &self.media {
+                Some(m) => m.seek(*seconds, player.as_deref()).await,
+                None => Err(ActionError::Unavailable(
+                    "media control needs the session bus".into(),
+                )),
+            },
+            Action::SwitchOutput { devices } => audio::switch_output(devices).await,
             Action::Volume {
                 target,
                 op,

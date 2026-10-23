@@ -250,6 +250,36 @@ static CATALOG: &[ActionSpec] = &[
         }
     ),
     spec!(
+        "seek_back",
+        "Skip Back",
+        Media,
+        "rewind",
+        Action::Seek {
+            seconds: -10,
+            player: None
+        },
+        Action::Seek { seconds: ..=0, .. }
+    ),
+    spec!(
+        "seek_forward",
+        "Skip Forward",
+        Media,
+        "fast-forward",
+        Action::Seek {
+            seconds: 10,
+            player: None
+        },
+        Action::Seek { seconds: 1.., .. }
+    ),
+    spec!(
+        "switch_output",
+        "Switch Output",
+        Audio,
+        "speaker",
+        Action::SwitchOutput { devices: vec![] },
+        Action::SwitchOutput { .. }
+    ),
+    spec!(
         "play_sound",
         "Play Sound",
         Audio,
@@ -714,6 +744,10 @@ pub fn describe(a: &Action) -> String {
         Action::OpenUrl { url } => ellipsize(url, 48),
         Action::Shortcut { keys } => format!("Shortcut · {}", pretty_combo(keys)),
         Action::TypeText { text } => format!("Type “{}”", ellipsize(text, 32)),
+        Action::Seek { seconds, .. } if *seconds < 0 => format!("Back {} s", -seconds),
+        Action::Seek { seconds, .. } => format!("Forward {seconds} s"),
+        Action::SwitchOutput { devices } if devices.is_empty() => "Next output".into(),
+        Action::SwitchOutput { devices } => format!("Next of {} outputs", devices.len()),
         Action::PlaySound { path, .. } => {
             let file = std::path::Path::new(path)
                 .file_name()

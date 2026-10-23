@@ -119,6 +119,22 @@ impl MediaClient {
         Ok(())
     }
 
+    /// Jump `seconds` forward (or back, when negative) in the chosen player's track.
+    pub async fn seek(&self, seconds: i32, wanted: Option<&str>) -> Result<(), ActionError> {
+        let players = self.list().await;
+        let Some(name) = pick_player(&players, wanted) else {
+            return Err(ActionError::Unavailable("no media player is running".into()));
+        };
+        let p = self
+            .proxy(&name)
+            .await
+            .map_err(|e| ActionError::Failed(e.to_string()))?;
+        p.call_method("Seek", &(seconds as i64 * 1_000_000,))
+            .await
+            .map_err(|e| ActionError::Failed(format!("{name}: {e}")))?;
+        Ok(())
+    }
+
     pub async fn now_playing(&self) -> Option<MediaInfo> {
         let players = self.list().await;
         let name = pick_player(&players, None)?;

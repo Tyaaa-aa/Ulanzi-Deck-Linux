@@ -832,6 +832,38 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
             step,
             limit_100,
         } => volume_rows(&ed, target, *op, *step, *limit_100),
+        Action::Seek { seconds, player } => vec![
+            spin_row(
+                &ed,
+                "Seconds",
+                if *seconds < 0 {
+                    "How far back"
+                } else {
+                    "How far forward"
+                },
+                (1.0, 600.0, 5.0),
+                seconds.unsigned_abs() as f64,
+                "seek",
+                |a, v| {
+                    if let Action::Seek { seconds, .. } = a {
+                        let sign = if *seconds < 0 { -1 } else { 1 };
+                        *seconds = sign * v as i32;
+                    }
+                },
+            ),
+            entry_row(
+                &ed,
+                "Player (empty: the one playing)",
+                player.as_deref().unwrap_or(""),
+                "player",
+                |a, t| {
+                    if let Action::Seek { player, .. } = a {
+                        *player = (!t.trim().is_empty()).then_some(t);
+                    }
+                },
+            ),
+        ],
+        Action::SwitchOutput { devices } => output_rows(&ed, devices),
         Action::Brightness { op } => brightness_rows(&ed, *op),
         Action::GoToPage { page } | Action::OpenFolder { page } => {
             vec![page_combo(&ed, state, *page)]
@@ -1281,6 +1313,66 @@ fn obs_rows(state: &State, ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {
                 .upcast(),
         ),
         _ => {}
+    }
+    rows
+}
+
+/// Outputs (name, description) from `pactl`, for the Switch Output checklist.
+fn audio_outputs() -> Vec<(String, String)> {
+    std::process::Command::new("pactl")
+        .args(["-f", "json", "list", "sinks"])
+        .output()
+        .ok()
+        .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| {
+            let name = s.get("name")?.as_str()?.to_string();
+            let desc = s
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or(&name)
+                .to_string();
+            Some((name, desc))
+        })
+        .collect()
+}
+
+fn output_rows(ed: &Ed, devices: &[String]) -> Vec<gtk::Widget> {
+    let mut rows: Vec<gtk::Widget> = vec![
+        adw::ActionRow::builder()
+            .subtitle("Each press makes the next ticked output the default. None ticked: every output.")
+            .css_classes(["dim-label"])
+            .build()
+            .upcast(),
+    ];
+    let mut known = audio_outputs();
+    // Chosen outputs that aren't plugged in now still show, so they can be unticked.
+    for d in devices {
+        if !known.iter().any(|(n, _)| n == d) {
+            known.push((d.clone(), format!("{d} (not connected)")));
+        }
+    }
+    if known.is_empty() {
+        rows.push(
+            adw::ActionRow::builder()
+                .title("No outputs found")
+                .subtitle("Switching outputs needs pactl (pipewire-pulse)")
+                .build()
+                .upcast(),
+        );
+    }
+    for (name, desc) in known {
+        let on = devices.contains(&name);
+        rows.push(switch_row(ed, &desc, "", on, move |a, v| {
+            if let Action::SwitchOutput { devices } = a {
+                devices.retain(|d| *d != name);
+                if v {
+                    devices.push(name.clone());
+                }
+            }
+        }));
     }
     rows
 }

@@ -95,6 +95,70 @@ pub fn app_volume_argv(inputs: &[(u32, u8)], op: &VolumeOp, step: u8, limit_100:
         .collect()
 }
 
+/// (name, description) of each output from `pactl -f json list sinks`.
+pub fn parse_sinks(json: &str) -> Vec<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            let name = s.get("name")?.as_str()?.to_string();
+            let desc = s
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or(&name)
+                .to_string();
+            Some((name, desc))
+        })
+        .collect()
+}
+
+/// The output after `current`, among `chosen` (every output when empty) that are plugged in.
+pub fn next_output(current: &str, available: &[String], chosen: &[String]) -> Option<String> {
+    let ring: Vec<&String> = if chosen.is_empty() {
+        available.iter().collect()
+    } else {
+        chosen.iter().filter(|c| available.contains(c)).collect()
+    };
+    let at = ring.iter().position(|n| *n == current);
+    let next = match at {
+        Some(i) => ring.get((i + 1) % ring.len()),
+        None => ring.first(),
+    };
+    next.map(|n| (*n).clone())
+}
+
+async fn pactl(args: &[&str]) -> Result<String, ActionError> {
+    let out = tokio::process::Command::new("pactl")
+        .args(args)
+        .output()
+        .await
+        .map_err(|_| ActionError::Unavailable("switching outputs needs pactl (pipewire-pulse)".into()))?;
+    if !out.status.success() {
+        return Err(ActionError::Failed(
+            String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Make the next output the default.
+pub async fn switch_output(chosen: &[String]) -> Result<(), ActionError> {
+    let sinks = parse_sinks(&pactl(&["-f", "json", "list", "sinks"]).await?);
+    let names: Vec<String> = sinks.iter().map(|s| s.0.clone()).collect();
+    let current = pactl(&["get-default-sink"]).await.unwrap_or_default();
+    let next = next_output(&current, &names, chosen)
+        .ok_or_else(|| ActionError::Unavailable("none of this key's outputs is connected".into()))?;
+    pactl(&["set-default-sink", &next]).await?;
+    let desc = sinks
+        .iter()
+        .find(|s| s.0 == next)
+        .map(|s| s.1.as_str())
+        .unwrap_or(&next);
+    tracing::info!("default output: {desc}");
+    Ok(())
+}
+
 /// Percent and mute state from `wpctl get-volume` ("Volume: 0.45 [MUTED]").
 pub fn parse_wpctl_volume(out: &str) -> Option<(u8, bool)> {
     let v: f32 = out.split_whitespace().nth(1)?.parse().ok()?;

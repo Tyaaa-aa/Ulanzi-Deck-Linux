@@ -131,7 +131,41 @@ fn samples() -> Vec<Action> {
             name: "Twitch".into(),
         }),
         Action::Obs(ObsAction::Screenshot),
+        Action::Seek {
+            seconds: 10,
+            player: None,
+        },
+        Action::Seek {
+            seconds: -10,
+            player: None,
+        },
+        Action::SwitchOutput { devices: vec![] },
     ]
+}
+
+#[test]
+fn seek_and_output_read_well() {
+    assert_eq!(
+        describe(&Action::Seek {
+            seconds: -15,
+            player: None
+        }),
+        "Back 15 s"
+    );
+    assert_eq!(
+        describe(&Action::Seek {
+            seconds: 30,
+            player: None
+        }),
+        "Forward 30 s"
+    );
+    assert_eq!(describe(&Action::SwitchOutput { devices: vec![] }), "Next output");
+    assert_eq!(
+        describe(&Action::SwitchOutput {
+            devices: vec!["a".into(), "b".into()]
+        }),
+        "Next of 2 outputs"
+    );
 }
 
 #[test]
