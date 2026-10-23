@@ -104,12 +104,14 @@ fn swap_in(dir: &Path, id: &str) -> Result<(), PluginError> {
         fs::remove_dir_all(&aside).map_err(io_err("cannot clear", &aside))?;
     }
     let had_old = fs::symlink_metadata(&target).is_ok();
-    if had_old {
-        fs::rename(&target, &aside).map_err(io_err("cannot move", &target))?;
+    if had_old && let Err(e) = fs::rename(&target, &aside) {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(io_err("cannot move", &target)(e));
     }
     if let Err(e) = fs::rename(&staged, &target) {
-        if had_old {
-            let _ = fs::rename(&aside, &target);
+        if had_old && let Err(e) = fs::rename(&aside, &target) {
+            // The next daemon start puts it back (see the plugin scan).
+            tracing::warn!(plugin = %id, "cannot put the old plugin back: {e}");
         }
         let _ = fs::remove_dir_all(&staged);
         return Err(io_err("cannot move", &staged)(e));

@@ -846,7 +846,12 @@ impl SecretStore for MemSecrets {
     }
     async fn save(&self, plugin: &str, secrets: &BTreeMap<String, String>) -> Result<(), String> {
         let mut all = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        all.insert(plugin.to_string(), secrets.clone());
+        // Like the real stores: saving nothing forgets the plugin.
+        if secrets.is_empty() {
+            all.remove(plugin);
+        } else {
+            all.insert(plugin.to_string(), secrets.clone());
+        }
         Ok(())
     }
 }
@@ -1199,4 +1204,57 @@ async fn changed_settings_reach_a_running_plugin() {
         h.deck_saw(|m| matches!(m, DeckMsg::PluginCleared(id) if id == "probe"))
             .await
     );
+}
+
+#[tokio::test]
+async fn remove_wins_over_a_racing_action() {
+    let secrets = Arc::new(MemSecrets::default());
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let store: Arc<dyn SecretStore> = secrets.clone();
+    let h = host_with(setup, &Settings::default(), &[], store).await;
+    let kv = json!({"k": "k", "v": "v"});
+    assert_eq!(h.host.action("probe", "secret_set", kv.clone()).await, Ok(()));
+    let (removed, raced) = tokio::join!(h.host.remove("probe"), async {
+        // `remove` runs first and gets as far as stopping the instance.
+        tokio::task::yield_now().await;
+        h.host.action("probe", "secret_set", kv.clone()).await
+    });
+    assert_eq!(removed, Ok(()));
+    assert_eq!(
+        raced.expect_err("removed").to_string(),
+        "the probe plugin is not installed"
+    );
+    assert!(
+        secrets.0.lock().expect("lock").get("probe").is_none(),
+        "secrets deleted"
+    );
+    assert!(h.host.list().is_empty());
+}
+
+#[tokio::test]
+async fn install_refuses_symlinks() {
+    let h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    // plugin.wasm is a link.
+    let src = common::plugins::fixture(HELLO_PACKAGE, HELLO_MANIFEST);
+    let real = src.path().join("real.wasm");
+    std::fs::rename(src.path().join("plugin.wasm"), &real).expect("move");
+    std::os::unix::fs::symlink(&real, src.path().join("plugin.wasm")).expect("link");
+    assert!(h.host.install_dir(src.path(), true).await.is_err());
+    // A link inside assets/.
+    let src = common::plugins::fixture(HELLO_PACKAGE, HELLO_MANIFEST);
+    std::fs::create_dir(src.path().join("assets")).expect("assets");
+    std::fs::write(src.path().join("assets/icon.svg"), "<svg/>").expect("icon");
+    std::os::unix::fs::symlink("/etc/passwd", src.path().join("assets/passwd")).expect("link");
+    let err = h
+        .host
+        .install_dir(src.path(), true)
+        .await
+        .expect_err("link in assets");
+    assert!(err.to_string().contains("link"), "{err}");
+    assert_eq!(
+        std::fs::read_dir(h.dir.path()).expect("dir").count(),
+        0,
+        "nothing left behind"
+    );
+    assert!(h.host.list().is_empty());
 }

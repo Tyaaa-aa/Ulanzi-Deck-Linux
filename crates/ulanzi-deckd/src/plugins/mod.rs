@@ -1,5 +1,6 @@
 //! WebAssembly plugin host.
 
+mod deck_queue;
 mod engine;
 mod install;
 mod instance;

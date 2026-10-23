@@ -4,8 +4,8 @@
 //! across an await, a guest call or an action reply). Lifecycle operations (settings, install,
 //! remove, restart, shutdown) are also serialized by the async `ops` lock so they cannot
 //! interleave. Each instance has a supervisor task that forwards its outputs and handles its end.
-//! Messages to the deck go through an unbounded queue and one forwarding task, so they keep their
-//! order and nothing here ever waits on a full deck channel.
+//! Messages to the deck go through a coalescing queue and one forwarding task (`DeckQueue`), so
+//! they keep their order and nothing here ever waits on a full deck channel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -20,6 +20,7 @@ use tokio::time::Instant;
 use ulanzi_core::model::{PluginEntry, Settings, table_to_json};
 use ulanzi_core::plugin::{CONTRACT, Manifest, ManifestError};
 
+use super::deck_queue::DeckQueue;
 use super::ulanzi::plugin::types::Status;
 use super::{
     Event, Exit, InstanceHandle, LoadedPlugin, Output, PluginEngine, PluginError, PluginInfo, PluginStatus,
@@ -39,7 +40,7 @@ pub(super) struct Host {
     /// The engine, or why it could not be created.
     pub(super) engine: Result<PluginEngine, String>,
     pub(super) secrets: Arc<dyn SecretStore>,
-    deck: mpsc::UnboundedSender<DeckMsg>,
+    deck: DeckQueue,
     rt: Handle,
     state: Mutex<State>,
     changed: watch::Sender<u64>,
@@ -164,6 +165,31 @@ pub(super) fn ignored_folder(name: &str) -> bool {
     name.starts_with('.') || name.ends_with(".new")
 }
 
+/// An install interrupted between moving `<id>` aside (as `.<id>.old`) and moving the new one
+/// in: put the old folder back.
+fn restore_interrupted(dir: &Path, entries: &[std::fs::DirEntry]) {
+    for entry in entries {
+        let name = entry.file_name();
+        let Some(id) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix('.'))
+            .and_then(|n| n.strip_suffix(".old"))
+        else {
+            continue;
+        };
+        let target = dir.join(id);
+        if id.is_empty() || std::fs::symlink_metadata(&target).is_ok() {
+            continue;
+        }
+        match std::fs::rename(entry.path(), &target) {
+            Ok(()) => tracing::warn!(plugin = %id, "restored the plugin after an interrupted install"),
+            Err(e) => {
+                tracing::warn!(plugin = %id, "cannot restore the plugin after an interrupted install: {e}")
+            }
+        }
+    }
+}
+
 /// Every plugin folder in `dir`, loaded or with the reason it cannot be. Blocking.
 fn scan(dir: &Path, engine: &Result<PluginEngine, String>) -> Vec<(String, Result<LoadedPlugin, Bad>)> {
     let entries = match std::fs::read_dir(dir) {
@@ -175,8 +201,13 @@ fn scan(dir: &Path, engine: &Result<PluginEngine, String>) -> Vec<(String, Resul
             return Vec::new();
         }
     };
+    let entries: Vec<_> = entries.flatten().collect();
+    restore_interrupted(dir, &entries);
+    let entries = std::fs::read_dir(dir)
+        .map(|d| d.flatten().collect())
+        .unwrap_or(entries);
     let mut found = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -215,20 +246,11 @@ impl Host {
                 })
         };
 
-        let (to_deck, mut deck_queue) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            while let Some(msg) = deck_queue.recv().await {
-                if deck.send(msg).await.is_err() {
-                    break;
-                }
-            }
-        });
-
         let host = Arc::new_cyclic(|me| Host {
             dir,
             engine,
             secrets,
-            deck: to_deck,
+            deck: DeckQueue::spawn(deck),
             rt: Handle::current(),
             state: Mutex::new(State {
                 plugins: BTreeMap::new(),
@@ -293,8 +315,7 @@ impl Host {
     }
 
     fn to_deck(&self, msg: DeckMsg) {
-        // Fails only when the forwarder ended (the deck is gone); nothing to tell then.
-        let _ = self.deck.send(msg);
+        self.deck.send(msg);
     }
 
     pub(super) fn list(&self) -> Vec<PluginInfo> {
@@ -563,19 +584,23 @@ impl Host {
 
     pub(super) async fn remove(&self, id: &str) -> Result<(), PluginError> {
         let _ops = self.ops.lock().await;
-        let run = {
+        // Unlisted first: from here on actions find nothing to start, so no new instance can
+        // save secrets after they are deleted below.
+        let (mut entry, run) = {
             let mut st = self.state();
-            let e = st
+            let mut e = st
                 .plugins
-                .get_mut(id)
+                .remove(id)
                 .ok_or_else(|| PluginError::NotInstalled(id.to_string()))?;
-            Self::take_run(e)
+            let run = Self::take_run(&mut e);
+            (e, run)
         };
+        self.bump();
         if let Some(run) = run {
             stop_run(run).await;
         }
         let folder = self.dir.join(id);
-        tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&folder) {
+        let deleted = tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&folder) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(PluginError::Io(format!(
                 "cannot delete {}: {e}",
                 folder.display()
@@ -583,9 +608,25 @@ impl Host {
             _ => Ok(()),
         })
         .await
-        .map_err(|e| PluginError::Io(format!("cannot delete the plugin: {e}")))??;
-        self.state().plugins.remove(id);
-        self.bump();
+        .map_err(|e| PluginError::Io(format!("cannot delete the plugin: {e}")))
+        .and_then(|r| r);
+        if let Err(e) = deleted {
+            // Still installed: list it again, stopped.
+            if entry.loaded.is_some() {
+                entry.status = if entry.enabled {
+                    PluginStatus::Ready
+                } else {
+                    PluginStatus::Off
+                };
+            }
+            let mut st = self.state();
+            if !st.plugins.contains_key(id) {
+                st.plugins.insert(id.to_string(), entry);
+            }
+            drop(st);
+            self.bump();
+            return Err(e);
+        }
         self.secrets
             .save(id, &BTreeMap::new())
             .await
@@ -603,7 +644,15 @@ impl Host {
             match &e.status {
                 PluginStatus::Incompatible(why) => return Err(PluginError::Load(why.clone())),
                 PluginStatus::Off => return Err(PluginError::Off(e.name.clone())),
-                _ => Self::take_run(e),
+                _ => {
+                    let run = Self::take_run(e);
+                    if e.enabled {
+                        // Actions wait (briefly) for the new instance instead of starting another.
+                        e.status = PluginStatus::Starting;
+                        self.bump();
+                    }
+                    run
+                }
             }
         };
         if let Some(run) = run {

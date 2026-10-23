@@ -119,9 +119,14 @@ impl SecretStore for KeyringSecrets {
             item.unlock().await.map_err(keyring_err)?;
         }
         let secret = item.secret().await.map_err(keyring_err)?;
-        // serde_json's error names a position, never the content.
-        serde_json::from_slice(secret.as_bytes())
-            .map_err(|e| format!("the keyring item for {plugin} is not valid: {e}"))
+        // serde_json's message can quote the content; say only where.
+        serde_json::from_slice(secret.as_bytes()).map_err(|e| {
+            format!(
+                "the keyring item for {plugin} is not valid (line {}, column {})",
+                e.line(),
+                e.column()
+            )
+        })
     }
 
     async fn save(&self, plugin: &str, secrets: &BTreeMap<String, String>) -> Result<(), String> {
