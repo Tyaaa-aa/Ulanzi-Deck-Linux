@@ -5,3 +5,5 @@
 mod bindings {
     wasmtime::component::bindgen!({ world: "plugin", path: "../ulanzi-plugin/wit" });
 }
+
+pub use bindings::*;
