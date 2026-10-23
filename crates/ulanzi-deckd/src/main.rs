@@ -1,5 +1,6 @@
 //! `ulanzi-deckd`: the Ulanzi Deck background service.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -7,10 +8,12 @@ use std::time::Duration;
 
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{broadcast, mpsc};
-use ulanzi_core::store::Store;
+use ulanzi_core::model::Settings;
+use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals, reload};
 use ulanzi_deckd::deck::{DeckEvent, DeckMsg, start_deck};
+use ulanzi_deckd::plugins::{PluginHost, system_secrets};
 use ulanzi_deckd::screen::Sampler;
 use ulanzi_deckd::transport::{DeviceState, Hidraw, probe, watch_dev};
 
@@ -117,7 +120,21 @@ async fn main() -> ExitCode {
         tracing::error!("settings unreadable, using defaults: {e}");
         Default::default()
     });
-    let executor = Arc::new(Executor::new(Some(conn.clone())).with_obs(obs.clone()));
+    let plugins = start_plugins(&store, &settings, tx.clone()).await;
+    match conn
+        .object_server()
+        .interface::<_, DeckService>(OBJECT_PATH)
+        .await
+    {
+        Ok(iface) => iface.get_mut().await.set_plugins(plugins.clone()),
+        Err(e) => tracing::error!("plugins are not on D-Bus: {e}"),
+    }
+    tokio::spawn(ulanzi_deckd::dbus::forward_plugins(conn.clone(), plugins.clone()));
+    let executor = Arc::new(
+        Executor::new(Some(conn.clone()))
+            .with_obs(obs.clone())
+            .with_plugins(plugins.clone()),
+    );
     {
         let ex = executor.clone();
         tokio::task::spawn_blocking(move || ex.prepare_keyboard());
@@ -186,14 +203,48 @@ async fn main() -> ExitCode {
             _ = hup.recv() => {
                 tracing::info!("reloading configuration");
                 reload(&tx, &store).await;
+                if let Ok(s) = store.load_settings() {
+                    plugins.apply_settings(&s).await;
+                }
             }
         }
     }
     tracing::info!("stopping");
     ulanzi_deckd::focus::kwin::unload(&conn).await;
     let _ = tx.send(DeckMsg::Shutdown).await;
+    plugins.shutdown().await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     ExitCode::SUCCESS
+}
+
+/// Load the installed plugins and start the ones that run in the background or that a profile
+/// uses (the others start on their first action).
+async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<DeckMsg>) -> PluginHost {
+    let dir = match ulanzi_core::store::data_dir() {
+        Ok(d) => d.join("plugins"),
+        Err(e) => {
+            tracing::error!("no data folder ({e}); plugins are kept in the config folder");
+            store.root().join("plugins")
+        }
+    };
+    let used: BTreeSet<String> = store
+        .list_profiles()
+        .into_iter()
+        .filter_map(|l| match l {
+            ProfileLoad::Ok(p) => Some(p.plugins_used()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    PluginHost::start(
+        dir,
+        store.cache_dir().join("plugins"),
+        system_secrets(store.root()).await,
+        settings,
+        &used,
+        deck,
+    )
+    .await
 }
 
 /// Import the Python version's config the first time, if there are no profiles yet.

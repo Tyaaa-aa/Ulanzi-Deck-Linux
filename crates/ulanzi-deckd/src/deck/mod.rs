@@ -468,8 +468,16 @@ impl Deck {
                 self.focused = Some(w);
                 self.auto_switch().await;
             }
-            // Plugin state reaches keys in a later task; until then it is ignored.
-            DeckMsg::PluginState { .. } | DeckMsg::PluginCleared(_) => {}
+            DeckMsg::PluginState { plugin, key, value } => {
+                if self.dynamic.set_plugin_var(&plugin, &key, value) {
+                    self.push_page(false).await;
+                }
+            }
+            DeckMsg::PluginCleared(plugin) => {
+                if self.dynamic.clear_plugin(&plugin) {
+                    self.push_page(false).await;
+                }
+            }
             DeckMsg::Shutdown => {}
         }
     }

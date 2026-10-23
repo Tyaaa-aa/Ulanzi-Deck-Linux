@@ -12,6 +12,7 @@ use zbus::object_server::SignalEmitter;
 use zbus::{Connection, interface};
 
 use crate::deck::{DeckEvent, DeckMsg, DeckSnapshot};
+use crate::plugins::{PluginError, PluginHost};
 
 pub const BUS_NAME: &str = "io.github.tyaaa_aa.UlanziDeck.Service";
 pub const OBJECT_PATH: &str = "/io/github/tyaaa_aa/UlanziDeck";
@@ -44,6 +45,7 @@ pub struct DeckService {
     focused: Mutex<ulanzi_core::autoswitch::Window>,
     obs: Option<crate::obs::ObsHandle>,
     obs_probe: crate::obs::client::ProbeFn,
+    plugins: Option<PluginHost>,
 }
 
 impl DeckService {
@@ -55,7 +57,25 @@ impl DeckService {
             focused: Mutex::default(),
             obs: None,
             obs_probe: crate::obs::system_probe(),
+            plugins: None,
         }
+    }
+
+    /// Give the service the plugin host.
+    pub fn with_plugins(mut self, host: PluginHost) -> DeckService {
+        self.set_plugins(host);
+        self
+    }
+
+    /// Give the already published service the plugin host (it starts after the bus name is ours).
+    pub fn set_plugins(&mut self, host: PluginHost) {
+        self.plugins = Some(host);
+    }
+
+    fn plugins(&self) -> Result<&PluginHost> {
+        self.plugins
+            .as_ref()
+            .ok_or_else(|| DeckError::Unavailable("plugins are not running yet".into()))
     }
 
     /// Give the service the OBS connection (and how to look for OBS on this machine).
@@ -168,6 +188,20 @@ impl DeckService {
     }
 }
 
+/// A plugin error as a D-Bus error; the message is the sentence shown to the user.
+fn plugin_err(e: PluginError) -> DeckError {
+    let msg = e.to_string();
+    match e {
+        PluginError::NotInstalled(_) => DeckError::NotFound(msg),
+        PluginError::Manifest(_) | PluginError::Load(_) | PluginError::Permission(_) => {
+            DeckError::Invalid(msg)
+        }
+        PluginError::Off(_) | PluginError::Failed(_) | PluginError::Action(_) | PluginError::Io(_) => {
+            DeckError::Unavailable(msg)
+        }
+    }
+}
+
 /// Re-read settings and profiles from disk and hand them to the deck.
 pub async fn reload(tx: &mpsc::Sender<DeckMsg>, store: &Store) {
     match store.load_settings() {
@@ -275,6 +309,9 @@ impl DeckService {
 
     async fn reload(&self) -> Result<()> {
         reload(&self.tx, &self.store).await;
+        if let (Some(host), Ok(s)) = (&self.plugins, self.store.load_settings()) {
+            host.apply_settings(&s).await;
+        }
         Ok(())
     }
 
@@ -463,8 +500,84 @@ impl DeckService {
         {
             obs.set_settings(s.obs.clone()).await;
         }
+        if let Some(host) = &self.plugins {
+            host.apply_settings(&s).await;
+        }
         self.send(DeckMsg::Settings(Box::new(s))).await
     }
+
+    /// Installed plugins (and plugin folders that could not be loaded):
+    /// (id, name, version, status id, detail). Status ids: off, ready, starting, running, problem,
+    /// failed, incompatible; the detail is the reason or message for the last three.
+    async fn plugin_list(&self) -> Result<Vec<(String, String, String, String, String)>> {
+        Ok(self
+            .plugins()?
+            .list()
+            .into_iter()
+            .map(|p| {
+                (
+                    p.id,
+                    p.name,
+                    p.version,
+                    p.status.id().to_string(),
+                    p.status.detail(),
+                )
+            })
+            .collect())
+    }
+
+    /// Install (or replace) the plugin in the folder at `path` (absolute); returns its id. Only in
+    /// Developer mode.
+    async fn plugin_install_dir(&self, path: String) -> Result<String> {
+        let developer_mode = self
+            .store
+            .load_settings()
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?
+            .developer_mode;
+        self.plugins()?
+            .install_dir(std::path::Path::new(&path), developer_mode)
+            .await
+            .map_err(plugin_err)
+    }
+
+    /// Stop the plugin and delete it and its secrets. Its settings are kept.
+    async fn plugin_remove(&self, id: String) -> Result<()> {
+        self.plugins()?.remove(&id).await.map_err(plugin_err)
+    }
+
+    /// Turn a plugin on or off (`[plugins.<id>].enabled` in the settings).
+    async fn plugin_set_enabled(
+        &self,
+        id: String,
+        enabled: bool,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<()> {
+        let host = self.plugins()?;
+        if !host.list().iter().any(|p| p.id == id) {
+            return Err(plugin_err(PluginError::NotInstalled(id)));
+        }
+        let mut s = self
+            .store
+            .load_settings()
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        s.plugins.entry(id).or_default().enabled = enabled;
+        self.store
+            .save_settings(&s)
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        host.apply_settings(&s).await;
+        self.send(DeckMsg::Settings(Box::new(s))).await?;
+        let _ = Self::settings_changed(&emitter).await;
+        Ok(())
+    }
+
+    /// Stop and start a plugin again, forgetting earlier crashes.
+    async fn plugin_restart(&self, id: String) -> Result<()> {
+        self.plugins()?.restart(&id).await.map_err(plugin_err)
+    }
+
+    /// The plugin list or a plugin's status changed: call PluginList again.
+    #[zbus(signal)]
+    async fn plugins_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     /// Towns matching `query` for the weather widget: (label, latitude, longitude).
     async fn weather_places(&self, query: String) -> Result<Vec<(String, f64, f64)>> {
@@ -749,6 +862,20 @@ pub async fn forward_obs(
                     let _ = DeckService::profiles_changed(&emitter).await;
                 }
             }
+        }
+    }
+}
+
+/// Send `PluginsChanged` whenever the plugin list or a status changes.
+pub async fn forward_plugins(conn: Connection, host: PluginHost) {
+    let Ok(emitter) = SignalEmitter::new(&conn, OBJECT_PATH) else {
+        return;
+    };
+    let mut changes = host.watch();
+    while changes.changed().await.is_ok() {
+        changes.borrow_and_update();
+        if let Err(e) = DeckService::plugins_changed(&emitter).await {
+            tracing::debug!("signal not sent: {e}");
         }
     }
 }

@@ -36,6 +36,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ProfileCmd,
     },
+    /// List, install, remove, turn on or off and restart plugins.
+    Plugin {
+        #[command(subcommand)]
+        cmd: PluginCmd,
+    },
     /// Import the old Python configuration (~/.config/ulanzi/config.yaml).
     Migrate {
         #[arg(long)]
@@ -85,6 +90,74 @@ enum Cmd {
 enum ProfileCmd {
     List,
     Switch { name_or_id: String },
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
+enum PluginCmd {
+    /// Show installed plugins and how they are doing.
+    List,
+    /// Install (or replace) the plugin in a folder (needs Developer mode).
+    Install { dir: PathBuf },
+    /// Delete a plugin and its saved secrets (its settings are kept).
+    Remove { id: String },
+    /// Turn a plugin on.
+    Enable { id: String },
+    /// Turn a plugin off.
+    Disable { id: String },
+    /// Stop and start a plugin again (also after it stopped working).
+    Restart { id: String },
+    /// Allow or refuse installing plugins from a folder.
+    DevMode { state: OnOff },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
+enum OnOff {
+    On,
+    Off,
+}
+
+/// One row of `PluginList`: id, name, version, status, detail.
+type PluginRow = (String, String, String, String, String);
+
+/// `plugin list` output: aligned columns, the detail (a reason or message) last.
+fn plugin_table(rows: &[PluginRow]) -> String {
+    if rows.is_empty() {
+        return "no plugins installed\n".into();
+    }
+    let header = ("ID", "NAME", "VERSION", "STATUS", "DETAIL");
+    let width = |f: fn(&PluginRow) -> &str, title: &str| {
+        rows.iter()
+            .map(|r| f(r).chars().count())
+            .chain([title.len()])
+            .max()
+            .unwrap_or(0)
+    };
+    let w = [
+        width(|r| &r.0, header.0),
+        width(|r| &r.1, header.1),
+        width(|r| &r.2, header.2),
+        width(|r| &r.3, header.3),
+    ];
+    let line = |c: [&str; 5]| {
+        let text = format!(
+            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {}",
+            c[0],
+            c[1],
+            c[2],
+            c[3],
+            c[4],
+            w0 = w[0],
+            w1 = w[1],
+            w2 = w[2],
+            w3 = w[3]
+        );
+        format!("{}\n", text.trim_end())
+    };
+    let mut out = line([header.0, header.1, header.2, header.3, header.4]);
+    for r in rows {
+        out += &line([&r.0, &r.1, &r.2, &r.3, &r.4]);
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +225,12 @@ fn absolute(p: &Path) -> Result<String, String> {
 }
 
 fn not_running(e: zbus::Error) -> String {
+    // The service's own errors carry a sentence meant for the user; show just that.
+    if let zbus::Error::MethodError(name, Some(msg), _) = &e
+        && name.starts_with("io.github.tyaaa_aa.UlanziDeck1.Error.")
+    {
+        return msg.clone();
+    }
     let s = e.to_string();
     if s.contains("ServiceUnknown") || s.contains("NameHasNoOwner") {
         "the Ulanzi Deck service is not running (systemctl --user start ulanzi-deckd)".into()
@@ -228,6 +307,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                 }
             }
         }
+        Cmd::Plugin { cmd } => plugin(cmd).await?,
         Cmd::Migrate { force } => {
             let (id, keys, warnings): (String, u32, Vec<String>) = proxy()
                 .await?
@@ -352,6 +432,55 @@ async fn run(cli: Cli) -> Result<(), String> {
         }
         Cmd::Diagnostics => diagnostics().await,
         Cmd::Probe { what } => probe::run(what).await?,
+    }
+    Ok(())
+}
+
+async fn plugin(cmd: PluginCmd) -> Result<(), String> {
+    let p = proxy().await?;
+    match cmd {
+        PluginCmd::List => {
+            let rows: Vec<PluginRow> = p.call("PluginList", &()).await.map_err(not_running)?;
+            print!("{}", plugin_table(&rows));
+        }
+        PluginCmd::Install { dir } => {
+            let dir = std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let path = dir.to_string_lossy().into_owned();
+            let id: String = p
+                .call("PluginInstallDir", &(path.as_str(),))
+                .await
+                .map_err(not_running)?;
+            println!("installed {id}");
+        }
+        PluginCmd::Remove { id } => p
+            .call::<_, _, ()>("PluginRemove", &(id.as_str(),))
+            .await
+            .map_err(not_running)?,
+        PluginCmd::Enable { id } => p
+            .call::<_, _, ()>("PluginSetEnabled", &(id.as_str(), true))
+            .await
+            .map_err(not_running)?,
+        PluginCmd::Disable { id } => p
+            .call::<_, _, ()>("PluginSetEnabled", &(id.as_str(), false))
+            .await
+            .map_err(not_running)?,
+        PluginCmd::Restart { id } => p
+            .call::<_, _, ()>("PluginRestart", &(id.as_str(),))
+            .await
+            .map_err(not_running)?,
+        PluginCmd::DevMode { state } => {
+            let text: String = p.call("GetSettings", &()).await.map_err(not_running)?;
+            let mut s: ulanzi_core::model::Settings = toml::from_str(&text).map_err(|e| e.to_string())?;
+            s.developer_mode = state == OnOff::On;
+            let text = toml::to_string_pretty(&s).map_err(|e| e.to_string())?;
+            p.call::<_, _, ()>("ApplySettings", &(text,))
+                .await
+                .map_err(not_running)?;
+            println!(
+                "Developer mode is {}",
+                if s.developer_mode { "on" } else { "off" }
+            );
+        }
     }
     Ok(())
 }
@@ -487,6 +616,62 @@ mod tests {
                 settings: false
             }
         );
+    }
+
+    #[test]
+    fn plugin_commands() {
+        let plugin = |args: &[&str]| match parse(args) {
+            Ok(Cmd::Plugin { cmd }) => Ok(cmd),
+            Ok(other) => panic!("{other:?}"),
+            Err(e) => Err(e),
+        };
+        assert_eq!(plugin(&["plugin", "list"]).expect("ok"), PluginCmd::List);
+        assert_eq!(
+            plugin(&["plugin", "install", "./hello"]).expect("ok"),
+            PluginCmd::Install {
+                dir: "./hello".into()
+            }
+        );
+        assert_eq!(
+            plugin(&["plugin", "disable", "hello"]).expect("ok"),
+            PluginCmd::Disable { id: "hello".into() }
+        );
+        assert_eq!(
+            plugin(&["plugin", "dev-mode", "on"]).expect("ok"),
+            PluginCmd::DevMode { state: OnOff::On }
+        );
+        assert!(plugin(&["plugin", "dev-mode", "maybe"]).is_err());
+        assert!(plugin(&["plugin", "remove"]).is_err());
+    }
+
+    #[test]
+    fn plugin_list_columns() {
+        let rows = vec![
+            (
+                "hello".to_string(),
+                "Hello".to_string(),
+                "0.1.0".to_string(),
+                "running".to_string(),
+                String::new(),
+            ),
+            (
+                "broken_one".to_string(),
+                "broken_one".to_string(),
+                String::new(),
+                "incompatible".to_string(),
+                "plugin.wasm is missing".to_string(),
+            ),
+        ];
+        let text = plugin_table(&rows);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert!(lines[0].starts_with("ID "), "{text}");
+        // Columns line up: every row's status starts where the header's does.
+        let col = lines[0].find("STATUS").expect("header");
+        assert_eq!(&lines[1][col..col + 7], "running");
+        assert_eq!(&lines[2][col..col + 12], "incompatible");
+        assert!(lines[2].ends_with("plugin.wasm is missing"), "{text}");
+        assert_eq!(plugin_table(&[]), "no plugins installed\n");
     }
 
     #[test]

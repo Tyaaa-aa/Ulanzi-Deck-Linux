@@ -26,6 +26,9 @@ pub struct DynamicState {
     pub obs: Option<ulanzi_core::obs::ObsLive>,
     /// The wide-screen picture (widget mode, or the volume overlay). Set by the deck, not the sampler.
     pub screen_png: Option<Vec<u8>>,
+    /// Values plugins set, by `<plugin>.<key>` (label variables like `{hello.count}`). Set by the
+    /// deck, not the sampler.
+    pub plugin_vars: BTreeMap<String, String>,
 }
 
 /// Rendered key images by look hash, plus which warnings were already logged.
@@ -71,15 +74,46 @@ pub const DECK_VARS: [&str; 5] = [
 ];
 
 impl DynamicState {
-    /// Take over what the deck owns from `old`: the screen picture, OBS state and the deck's variables.
+    /// Take over what the deck owns from `old`: the screen picture, OBS state, plugin values and the
+    /// deck's variables.
     pub fn keep_deck_fields(&mut self, old: &DynamicState) {
         self.screen_png = old.screen_png.clone();
         self.obs = old.obs.clone();
+        self.plugin_vars = old.plugin_vars.clone();
         for k in DECK_VARS {
             if let Some(v) = old.vars.get(k) {
                 self.vars.insert(k.to_string(), v.clone());
             }
         }
+    }
+
+    /// A value a plugin set (`{<plugin>.<key>}` in labels). True if it changed.
+    pub fn set_plugin_var(&mut self, plugin: &str, key: &str, value: String) -> bool {
+        let name = format!("{plugin}.{key}");
+        if self.plugin_vars.get(&name) == Some(&value) {
+            return false;
+        }
+        self.plugin_vars.insert(name, value);
+        true
+    }
+
+    /// Forget every value `plugin` set. True if there were any.
+    pub fn clear_plugin(&mut self, plugin: &str) -> bool {
+        let prefix = format!("{plugin}.");
+        let before = self.plugin_vars.len();
+        self.plugin_vars.retain(|k, _| !k.starts_with(&prefix));
+        self.plugin_vars.len() != before
+    }
+
+    /// Every label variable: the sampler's and the deck's, then the plugins'.
+    fn label_vars(&self) -> std::borrow::Cow<'_, BTreeMap<String, String>> {
+        if self.plugin_vars.is_empty() {
+            return std::borrow::Cow::Borrowed(&self.vars);
+        }
+        let mut all = self.plugin_vars.clone();
+        // Plugin names always contain a dot, so they never hide a built-in variable.
+        all.extend(self.vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+        std::borrow::Cow::Owned(all)
     }
 
     /// Variables for OBS (`{obs_scene}` and the timers).
@@ -222,6 +256,7 @@ pub fn build_page(
     let mut images = Vec::new();
     let mut h = DefaultHasher::new();
     let keys = profile.pages.get(page).map(|p| &p.keys);
+    let vars = dynamic.label_vars();
 
     for i in 0..SCREEN_INDEX {
         let mut entry = ButtonEntry::default();
@@ -230,7 +265,7 @@ pub fn build_page(
             // A key with its own label position gets the label drawn into its picture.
             let own_label = look.label.position.is_some();
             if own_label {
-                look.label.text = resolve_vars(&look.label.text, &dynamic.vars);
+                look.label.text = resolve_vars(&look.label.text, &vars);
             }
             let lh = look_hash(&look, ctx.profile_dir);
             let png = cache.images.entry(lh).or_insert_with(|| {
@@ -252,7 +287,7 @@ pub fn build_page(
                 });
             }
             if !own_label && look.label.visible && !look.label.text.is_empty() {
-                entry.text = Some(resolve_vars(&look.label.text, &dynamic.vars));
+                entry.text = Some(resolve_vars(&look.label.text, &vars));
             }
             lh.hash(&mut h);
         }
@@ -381,6 +416,24 @@ mod tests {
         d.vars.insert("cpu".into(), "42".into());
         let b = build_page(&profile(), 0, &ctx(), &d, &mut RenderCache::default());
         assert_eq!(b.entries[&6].text.as_deref(), Some("CPU 42%"));
+    }
+
+    #[test]
+    fn plugin_vars_survive_refresh() {
+        let mut p = profile();
+        p.pages[0].keys.get_mut(&6).expect("key").look.label.text = "Count {hello.count}".into();
+        let mut deck = DynamicState::default();
+        deck.set_plugin_var("hello", "count", "3".into());
+        // What the deck does with each sampler refresh.
+        let mut fresh = DynamicState::default();
+        fresh.vars.insert("cpu".into(), "5".into());
+        fresh.keep_deck_fields(&deck);
+        let b = build_page(&p, 0, &ctx(), &fresh, &mut RenderCache::default());
+        assert_eq!(b.entries[&6].text.as_deref(), Some("Count 3"));
+        assert!(fresh.clear_plugin("hello"));
+        assert!(!fresh.clear_plugin("hello"));
+        let b = build_page(&p, 0, &ctx(), &fresh, &mut RenderCache::default());
+        assert_eq!(b.entries[&6].text.as_deref(), Some("Count {hello.count}"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Running actions that leave the deck (commands, apps, keys, media, audio).
+//! Running actions that leave the deck (commands, apps, keys, media, audio, plugins).
 
 pub mod audio;
 pub mod command;
@@ -9,10 +9,11 @@ pub mod media;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ulanzi_core::model::{Action, Step};
+use ulanzi_core::model::{Action, Step, table_to_json};
 
 use self::keys::VirtualKeyboard;
 use self::media::MediaClient;
+use crate::plugins::PluginError;
 
 /// Why an action did not run. `Display` is the sentence shown to the user.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -47,6 +48,7 @@ pub struct Executor {
     media: Option<MediaClient>,
     keyboard: Arc<Mutex<Option<VirtualKeyboard>>>,
     obs: Option<crate::obs::ObsHandle>,
+    plugins: Option<crate::plugins::PluginHost>,
 }
 
 impl Executor {
@@ -56,12 +58,19 @@ impl Executor {
             media: session.map(MediaClient::new),
             keyboard: Arc::default(),
             obs: None,
+            plugins: None,
         }
     }
 
     /// Run OBS actions through this connection.
     pub fn with_obs(mut self, obs: crate::obs::ObsHandle) -> Executor {
         self.obs = Some(obs);
+        self
+    }
+
+    /// Run plugin actions through this host.
+    pub fn with_plugins(mut self, host: crate::plugins::PluginHost) -> Executor {
+        self.plugins = Some(host);
         self
     }
 
@@ -160,6 +169,14 @@ fn copy_to_clipboard(text: &str) -> Result<(), ActionError> {
     Ok(())
 }
 
+/// A plugin that is missing or turned off is "unavailable"; anything else went wrong.
+fn plugin_error(e: PluginError) -> ActionError {
+    match e {
+        PluginError::NotInstalled(_) | PluginError::Off(_) => ActionError::Unavailable(e.to_string()),
+        _ => ActionError::Failed(e.to_string()),
+    }
+}
+
 #[async_trait::async_trait]
 impl ActionRunner for Executor {
     async fn run(&self, action: &Action) -> Result<(), ActionError> {
@@ -215,7 +232,17 @@ impl ActionRunner for Executor {
                 limit_100,
             } => audio::volume(target, op, *step, *limit_100).await,
             Action::Multi { steps } => run_multi(self, steps).await,
-            Action::Plugin { .. } => Err(ActionError::NotYet("plugin host")),
+            Action::Plugin {
+                plugin,
+                action,
+                params,
+            } => match &self.plugins {
+                Some(host) => host
+                    .action(plugin, action, table_to_json(params))
+                    .await
+                    .map_err(plugin_error),
+                None => Err(plugin_error(PluginError::NotInstalled(plugin.clone()))),
+            },
             Action::Obs(o) => match &self.obs {
                 Some(obs) => obs.action(o).await.map_err(ActionError::Failed),
                 None => Err(ActionError::Unavailable("OBS support is off".into())),

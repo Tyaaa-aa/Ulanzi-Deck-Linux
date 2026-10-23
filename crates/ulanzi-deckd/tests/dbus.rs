@@ -11,6 +11,7 @@ use ulanzi_core::store::Store;
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, INTERFACE, OBJECT_PATH, forward_signals};
 use ulanzi_deckd::deck::{DeckMsg, spawn_deck};
+use ulanzi_deckd::plugins::{FileSecrets, PluginHost};
 use ulanzi_deckd::transport::{MockHandle, MockTransport};
 use zbus::Connection;
 
@@ -50,6 +51,11 @@ struct Rig {
 }
 
 async fn rig() -> Option<Rig> {
+    rig_with(|_| {}).await
+}
+
+/// A rig whose plugins folder `setup` fills first.
+async fn rig_with(setup: impl FnOnce(&std::path::Path)) -> Option<Rig> {
     let Some(bus) = bus() else {
         eprintln!("dbus-daemon not found; skipping");
         return None;
@@ -63,6 +69,17 @@ async fn rig() -> Option<Rig> {
         ..Settings::default()
     };
     let (tx, events) = spawn_deck(store.clone(), settings, Arc::new(Executor::new(None)));
+    std::fs::create_dir_all(dir.path().join("plugins")).expect("plugins dir");
+    setup(&dir.path().join("plugins"));
+    let plugins = PluginHost::start(
+        dir.path().join("plugins"),
+        dir.path().join("k/plugins"),
+        Arc::new(FileSecrets::new(dir.path().join("c/plugin-secrets.toml"))),
+        &Settings::default(),
+        &Default::default(),
+        tx.clone(),
+    )
+    .await;
     let (t, mock) = MockTransport::new();
     tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
         .await
@@ -76,7 +93,7 @@ async fn rig() -> Option<Rig> {
         .expect("addr")
         .name(BUS_NAME)
         .expect("name")
-        .serve_at(OBJECT_PATH, DeckService::new(tx, store))
+        .serve_at(OBJECT_PATH, DeckService::new(tx, store).with_plugins(plugins))
         .expect("serve")
         .build()
         .await
@@ -375,4 +392,90 @@ async fn delete_profile_takes_snapshot() {
     p.call::<_, _, ()>("DeleteProfile", &(id,)).await.expect("delete");
     let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("list");
     assert!(snaps.iter().any(|s| s.2 == "before-delete"), "{snaps:?}");
+}
+
+/// The message of a D-Bus error reply (what the user is shown).
+fn error_message(e: zbus::Error) -> String {
+    match e {
+        zbus::Error::MethodError(_, Some(msg), _) => msg,
+        other => panic!("not an error reply: {other}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_list_empty() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let list: Vec<(String, String, String, String, String)> = p.call("PluginList", &()).await.expect("list");
+    assert_eq!(list, vec![]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_install_dir_needs_developer_mode() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let folder = r._dir.path().join("hello");
+    std::fs::create_dir_all(&folder).expect("folder");
+    let e = p
+        .call::<_, _, String>("PluginInstallDir", &(folder.to_string_lossy().as_ref(),))
+        .await
+        .expect_err("developer mode is off");
+    assert_eq!(
+        error_message(e),
+        "Turn on Developer mode to install plugins from a folder"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_errors_use_the_user_facing_text() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    for method in ["PluginRemove", "PluginRestart"] {
+        let e = p
+            .call::<_, _, ()>(method, &("hello",))
+            .await
+            .expect_err("not installed");
+        assert_eq!(error_message(e), "the hello plugin is not installed", "{method}");
+    }
+    let e = p
+        .call::<_, _, ()>("PluginSetEnabled", &("hello", false))
+        .await
+        .expect_err("not installed");
+    assert_eq!(error_message(e), "the hello plugin is not installed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_set_enabled_writes_settings() {
+    // A folder without plugin.wasm: listed (as incompatible), and its switch can still be set.
+    let Some(r) = rig_with(|plugins| {
+        let folder = plugins.join("hello");
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(
+            folder.join("plugin.toml"),
+            include_str!("../../../examples/plugins/hello/plugin.toml"),
+        )
+        .expect("manifest");
+    })
+    .await
+    else {
+        return;
+    };
+    let p = proxy(&r.client).await;
+    let list: Vec<(String, String, String, String, String)> = p.call("PluginList", &()).await.expect("list");
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0].0, "hello");
+    assert_eq!(list[0].3, "incompatible");
+    assert!(!list[0].4.is_empty(), "a reason is given");
+    p.call::<_, _, ()>("PluginSetEnabled", &("hello", false))
+        .await
+        .expect("set");
+    let s: Settings =
+        toml::from_str(&p.call::<_, _, String>("GetSettings", &()).await.expect("get")).expect("toml");
+    assert!(!s.plugins["hello"].enabled);
+    p.call::<_, _, ()>("PluginSetEnabled", &("hello", true))
+        .await
+        .expect("set");
+    let saved = std::fs::read_to_string(r._dir.path().join("c/settings.toml")).expect("read");
+    let s: Settings = toml::from_str(&saved).expect("toml");
+    assert!(s.plugins["hello"].enabled);
 }

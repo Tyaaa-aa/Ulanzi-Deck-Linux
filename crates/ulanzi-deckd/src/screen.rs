@@ -285,6 +285,7 @@ impl Sampler {
             media: media_data,
             obs: None,
             screen_png: None,
+            plugin_vars: Default::default(),
         }
     }
 }

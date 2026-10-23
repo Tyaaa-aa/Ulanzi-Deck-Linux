@@ -267,3 +267,53 @@ fn manifest_rejects_unusable_network_entries() {
     );
     assert!(Manifest::parse(&ok).is_ok());
 }
+
+#[test]
+fn plugins_used_finds_every_place() {
+    use ulanzi_core::model::{Dial, Step};
+    let plugin = |id: &str| Action::Plugin {
+        plugin: id.into(),
+        action: "go".into(),
+        params: toml::Table::new(),
+    };
+    let mut p = Profile::new_default("Default", Model::D200X);
+    assert!(p.plugins_used().is_empty());
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            hold: Some(plugin("on_hold")),
+            ..Key::default()
+        },
+    );
+    p.pages[0].keys.insert(
+        1,
+        Key {
+            tap: Some(Action::Multi {
+                steps: vec![Step {
+                    delay_ms: 0,
+                    action: Action::Multi {
+                        steps: vec![Step {
+                            delay_ms: 10,
+                            action: plugin("nested"),
+                        }],
+                    },
+                }],
+            }),
+            ..Key::default()
+        },
+    );
+    p.pages[0].dials[2] = Dial {
+        left: Some(plugin("dial_left")),
+        press: Some(plugin("dial_press")),
+        ..Dial::default()
+    };
+    p.small_buttons.right = Some(plugin("small"));
+    // Profile-wide dials from before dials were per page.
+    p.dials[0].hold = Some(plugin("legacy"));
+    let want: std::collections::BTreeSet<String> =
+        ["dial_left", "dial_press", "legacy", "nested", "on_hold", "small"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+    assert_eq!(p.plugins_used(), want);
+}

@@ -359,3 +359,33 @@ fn levels_for_devices_and_apps() {
     );
     assert_eq!(app_level(inputs, "spotify"), None);
 }
+
+#[tokio::test]
+async fn plugin_action_not_installed() {
+    use ulanzi_deckd::actions::Executor;
+    use ulanzi_deckd::plugins::{FileSecrets, PluginHost};
+    let dir = tempfile::tempdir().expect("dir");
+    let (tx, _deck) = tokio::sync::mpsc::channel(16);
+    let host = PluginHost::start(
+        dir.path().join("plugins"),
+        dir.path().join("cache"),
+        Arc::new(FileSecrets::new(dir.path().join("secrets.toml"))),
+        &ulanzi_core::model::Settings::default(),
+        &Default::default(),
+        tx,
+    )
+    .await;
+    let ex = Executor::new(None).with_plugins(host.clone());
+    let press = Action::Plugin {
+        plugin: "hello".into(),
+        action: "count".into(),
+        params: toml::Table::new(),
+    };
+    assert_eq!(
+        ex.run(&press).await,
+        Err(ActionError::Unavailable(
+            "the hello plugin is not installed".into()
+        ))
+    );
+    host.shutdown().await;
+}

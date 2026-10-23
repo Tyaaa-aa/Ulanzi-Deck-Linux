@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -289,6 +289,31 @@ impl Profile {
         if let ScreenConfig::Custom { tap, hold, .. } = &self.screen {
             add(&mut out, tap);
             add(&mut out, hold);
+        }
+        out
+    }
+
+    /// The ids of the plugins this profile's actions use: everywhere [`Profile::actions`] looks,
+    /// plus old profile-wide dials not yet moved onto the pages.
+    pub fn plugins_used(&self) -> BTreeSet<String> {
+        fn add(out: &mut BTreeSet<String>, a: &Action) {
+            match a {
+                Action::Plugin { plugin, .. } => {
+                    out.insert(plugin.clone());
+                }
+                Action::Multi { steps } => steps.iter().for_each(|s| add(out, &s.action)),
+                _ => {}
+            }
+        }
+        let mut out = BTreeSet::new();
+        // `actions()` already lists multi-action steps; `add` also walks them for the old dials.
+        for a in self.actions() {
+            add(&mut out, a);
+        }
+        for d in &self.dials {
+            for a in [&d.press, &d.left, &d.right, &d.hold].into_iter().flatten() {
+                add(&mut out, a);
+            }
         }
         out
     }
