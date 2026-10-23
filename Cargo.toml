@@ -48,6 +48,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 proptest = "1"
 wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "component-model", "cache", "std", "parallel-compilation"] }
 wasmtime-wasi = "50"
+wasmtime-wasi-io = "50"
 wit-bindgen = "0.63"
 oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
 tempfile = "3"

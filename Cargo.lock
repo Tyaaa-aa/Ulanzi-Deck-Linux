@@ -3494,6 +3494,7 @@ dependencies = [
  "uuid",
  "wasmtime",
  "wasmtime-wasi",
+ "wasmtime-wasi-io",
  "x11rb",
  "zbus",
  "zip",
