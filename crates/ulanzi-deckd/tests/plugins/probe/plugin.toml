@@ -1,0 +1,52 @@
+id = "probe"
+name = "Probe"
+version = "1.0.0"
+contract = "1.0"
+description = "Host test plugin: exercises every host function and misbehaves on request."
+
+[permissions]
+network = ["127.0.0.1"]
+
+[[actions]]
+id = "state"
+name = "Set state"
+
+[[actions]]
+id = "timer"
+name = "Timer"
+
+[[actions]]
+id = "secret_set"
+name = "Set secret"
+
+[[actions]]
+id = "secret_get"
+name = "Get secret"
+
+[[actions]]
+id = "panic"
+name = "Panic"
+
+[[actions]]
+id = "spin"
+name = "Spin"
+
+[[actions]]
+id = "alloc"
+name = "Allocate"
+
+[[actions]]
+id = "flood"
+name = "Flood"
+
+[[actions]]
+id = "ws"
+name = "WebSocket"
+
+[[actions]]
+id = "fetch"
+name = "Fetch"
+
+[[actions]]
+id = "settings"
+name = "Settings"

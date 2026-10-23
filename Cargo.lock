@@ -3516,6 +3516,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulanzi-plugin-probe"
+version = "1.0.0"
+dependencies = [
+ "ulanzi-plugin",
+]
+
+[[package]]
 name = "ulanzi-proto"
 version = "2.0.0"
 dependencies = [

@@ -1,8 +1,10 @@
 //! WebAssembly plugin host.
 
 mod engine;
+mod instance;
 
-pub use engine::{HostState, LoadedPlugin, PluginEngine};
+pub use engine::{LoadedPlugin, PluginEngine};
+pub use instance::{Event, Exit, HostState, InstanceHandle, Output, spawn_instance};
 pub use ulanzi_core::plugin::ManifestError;
 
 // The generated bindings cover the whole contract; not every item is used yet.

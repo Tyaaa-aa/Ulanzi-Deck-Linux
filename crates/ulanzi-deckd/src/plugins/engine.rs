@@ -7,70 +7,16 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use ulanzi_core::plugin::Manifest;
 use wasmtime::component::{Component, HasData, Linker, ResourceTable};
-use wasmtime::{Cache, CacheConfig, Config, Engine, StoreLimits};
+use wasmtime::{Cache, CacheConfig, Config, Engine};
+use wasmtime_wasi::WasiView;
 use wasmtime_wasi::p2::bindings::{cli, clocks, random};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use super::PluginError;
-use super::ulanzi::plugin::{core, net, types};
+use super::instance::HostState;
+use super::ulanzi::plugin::{core, net};
 
 /// How often the epoch advances; guest call deadlines are counted in these ticks.
 const EPOCH_TICK: Duration = Duration::from_millis(10);
-
-/// The `Store` data type every plugin instance runs with. Task 5 (instance.rs) extends this
-/// struct (event queue, timers, sockets, secrets, state sink, plugin id, ...) and replaces the
-/// stub `core`/`net` bodies below; `PluginEngine` only needs `HostState: WasiView + core::Host +
-/// net::Host + Send`.
-#[allow(dead_code)] // fields are read once instances exist (Task 5)
-pub struct HostState {
-    pub(crate) wasi: WasiCtx,
-    pub(crate) table: ResourceTable,
-    pub(crate) limits: StoreLimits,
-}
-
-impl WasiView for HostState {
-    fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.wasi,
-            table: &mut self.table,
-        }
-    }
-}
-
-// Linking-only stubs: Task 5 implements the contract for real. The generated traits cannot
-// trap, so until then every call is a harmless no-op returning a default (nothing is wired).
-impl types::Host for HostState {}
-
-impl core::Host for HostState {
-    fn set_timer(&mut self, _ms: u32, _repeat: bool) -> u32 {
-        0
-    }
-    fn cancel_timer(&mut self, _id: u32) {}
-    fn set_state(&mut self, _key: String, _value: String) {}
-    fn secret_get(&mut self, _key: String) -> Option<String> {
-        None
-    }
-    fn secret_set(&mut self, _key: String, _value: String) {}
-    fn secret_delete(&mut self, _key: String) {}
-    fn set_status(&mut self, _status: types::Status, _message: String) {}
-    fn log(&mut self, _level: types::LogLevel, _message: String) {}
-}
-
-impl net::Host for HostState {
-    fn ws_open(&mut self, _url: String) -> Result<u32, String> {
-        Err("not available yet".into())
-    }
-    fn tcp_open(&mut self, _host: String, _port: u16, _tls: bool) -> Result<u32, String> {
-        Err("not available yet".into())
-    }
-    fn send(&mut self, _socket: u32, _data: types::Payload) -> Result<(), String> {
-        Err("not available yet".into())
-    }
-    fn close(&mut self, _socket: u32) {}
-    fn fetch(&mut self, _request: types::HttpRequest) -> Result<u32, String> {
-        Err("not available yet".into())
-    }
-}
 
 struct HasIo;
 impl HasData for HasIo {
@@ -204,16 +150,15 @@ impl PluginEngine {
         })
     }
 
-    #[allow(dead_code)] // used by instance creation (Task 5)
     pub(crate) fn engine(&self) -> &Engine {
         &self.engine
     }
 }
 
-/// A compiled plugin that links against the host; Task 5 instantiates it.
-#[allow(dead_code)] // `component` and `pre` are used by instance creation (Task 5)
+/// A compiled plugin that links against the host; `spawn_instance` instantiates it.
 pub struct LoadedPlugin {
     pub manifest: Manifest,
+    #[allow(dead_code)] // kept with its pre-instance; nothing reads it directly yet
     pub(crate) component: Component,
     pub(crate) pre: wasmtime::component::InstancePre<HostState>,
     /// Keeps the epoch ticker alive for as long as the plugin is.
