@@ -10,6 +10,17 @@ fn hello_manifest() -> Manifest {
     Manifest::parse(text).expect("hello manifest")
 }
 
+fn has_file(dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|e| match e.file_type() {
+        Ok(t) if t.is_dir() => has_file(&e.path()),
+        Ok(t) => t.is_file(),
+        Err(_) => false,
+    })
+}
+
 #[tokio::test]
 async fn loads_hello() {
     let cache = tempfile::tempdir().expect("cache");
@@ -24,7 +35,7 @@ async fn loads_hello() {
     assert_eq!(loaded.manifest.id, "hello");
     // The cache worker writes in the background; give it a moment.
     for _ in 0..100 {
-        if std::fs::read_dir(cache.path()).map(|d| d.count()).unwrap_or(0) > 0 {
+        if has_file(cache.path()) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

@@ -127,7 +127,7 @@ impl Drop for Ticker {
 pub struct PluginEngine {
     engine: Engine,
     linker: Arc<Linker<HostState>>,
-    _ticker: Arc<Ticker>,
+    ticker: Arc<Ticker>,
 }
 
 impl PluginEngine {
@@ -155,6 +155,8 @@ impl PluginEngine {
         let weak = engine.weak();
         let ticker = handle.spawn(async move {
             let mut tick = tokio::time::interval(EPOCH_TICK);
+            // After a stall, do not fire a burst of catch-up ticks: they would trap healthy calls.
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
                 match weak.upgrade() {
@@ -166,7 +168,7 @@ impl PluginEngine {
         Ok(PluginEngine {
             engine,
             linker: Arc::new(linker),
-            _ticker: Arc::new(Ticker(ticker)),
+            ticker: Arc::new(Ticker(ticker)),
         })
     }
 
@@ -198,6 +200,7 @@ impl PluginEngine {
             manifest: manifest.clone(),
             component,
             pre,
+            _ticker: Arc::clone(&self.ticker),
         })
     }
 
@@ -213,4 +216,6 @@ pub struct LoadedPlugin {
     pub manifest: Manifest,
     pub(crate) component: Component,
     pub(crate) pre: wasmtime::component::InstancePre<HostState>,
+    /// Keeps the epoch ticker alive for as long as the plugin is.
+    _ticker: Arc<Ticker>,
 }
