@@ -1,5 +1,13 @@
 # Ulanzi Deck Linux
 
+> [!WARNING]
+> **This Python version is deprecated and no longer maintained.**
+> Ulanzi Deck has been rewritten in Rust, with a new GUI and many more features. The Rust version is on the
+> [`main` branch](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux) and in the
+> [latest release](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases/latest).
+> Switch to it to get future updates. This version will probably keep working, but it will not get fixes
+> and is no longer tested.
+
 A Linux application for managing the Ulanzi D200/D200X StreamDeck device. Configure button images, labels, and actions to control OBS Studio, launch applications, execute commands, manage system audio volume, and simulate keyboard shortcuts.
 
 The GUI and its background daemon can be run completely standalone without installing python packages system-wide.
