@@ -1,3 +1,12 @@
 /target
 /dist
 /.superpowers
+
+# Local working notes and design sources (not published)
+/docs/superpowers/
+/docs/m*-checklist.md
+/docs/design/screens/
+/docs/design/main-dark.png
+/docs/design/main-light-library.png
+/docs/design/onboarding-dark.png
+/docs/design/import-light.png
