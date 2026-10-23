@@ -29,8 +29,12 @@ tracing-subscriber.workspace = true
 tracing-appender = "0.2"
 ksni = "0.3.7"
 x11rb = "0.14.0"
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }
+sha2 = "0.11.1"
+base64 = "0.23.1"
 
 [dev-dependencies]
 tempfile.workspace = true
 zip.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }
