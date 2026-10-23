@@ -2,7 +2,7 @@
 //! and feeds it events from a bounded queue, one guest call at a time. Host functions never block:
 //! state and status go out over an unbounded channel, timers are tokio tasks on the daemon's runtime.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -38,6 +38,8 @@ const STOP_CHECK: u64 = 5;
 /// An idle instance re-checks its stop flag this often, in case the wake-up event was lost.
 const STOP_POLL: Duration = Duration::from_millis(200);
 const MAX_SECRETS: usize = 256;
+/// Most distinct `set-state` keys per instance; new keys beyond it are ignored.
+const MAX_STATE_KEYS: usize = 256;
 /// Longest key for `set-state` and secrets, in bytes.
 const MAX_KEY: usize = 256;
 /// Longest value for `set-state` and secrets, in bytes.
@@ -225,6 +227,8 @@ pub struct HostState {
     timers: HashMap<u32, TimerEntry>,
     last_timer: u32,
     timers_full_warned: bool,
+    /// The `set-state` keys used so far (at most `MAX_STATE_KEYS`).
+    state_keys: HashSet<String>,
     /// Limits already warned about (one warning per instance and kind).
     warned: BTreeSet<&'static str>,
     /// Set by `InstanceHandle::stop`; checked between events and during guest calls.
@@ -352,6 +356,14 @@ impl core::Host for HostState {
             self.warn_once("state-size", &msg);
             return;
         }
+        if !self.state_keys.contains(&key) {
+            if self.state_keys.len() >= MAX_STATE_KEYS {
+                let msg = format!("more than {MAX_STATE_KEYS} state keys; new keys are ignored");
+                self.warn_once("state-count", &msg);
+                return;
+            }
+            self.state_keys.insert(key.clone());
+        }
         self.emit(Output::State { key, value });
     }
 
@@ -452,6 +464,7 @@ pub fn spawn_instance(
         timers: HashMap::new(),
         last_timer: 0,
         timers_full_warned: false,
+        state_keys: HashSet::new(),
         warned: BTreeSet::new(),
         stop: Arc::clone(&stop),
         ticks_left: CALL_DEADLINE,

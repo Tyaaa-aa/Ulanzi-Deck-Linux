@@ -299,6 +299,24 @@ async fn flood_is_bounded() {
 }
 
 #[tokio::test]
+async fn state_keys_are_capped() {
+    let mut p = probe();
+    assert_eq!(p.act("keys", json!({"n": 1000})).await, Ok(()));
+    let mut keys = BTreeSet::new();
+    let mut updated = false;
+    // Everything the action produced, until a short quiet spell.
+    while let Ok(Some(o)) = tokio::time::timeout(Duration::from_millis(200), p.out.recv()).await {
+        if let Output::State { key, value } = o {
+            updated |= key == "key0" && value == "updated";
+            keys.insert(key);
+        }
+    }
+    assert_eq!(keys.len(), 256, "distinct keys are capped");
+    assert!(keys.contains("key255") && !keys.contains("key256"));
+    assert!(updated, "a known key still updates at the limit");
+}
+
+#[tokio::test]
 async fn stop_works_with_a_full_queue() {
     let mut p = probe();
     let busy = p.queue("spin", json!({}));

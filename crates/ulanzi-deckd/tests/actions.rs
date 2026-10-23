@@ -1,3 +1,5 @@
+mod common;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -386,6 +388,55 @@ async fn plugin_action_not_installed() {
         Err(ActionError::Unavailable(
             "the hello plugin is not installed".into()
         ))
+    );
+    host.shutdown().await;
+}
+
+#[tokio::test]
+async fn plugin_action_turned_off() {
+    use ulanzi_core::model::{PluginEntry, Settings};
+    use ulanzi_deckd::actions::Executor;
+    use ulanzi_deckd::plugins::{FileSecrets, PluginHost};
+    let dir = tempfile::tempdir().expect("dir");
+    let hello = dir.path().join("plugins/hello");
+    std::fs::create_dir_all(&hello).expect("folder");
+    std::fs::write(
+        hello.join("plugin.toml"),
+        include_str!("../../../examples/plugins/hello/plugin.toml"),
+    )
+    .expect("manifest");
+    std::fs::copy(
+        common::plugins::wasm("ulanzi-plugin-hello"),
+        hello.join("plugin.wasm"),
+    )
+    .expect("wasm");
+    let mut settings = Settings::default();
+    settings.plugins.insert(
+        "hello".into(),
+        PluginEntry {
+            enabled: false,
+            ..PluginEntry::default()
+        },
+    );
+    let (tx, _deck) = tokio::sync::mpsc::channel(16);
+    let host = PluginHost::start(
+        dir.path().join("plugins"),
+        dir.path().join("cache"),
+        Arc::new(FileSecrets::new(dir.path().join("secrets.toml"))),
+        &settings,
+        &Default::default(),
+        tx,
+    )
+    .await;
+    let ex = Executor::new(None).with_plugins(host.clone());
+    let press = Action::Plugin {
+        plugin: "hello".into(),
+        action: "count".into(),
+        params: toml::Table::new(),
+    };
+    assert_eq!(
+        ex.run(&press).await,
+        Err(ActionError::Unavailable("the Hello plugin is turned off".into()))
     );
     host.shutdown().await;
 }

@@ -120,6 +120,15 @@ async fn main() -> ExitCode {
         tracing::error!("settings unreadable, using defaults: {e}");
         Default::default()
     });
+    // Before the plugins start: nothing after them may return without shutting them down.
+    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::hangup()),
+    ) else {
+        tracing::error!("cannot install signal handlers");
+        return ExitCode::FAILURE;
+    };
     let plugins = start_plugins(&store, &settings, tx.clone()).await;
     match conn
         .object_server()
@@ -184,14 +193,6 @@ async fn main() -> ExitCode {
         Sampler::new(media, store.cache_dir().to_path_buf()),
     ));
 
-    let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
-        signal(SignalKind::terminate()),
-        signal(SignalKind::interrupt()),
-        signal(SignalKind::hangup()),
-    ) else {
-        tracing::error!("cannot install signal handlers");
-        return ExitCode::FAILURE;
-    };
     loop {
         tokio::select! {
             _ = term.recv() => break,

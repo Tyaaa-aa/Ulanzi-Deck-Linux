@@ -58,6 +58,14 @@ impl Plugin for Probe {
                 let big = vec![1u8; 200 * 1024 * 1024];
                 black_box(&big);
             }
+            "keys" => {
+                let n = params["n"].as_u64().ok_or("keys needs n")?;
+                for i in 0..n {
+                    cx.set_state(&format!("key{i}"), "x");
+                }
+                // An existing key still updates once the limit is reached.
+                cx.set_state("key0", "updated");
+            }
             "flood" => {
                 for i in 0..10_000 {
                     cx.set_state("flood", i.to_string());
