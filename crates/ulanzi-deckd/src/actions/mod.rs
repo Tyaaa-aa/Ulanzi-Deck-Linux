@@ -241,12 +241,17 @@ impl ActionRunner for Executor {
                 plugin,
                 action,
                 params,
-            } => match self.plugins.as_ref().map(|slot| slot.get()) {
-                Some(Some(host)) => host
-                    .action(plugin, action, table_to_json(params))
-                    .await
-                    .map_err(plugin_error),
-                Some(None) => Err(ActionError::Unavailable("plugins are still starting".into())),
+            } => match &self.plugins {
+                Some(slot) => match slot.get() {
+                    Some(host) => host
+                        .action(plugin, action, table_to_json(params))
+                        .await
+                        .map_err(plugin_error),
+                    None if slot.is_starting() => {
+                        Err(ActionError::Unavailable("plugins are still starting".into()))
+                    }
+                    None => Err(ActionError::Unavailable("plugins are not running".into())),
+                },
                 None => Err(plugin_error(PluginError::NotInstalled(plugin.clone()))),
             },
             Action::Obs(o) => match &self.obs {

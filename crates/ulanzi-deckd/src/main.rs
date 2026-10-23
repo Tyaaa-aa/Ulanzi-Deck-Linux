@@ -221,17 +221,26 @@ async fn plugins_ready(conn: zbus::Connection, plugins: PluginSlot, store: Store
     let Some(host) = plugins.wait().await else {
         return;
     };
-    match conn
+    // Holding the service while the settings are read and applied: an ApplySettings call waits,
+    // so its newer settings cannot be overwritten by the ones read here.
+    let iface = conn
         .object_server()
         .interface::<_, DeckService>(OBJECT_PATH)
-        .await
-    {
-        Ok(iface) => iface.get_mut().await.set_plugins(host.clone()),
-        Err(e) => tracing::error!("plugins are not on D-Bus: {e}"),
+        .await;
+    let mut service = match &iface {
+        Ok(iface) => Some(iface.get_mut().await),
+        Err(e) => {
+            tracing::error!("plugins are not on D-Bus: {e}");
+            None
+        }
+    };
+    if let Some(service) = service.as_mut() {
+        service.set_plugins(host.clone());
     }
     if let Ok(s) = store.load_settings() {
         host.apply_settings(&s).await;
     }
+    drop(service);
     ulanzi_deckd::dbus::forward_plugins(conn, host).await;
 }
 

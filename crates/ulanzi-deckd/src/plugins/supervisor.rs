@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
@@ -196,8 +196,22 @@ fn restore_interrupted(dir: &Path, entries: &[std::fs::DirEntry]) {
     }
 }
 
-/// Every plugin folder in `dir`, loaded or with the reason it cannot be. Blocking.
-fn scan(dir: &Path, engine: &Result<PluginEngine, String>) -> Vec<(String, Result<LoadedPlugin, Bad>)> {
+/// Sets its flag when dropped.
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Every plugin folder in `dir`, loaded or with the reason it cannot be. Blocking. Stops before
+/// the next plugin once `cancel` is set.
+fn scan(
+    dir: &Path,
+    engine: &Result<PluginEngine, String>,
+    cancel: &AtomicBool,
+) -> Vec<(String, Result<LoadedPlugin, Bad>)> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -214,6 +228,9 @@ fn scan(dir: &Path, engine: &Result<PluginEngine, String>) -> Vec<(String, Resul
         .unwrap_or(entries);
     let mut found = Vec::new();
     for entry in entries {
+        if cancel.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -244,7 +261,11 @@ impl Host {
         });
         let scanned = {
             let (dir, engine) = (dir.clone(), engine.clone());
-            tokio::task::spawn_blocking(move || scan(&dir, &engine))
+            // A start that is dropped (cancelled) stops compiling after the current plugin.
+            // (Once the scan is done, the flag no longer matters.)
+            let cancel = CancelOnDrop(Arc::new(AtomicBool::new(false)));
+            let flag = Arc::clone(&cancel.0);
+            tokio::task::spawn_blocking(move || scan(&dir, &engine, &flag))
                 .await
                 .unwrap_or_else(|e| {
                     tracing::error!("scanning plugins failed: {e}");
@@ -863,6 +884,18 @@ mod tests {
             draining,
             last_crash: None,
         }
+    }
+
+    #[test]
+    fn a_cancelled_scan_stops_between_plugins() {
+        let dir = tempfile::tempdir().expect("dir");
+        for id in ["one", "two"] {
+            std::fs::create_dir(dir.path().join(id)).expect("folder");
+            std::fs::write(dir.path().join(id).join("plugin.toml"), "not a manifest").expect("manifest");
+        }
+        let engine = Err("no engine".to_string());
+        assert_eq!(scan(dir.path(), &engine, &AtomicBool::new(false)).len(), 2);
+        assert!(scan(dir.path(), &engine, &AtomicBool::new(true)).is_empty());
     }
 
     #[tokio::test]

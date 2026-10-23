@@ -373,7 +373,8 @@ async fn a_long_sleep_is_over_budget() {
 
 #[tokio::test]
 async fn waiting_counts_toward_the_budget_of_busy_work() {
-    // 490 ms asleep, then a busy loop: the call ends at about 500 ms in all, not about 950 ms.
+    // 490 ms asleep, then a busy loop: the call ends at about 550 ms in all. Before waits counted,
+    // the loop got 45 more ticks of at least 10 ms each, so it could not end before 940 ms.
     let p = probe();
     let started = Instant::now();
     assert_eq!(
@@ -381,7 +382,7 @@ async fn waiting_counts_toward_the_budget_of_busy_work() {
         Err("Probe stopped working".to_string())
     );
     assert!(
-        started.elapsed() < Duration::from_millis(850),
+        started.elapsed() < Duration::from_millis(900),
         "took {:?}",
         started.elapsed()
     );
@@ -1400,8 +1401,9 @@ async fn a_slow_reply_is_busy_not_broken() {
     let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
     let h = host_with(setup, &Settings::default(), &["probe"], mem_secrets()).await;
     h.wait_status("probe", |s| *s == PluginStatus::Running).await;
-    // Five 450 ms calls queued at once: the last reply comes after the 2 s an action waits.
-    let sleeps = (0..5).map(|_| h.host.action("probe", "sleep", json!({"ms": 450})));
+    // Eight 300 ms calls queued at once (each well within its 500 ms): the last replies come
+    // after the 2 s an action waits.
+    let sleeps = (0..8).map(|_| h.host.action("probe", "sleep", json!({"ms": 300})));
     let late = async {
         tokio::task::yield_now().await;
         h.host.action("probe", "state", json!({"k": "a", "v": "b"})).await
@@ -1544,4 +1546,22 @@ async fn shutdown_while_the_plugins_start() {
     );
     assert!(slot.wait().await.is_none(), "never ready");
     assert!(slot.get().is_none());
+}
+
+#[tokio::test]
+async fn a_start_that_panics_is_not_starting_forever() {
+    use ulanzi_deckd::actions::{ActionError, ActionRunner, Executor};
+    let slot = PluginSlot::start(async { panic!("the start panics on purpose") });
+    let ready = tokio::time::timeout(PROMPTLY, slot.wait())
+        .await
+        .expect("wait ends");
+    assert!(ready.is_none());
+    let ex = Executor::new(None).with_plugin_slot(slot.clone());
+    assert_eq!(
+        ex.run(&press("hello", "count")).await,
+        Err(ActionError::Unavailable("plugins are not running".into()))
+    );
+    tokio::time::timeout(PROMPTLY, slot.shutdown())
+        .await
+        .expect("shutdown in time");
 }

@@ -192,7 +192,7 @@ struct Slot {
 enum Stage {
     Starting,
     Ready(PluginHost),
-    /// Shut down before the host was ready.
+    /// Shut down before the host was ready, or its start failed.
     Stopped,
 }
 
@@ -211,8 +211,15 @@ impl PluginSlot {
         let slot = PluginSlot::with(Stage::Starting);
         let inner = Arc::clone(&slot.inner);
         let task = tokio::spawn(async move {
-            let host = start.await;
-            inner.stage.send_replace(Stage::Ready(host));
+            use futures_util::FutureExt;
+            let stage = match std::panic::AssertUnwindSafe(start).catch_unwind().await {
+                Ok(host) => Stage::Ready(host),
+                Err(_) => {
+                    tracing::error!("the plugins could not start");
+                    Stage::Stopped
+                }
+            };
+            inner.stage.send_replace(stage);
         });
         *slot.lock_starting() = Some(task);
         slot
@@ -233,6 +240,11 @@ impl PluginSlot {
             Stage::Ready(host) => Some(host.clone()),
             Stage::Starting | Stage::Stopped => None,
         }
+    }
+
+    /// The host is still coming up.
+    pub fn is_starting(&self) -> bool {
+        matches!(*self.inner.stage.borrow(), Stage::Starting)
     }
 
     /// Wait until the host is ready; `None` when it was shut down first.
