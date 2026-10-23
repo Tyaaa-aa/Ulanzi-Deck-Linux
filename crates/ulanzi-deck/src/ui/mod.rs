@@ -15,6 +15,7 @@ pub mod preferences;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod templates;
+pub mod widgets_editor;
 pub mod window;
 
 use std::cell::RefCell;

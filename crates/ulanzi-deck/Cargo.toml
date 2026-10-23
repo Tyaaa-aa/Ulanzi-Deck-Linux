@@ -10,6 +10,7 @@ description = "Ulanzi Deck: GTK app for the Ulanzi D200 / D200X"
 workspace = true
 
 [dependencies]
+chrono.workspace = true
 ulanzi-core.workspace = true
 tokio.workspace = true
 zbus.workspace = true

@@ -30,6 +30,27 @@ struct Shot {
     page: Option<usize>,
 }
 
+/// The app's own icons when they are not in the system theme: next to the binary (tarball,
+/// AppImage) or in the source tree (a development build).
+fn add_icon_paths() {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let theme = gtk::IconTheme::for_display(&display);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(prefix) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent()?.parent().map(|p| p.to_path_buf()))
+    {
+        dirs.push(prefix.join("share/icons/hicolor/scalable/apps"));
+        dirs.push(prefix.join("share/icons/hicolor/symbolic/apps"));
+    }
+    dirs.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/data/icons")));
+    for d in dirs.into_iter().filter(|d| d.is_dir()) {
+        theme.add_search_path(&d);
+    }
+}
+
 fn parse_size(s: &str) -> Option<(i32, i32)> {
     let (w, h) = s.split_once('x')?;
     Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
@@ -120,6 +141,7 @@ fn main() -> glib::ExitCode {
         .flags(flags)
         .build();
     app.connect_startup(|_| {
+        add_icon_paths();
         gtk::Window::set_default_icon_name(APP_ID);
         load_css();
     });

@@ -926,40 +926,35 @@ fn small_view(ctx: &C, content: &gtk::Box, s: u8) {
 }
 
 /// The screen's display choices, in combo order.
-const SCREEN_MODES: [&str; 8] = [
+const SCREEN_MODES: [&str; 7] = [
     "Clock",
     "Clock, Date and Weekday",
     "Clock and Weekday",
     "Clock and Date",
     "Large Clock",
     "System Stats",
-    "Now Playing",
-    "Blank",
+    "Widgets",
 ];
 
 fn screen_mode_index(s: &ScreenConfig) -> usize {
     match s {
         ScreenConfig::FirmwareClock { style } => ClockStyle::ALL.iter().position(|c| c == style).unwrap_or(0),
         ScreenConfig::FirmwareStats => 5,
-        ScreenConfig::Custom { widgets, .. } => match widgets.first() {
-            Some(Widget::NowPlaying { .. }) => 6,
-            _ => 7,
-        },
+        ScreenConfig::Custom { .. } => 6,
     }
 }
 
 fn screen_for_mode(i: usize, old: &ScreenConfig) -> ScreenConfig {
-    let (tap, hold) = match old {
-        ScreenConfig::Custom { tap, hold, .. } => (tap.clone(), hold.clone()),
-        _ => (None, None),
-    };
     match i {
         0..=4 => ScreenConfig::FirmwareClock {
             style: ClockStyle::ALL[i],
         },
         5 => ScreenConfig::FirmwareStats,
-        6 => ScreenConfig::custom(vec![Widget::now_playing()], tap, hold),
-        _ => ScreenConfig::custom(vec![Widget::Blank], tap, hold),
+        // Back to widgets keeps the widgets already set up.
+        _ => match old {
+            ScreenConfig::Custom { .. } => old.clone(),
+            _ => ScreenConfig::custom(vec![Widget::now_playing(), Widget::clock()], None, None),
+        },
     }
 }
 
@@ -990,7 +985,23 @@ fn screen_view(ctx: &C, content: &gtk::Box) {
 
     match &screen {
         ScreenConfig::Custom { tap, hold, .. } => {
-            let group = adw::PreferencesGroup::builder().title("When Pressed").build();
+            let edit: crate::ui::widgets_editor::EditScreen = {
+                let ctx = ctx.clone();
+                Rc::new(move |how, f| {
+                    ctx.commit(how, |e| {
+                        let mut s = e.profile().screen.clone();
+                        f(&mut s);
+                        e.set_screen(s)
+                    })
+                })
+            };
+            for g in crate::ui::widgets_editor::groups(&ctx.state, &screen, edit) {
+                content.append(&g);
+            }
+            let group = adw::PreferencesGroup::builder()
+                .title("When Pressed")
+                .description("Without a tap action, tapping plays or pauses Now Playing, starts the timer, or shows the next widget.")
+                .build();
             for (title, action, is_tap) in [("Tap", tap, true), ("Hold", hold, false)] {
                 let write: Write = {
                     let ctx = ctx.clone();
@@ -1023,7 +1034,7 @@ fn screen_view(ctx: &C, content: &gtk::Box) {
                 &gtk::Label::builder()
                     .label(
                         "The deck draws the clock and stats itself, so the screen can’t be \
-                         pressed in these modes. Choose Now Playing or Blank to give it an action.",
+                         pressed in these modes. Choose Widgets to draw your own and give it an action.",
                     )
                     .wrap(true)
                     .xalign(0.0)
@@ -1044,9 +1055,9 @@ mod tests {
         for i in 0..SCREEN_MODES.len() {
             assert_eq!(screen_mode_index(&screen_for_mode(i, &old)), i);
         }
-        // Switching between custom modes keeps the tap action.
+        // Choosing Widgets again keeps the widgets and the tap action.
         assert!(matches!(
-            screen_for_mode(7, &old),
+            screen_for_mode(6, &old),
             ScreenConfig::Custom {
                 tap: Some(Action::NextPage),
                 ..

@@ -120,7 +120,13 @@ async fn main() -> ExitCode {
         store.clone(),
         quit.clone(),
     ));
-    tokio::spawn(hotplug(tx.clone(), events));
+    if std::env::var_os("ULANZI_DEMO").is_some() {
+        // A pretend deck: everything works but nothing touches the hardware (screenshots, tests).
+        tracing::info!("demo mode: using a pretend deck");
+        tokio::spawn(demo_deck(tx.clone()));
+    } else {
+        tokio::spawn(hotplug(tx.clone(), events));
+    }
     tokio::spawn(ulanzi_deckd::focus::run(
         conn.clone(),
         store.state_dir().to_path_buf(),
@@ -256,6 +262,17 @@ async fn hotplug(tx: mpsc::Sender<DeckMsg>, mut events: broadcast::Receiver<Deck
                 break;
             }
         }
+    }
+}
+
+async fn demo_deck(tx: mpsc::Sender<DeckMsg>) {
+    let (t, handle) = ulanzi_deckd::transport::MockTransport::new();
+    let _ = tx.send(DeckMsg::DeviceUp(Box::new(t), "demo".into())).await;
+    // The handle keeps the pretend deck open for as long as the service runs; what was "sent" to
+    // it is dropped now and then so it doesn't pile up.
+    loop {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        handle.clear();
     }
 }
 

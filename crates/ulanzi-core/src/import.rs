@@ -28,6 +28,18 @@ pub enum ImportError {
 
 /// Import `src` into `profile_dir`, returning the path to store in the profile (relative to it).
 pub fn import_image(src: &Path, profile_dir: &Path) -> Result<String, ImportError> {
+    import_sized(src, profile_dir, (KEY_PX, KEY_PX))
+}
+
+/// Size of pictures for the wide screen (twice its 458×196, so they stay sharp in the app too).
+pub const SCREEN_PICTURE: (u32, u32) = (916, 392);
+
+/// Import a picture for the wide screen (widget background or the Pictures widget).
+pub fn import_screen_image(src: &Path, profile_dir: &Path) -> Result<String, ImportError> {
+    import_sized(src, profile_dir, SCREEN_PICTURE)
+}
+
+fn import_sized(src: &Path, profile_dir: &Path, (w, h): (u32, u32)) -> Result<String, ImportError> {
     if std::fs::metadata(src)?.len() > MAX_FILE_BYTES {
         return Err(ImportError::TooLarge);
     }
@@ -36,9 +48,9 @@ pub fn import_image(src: &Path, profile_dir: &Path) -> Result<String, ImportErro
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"));
     let img = if is_svg {
-        render_svg(&bytes)?
+        render_svg(&bytes, (w, h))?
     } else {
-        decode_raster(&bytes)?
+        decode_raster(&bytes, (w, h))?
     };
     let mut png = Cursor::new(Vec::new());
     img.write_to(&mut png, image::ImageFormat::Png)
@@ -55,7 +67,7 @@ pub fn import_image(src: &Path, profile_dir: &Path) -> Result<String, ImportErro
     Ok(rel)
 }
 
-fn decode_raster(bytes: &[u8]) -> Result<image::RgbaImage, ImportError> {
+fn decode_raster(bytes: &[u8], (w, h): (u32, u32)) -> Result<image::RgbaImage, ImportError> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|_| ImportError::NotAnImage)?;
@@ -72,30 +84,30 @@ fn decode_raster(bytes: &[u8]) -> Result<image::RgbaImage, ImportError> {
         _ => ImportError::NotAnImage,
     })?;
     Ok(img
-        .resize_to_fill(KEY_PX, KEY_PX, image::imageops::FilterType::Lanczos3)
+        .resize_to_fill(w, h, image::imageops::FilterType::Lanczos3)
         .to_rgba8())
 }
 
-/// Rasterise an SVG (no external files) to fit inside the key.
-fn render_svg(bytes: &[u8]) -> Result<image::RgbaImage, ImportError> {
+/// Rasterise an SVG (no external files) to fit inside `w`×`h`.
+fn render_svg(bytes: &[u8], (w, h): (u32, u32)) -> Result<image::RgbaImage, ImportError> {
     let opts = usvg::Options {
         resources_dir: None,
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_data(bytes, &opts).map_err(|_| ImportError::NotAnImage)?;
     let size = tree.size();
-    let k = KEY_PX as f32 / size.width().max(size.height());
+    let k = (w as f32 / size.width()).min(h as f32 / size.height());
     let (ox, oy) = (
-        (KEY_PX as f32 - size.width() * k) / 2.0,
-        (KEY_PX as f32 - size.height() * k) / 2.0,
+        (w as f32 - size.width() * k) / 2.0,
+        (h as f32 - size.height() * k) / 2.0,
     );
-    let mut pix = Pixmap::new(KEY_PX, KEY_PX).ok_or(ImportError::TooLarge)?;
+    let mut pix = Pixmap::new(w, h).ok_or(ImportError::TooLarge)?;
     resvg::render(
         &tree,
         Transform::from_scale(k, k).post_translate(ox, oy),
         &mut pix.as_mut(),
     );
-    let mut out = image::RgbaImage::new(KEY_PX, KEY_PX);
+    let mut out = image::RgbaImage::new(w, h);
     for (dst, src) in out.pixels_mut().zip(pix.pixels()) {
         let c = src.demultiply();
         dst.0 = [c.red(), c.green(), c.blue(), c.alpha()];

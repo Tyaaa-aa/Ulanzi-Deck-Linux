@@ -46,3 +46,15 @@ fn import_image_downscales_and_rejects_non_images() {
     assert!(matches!(err, ImportError::NotAnImage));
     assert_eq!(err.to_string(), "That file isn't an image");
 }
+
+#[test]
+fn screen_pictures_are_screen_sized() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let profile = dir.path().join("profile");
+    std::fs::create_dir_all(&profile).expect("test setup");
+    let photo = dir.path().join("photo.png");
+    std::fs::write(&photo, png(1600, 1200)).expect("test setup");
+    let rel = ulanzi_core::import::import_screen_image(&photo, &profile).expect("import");
+    let saved = image::open(profile.join(&rel)).expect("open");
+    assert_eq!((saved.width(), saved.height()), (916, 392));
+}

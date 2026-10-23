@@ -9,9 +9,7 @@ use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use ulanzi_core::edit::Slot;
 use ulanzi_core::model::{KeyLook, ScreenConfig, Widget};
-use ulanzi_core::render::{
-    Fonts, IconLibrary, NowPlaying, RenderCtx, look_hash, render_key, render_now_playing,
-};
+use ulanzi_core::render::{Fonts, IconLibrary, RenderCtx, look_hash, render_key};
 use ulanzi_core::store::Store;
 
 use crate::state::{Change, State};
@@ -396,27 +394,58 @@ fn flash(w: &impl IsA<gtk::Widget>) {
 }
 
 fn screen_texture(state: &State) -> Option<gdk::Texture> {
+    use ulanzi_core::render::screen::{ScreenStyle, render_widget};
     thread_local! {
         static FONTS: RefCell<Option<Fonts>> = const { RefCell::new(None) };
     }
     let screen = state.editor.borrow().profile().screen.clone();
-    let png = match screen {
-        ScreenConfig::Custom { widgets, .. }
-            if matches!(widgets.first(), Some(Widget::NowPlaying { .. })) =>
-        {
-            FONTS.with(|f| {
-                let mut f = f.borrow_mut();
-                let fonts = f.get_or_insert_with(Fonts::system);
-                let np = NowPlaying {
-                    title: "Now Playing".into(),
-                    artist: "Shows the current song".into(),
-                };
-                render_now_playing(&np, None, fonts, (458, 196))
-            })
-        }
-        _ => return None,
+    let ScreenConfig::Custom {
+        widgets,
+        background,
+        accent,
+        ..
+    } = screen
+    else {
+        return None;
     };
+    let w = widgets
+        .get(crate::ui::widgets_editor::preview_index())
+        .or(widgets.first())?
+        .clone();
+    let dir = profile_dir(state);
+    let place = match &w {
+        Widget::Weather { place, .. } => place.clone(),
+        _ => String::new(),
+    };
+    let mut data = crate::ui::widgets_editor::demo_data(chrono::Local::now().naive_local(), &place);
+    if let Widget::Pictures { paths, .. } = &w {
+        data.picture = paths.first().map(|p| dir.join(p));
+    }
+    let style = ScreenStyle {
+        background,
+        accent,
+        profile_dir: dir,
+    };
+    let png = FONTS.with(|f| {
+        let mut f = f.borrow_mut();
+        let fonts = f.get_or_insert_with(Fonts::system);
+        render_widget(&w, &style, &data, fonts)
+    });
     texture(&png)
+}
+
+/// The previewed widget changes by itself (a clock), so the canvas redraws it every second.
+fn screen_ticks(state: &State) -> bool {
+    let e = state.editor.borrow();
+    let ScreenConfig::Custom { widgets, .. } = &e.profile().screen else {
+        return false;
+    };
+    matches!(
+        widgets
+            .get(crate::ui::widgets_editor::preview_index())
+            .or(widgets.first()),
+        Some(Widget::Clock { .. })
+    )
 }
 
 /// The canvas widget and a switch for its compact size (narrow windows).
@@ -714,6 +743,20 @@ pub fn build(state: &State) -> Canvas {
         });
         g.set_propagation_phase(gtk::PropagationPhase::Bubble);
         scroller.add_controller(g);
+    }
+
+    // A clock on the screen keeps time in the preview.
+    {
+        let (state, pic) = (state.clone(), screen.0.picture.downgrade());
+        glib::timeout_add_seconds_local(1, move || {
+            let Some(pic) = pic.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if pic.is_mapped() && screen_ticks(&state) {
+                pic.set_paintable(Some(&or_blank(screen_texture(&state), 458, 196)));
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     // Redraw.
