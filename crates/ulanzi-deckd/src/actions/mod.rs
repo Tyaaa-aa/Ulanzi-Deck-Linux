@@ -92,6 +92,13 @@ impl Executor {
 /// Press a combo on the shared virtual keyboard, creating it on first use.
 fn shortcut(kb: &Mutex<Option<VirtualKeyboard>>, combo: &str) -> Result<(), ActionError> {
     let keys = keys::parse_combo(combo)?;
+    with_keyboard(kb, |k| k.press_combo(&keys))
+}
+
+fn with_keyboard<T>(
+    kb: &Mutex<Option<VirtualKeyboard>>,
+    f: impl FnOnce(&mut VirtualKeyboard) -> Result<T, ActionError>,
+) -> Result<T, ActionError> {
     let mut guard = kb
         .lock()
         .map_err(|_| ActionError::Failed("keyboard lock poisoned".into()))?;
@@ -99,9 +106,58 @@ fn shortcut(kb: &Mutex<Option<VirtualKeyboard>>, combo: &str) -> Result<(), Acti
         *guard = Some(VirtualKeyboard::new()?);
     }
     match guard.as_mut() {
-        Some(kb) => kb.press_combo(&keys),
+        Some(kb) => f(kb),
         None => Err(ActionError::Unavailable("virtual keyboard unavailable".into())),
     }
+}
+
+/// Type `text`: key by key when a US layout has every character, else through the clipboard.
+fn type_text(kb: &Mutex<Option<VirtualKeyboard>>, text: &str) -> Result<(), ActionError> {
+    match keys::plan_typing(text) {
+        keys::Typing::Keys(list) => with_keyboard(kb, |k| {
+            for keys in &list {
+                k.press_combo(keys)?;
+            }
+            Ok(())
+        }),
+        keys::Typing::Paste => {
+            copy_to_clipboard(text)?;
+            // Give the clipboard owner a moment before the app asks for the text.
+            std::thread::sleep(Duration::from_millis(120));
+            let paste = keys::parse_combo("ctrl+v")?;
+            with_keyboard(kb, |k| k.press_combo(&paste))
+        }
+    }
+}
+
+/// Put text on the clipboard with wl-copy (Wayland) or xclip (X11).
+fn copy_to_clipboard(text: &str) -> Result<(), ActionError> {
+    use std::io::Write;
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let argv: &[&str] = if wayland {
+        &["wl-copy"]
+    } else {
+        &["xclip", "-selection", "clipboard"]
+    };
+    let mut child = std::process::Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            ActionError::Unavailable(format!(
+                "this text has characters a key press can't make; install {} to type it through the clipboard",
+                if wayland { "wl-clipboard" } else { "xclip" }
+            ))
+        })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|e| ActionError::Failed(e.to_string()))?;
+    }
+    child.wait().map_err(|e| ActionError::Failed(e.to_string()))?;
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -132,7 +188,12 @@ impl ActionRunner for Executor {
                     .await
                     .map_err(|e| ActionError::Failed(e.to_string()))?
             }
-            Action::TypeText { .. } => Err(ActionError::NotYet("M2")),
+            Action::TypeText { text } => {
+                let (kb, text) = (self.keyboard.clone(), text.clone());
+                tokio::task::spawn_blocking(move || type_text(&kb, &text))
+                    .await
+                    .map_err(|e| ActionError::Failed(e.to_string()))?
+            }
             Action::PlaySound { path, device } => audio::play_sound(path, device.as_deref()),
             Action::Media { control, player } => match &self.media {
                 Some(m) => m.control(*control, player.as_deref()).await,

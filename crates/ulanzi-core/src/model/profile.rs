@@ -239,6 +239,17 @@ fn rename_in(a: &mut Action, kind: ObsRename, old: &str, new: &str) -> bool {
 }
 
 impl Profile {
+    /// "Hide All Labels" for labels drawn into the key pictures (the deck hides its own).
+    pub fn hide_drawn_labels(&mut self) {
+        for page in &mut self.pages {
+            for k in page.keys.values_mut() {
+                if k.look.label.position.is_some() {
+                    k.look.label.visible = false;
+                }
+            }
+        }
+    }
+
     /// Follow a name change in OBS everywhere in this profile; true if anything changed.
     pub fn rename_obs(&mut self, kind: ObsRename, old: &str, new: &str) -> bool {
         let mut hit = false;

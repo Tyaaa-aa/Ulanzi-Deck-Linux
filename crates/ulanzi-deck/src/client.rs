@@ -113,6 +113,8 @@ pub enum ClientEvent {
         message: String,
     },
     ProfilesChanged,
+    /// Settings changed outside the app.
+    SettingsChanged,
     /// The OBS connection changed: (state id, title, detail).
     Obs {
         state: String,
@@ -566,6 +568,7 @@ impl Client {
                         .map(|profile| ClientEvent::Page { profile, page })
                 }),
                 "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
+                "SettingsChanged" => Some(ClientEvent::SettingsChanged),
                 "ObsStatusChanged" => body
                     .deserialize::<(String, String, String)>()
                     .ok()

@@ -714,3 +714,20 @@ async fn screen_updates_are_rate_limited() {
         .count();
     assert!(uploads <= 6, "{uploads} uploads in 5 s");
 }
+
+#[tokio::test(start_paused = true)]
+async fn deck_settings_changes_are_announced() {
+    let mut r = rig().await;
+    while r.events.try_recv().is_ok() {}
+    r.tx.send(DeckMsg::Brightness(ulanzi_core::model::BrightnessOp::Up {
+        step: 10,
+    }))
+    .await
+    .expect("send");
+    settle().await;
+    let mut saw = false;
+    while let Ok(e) = r.events.try_recv() {
+        saw |= e == DeckEvent::SettingsChanged;
+    }
+    assert!(saw, "no SettingsChanged after a brightness change");
+}

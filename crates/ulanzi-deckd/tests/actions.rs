@@ -222,3 +222,24 @@ async fn run_capture_times_out() {
     assert!(r.is_err());
     assert!(t.elapsed() < Duration::from_secs(2));
 }
+
+#[test]
+fn text_becomes_key_presses() {
+    use evdev::KeyCode as K;
+    use ulanzi_deckd::actions::keys::{Typing, char_keys, plan_typing};
+    assert_eq!(char_keys('a'), Some(vec![K::KEY_A]));
+    assert_eq!(char_keys('A'), Some(vec![K::KEY_LEFTSHIFT, K::KEY_A]));
+    assert_eq!(char_keys('!'), Some(vec![K::KEY_LEFTSHIFT, K::KEY_1]));
+    assert_eq!(char_keys('@'), Some(vec![K::KEY_LEFTSHIFT, K::KEY_2]));
+    assert_eq!(char_keys(' '), Some(vec![K::KEY_SPACE]));
+    assert_eq!(char_keys('\n'), Some(vec![K::KEY_ENTER]));
+    assert_eq!(char_keys('?'), Some(vec![K::KEY_LEFTSHIFT, K::KEY_SLASH]));
+    assert_eq!(char_keys('é'), None);
+    match plan_typing("Hi, you!") {
+        Typing::Keys(k) => assert_eq!(k.len(), 8),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(plan_typing("Grüße 👋"), Typing::Paste);
+    assert_eq!(plan_typing(&"x".repeat(500)), Typing::Paste);
+    assert_eq!(plan_typing(""), Typing::Keys(vec![]));
+}

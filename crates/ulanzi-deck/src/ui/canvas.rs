@@ -794,8 +794,18 @@ pub fn build(state: &State) -> Canvas {
                     };
                     match key {
                         Some(key) => {
+                            // "Hide All Labels" also hides labels drawn into the picture.
+                            let drawn_hidden;
+                            let look = if hide && key.look.label.position.is_some() {
+                                let mut l = key.look.clone();
+                                l.label.visible = false;
+                                drawn_hidden = l;
+                                &drawn_hidden
+                            } else {
+                                &key.look
+                            };
                             k.picture.set_paintable(Some(&or_blank(
-                                key_texture(&key.look, &dir),
+                                key_texture(look, &dir),
                                 ulanzi_core::render::KEY_PX as i32,
                                 ulanzi_core::render::KEY_PX as i32,
                             )));

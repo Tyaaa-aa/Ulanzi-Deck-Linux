@@ -507,3 +507,19 @@ fn obs_renames_reach_every_action() {
         matches!(&p.small_buttons.left, Some(Action::Obs(ObsAction::ToggleScenes { a, b })) if a == "Gaming" && b == "Chat")
     );
 }
+
+#[test]
+fn hiding_labels_reaches_drawn_labels() {
+    let mut p = Profile::new_default("T", Model::D200X);
+    let mut drawn = Key::default();
+    drawn.look.label.text = "Top".into();
+    drawn.look.label.position = Some(LabelPosition::Top);
+    let mut plain = Key::default();
+    plain.look.label.text = "Plain".into();
+    p.pages[0].keys.insert(0, drawn);
+    p.pages[0].keys.insert(1, plain);
+    p.hide_drawn_labels();
+    assert!(!p.pages[0].keys[&0].look.label.visible);
+    // Firmware labels are hidden by the deck itself; their setting stays.
+    assert!(p.pages[0].keys[&1].look.label.visible);
+}

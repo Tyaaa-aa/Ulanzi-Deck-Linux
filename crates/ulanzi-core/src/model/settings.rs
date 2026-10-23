@@ -28,6 +28,8 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<Uuid>,
     pub obs: ObsSettings,
+    /// Kept so older settings files still load. "Start at Login" is the systemd unit's
+    /// enabled state (`systemctl --user is-enabled ulanzi-deckd`), not this value.
     pub autostart: bool,
     pub tray: bool,
     /// Switch profiles by the app in front (each profile's `match` apps).

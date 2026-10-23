@@ -89,9 +89,17 @@ pub enum DeckMsg {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeckEvent {
     State(DeviceState),
-    Page { profile: Uuid, page: usize },
+    Page {
+        profile: Uuid,
+        page: usize,
+    },
     Input(InputEvent),
-    ActionFailed { control: String, message: String },
+    ActionFailed {
+        control: String,
+        message: String,
+    },
+    /// The deck changed settings itself (auto-switch toggle, brightness keys).
+    SettingsChanged,
 }
 
 /// Current state, for `Hello` and `ulanzictl status`.
@@ -373,6 +381,8 @@ impl Deck {
                 self.send(&[brightness(self.settings.brightness)]).await;
                 if label_changed {
                     self.send_label_style().await;
+                    // Labels drawn into key pictures follow "Hide All Labels" too.
+                    self.push_page(false).await;
                 }
             }
             DeckMsg::SwitchProfile(id) => self.switch_profile(id).await,
@@ -575,7 +585,16 @@ impl Deck {
         }
         let force = force || std::mem::take(&mut self.pending_full);
         self.upload_pending = false;
-        let profile = &self.profiles[self.active];
+        let hidden;
+        let mut profile = &self.profiles[self.active];
+        if self.settings.hide_labels {
+            hidden = {
+                let mut p = profile.clone();
+                p.hide_drawn_labels();
+                p
+            };
+            profile = &hidden;
+        }
         let dir = self.store.profile_dir(profile.id);
         let ctx = RenderCtx {
             profile_dir: &dir,
@@ -862,6 +881,7 @@ impl Deck {
                 if let Err(e) = self.store.save_settings(&self.settings) {
                     tracing::warn!("could not save settings: {e}");
                 }
+                self.emit(DeckEvent::SettingsChanged);
                 tracing::info!(
                     "auto profile switching {}",
                     if self.settings.auto_switch { "on" } else { "off" }
@@ -879,6 +899,7 @@ impl Deck {
                 if let Err(e) = self.store.save_settings(&self.settings) {
                     tracing::warn!("could not save brightness: {e}");
                 }
+                self.emit(DeckEvent::SettingsChanged);
                 self.send(&[brightness(self.settings.brightness)]).await;
                 return true;
             }

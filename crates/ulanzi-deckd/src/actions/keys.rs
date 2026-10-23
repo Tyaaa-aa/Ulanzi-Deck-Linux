@@ -123,6 +123,119 @@ fn key_named(name: &str) -> Option<KeyCode> {
     })
 }
 
+/// Longest text typed key by key; longer text is pasted.
+pub const MAX_TYPED: usize = 200;
+
+/// The keys for one character on a US layout (Shift first when needed); `None` if it has none.
+pub fn char_keys(c: char) -> Option<Vec<KeyCode>> {
+    use KeyCode as K;
+    let plain = |k: KeyCode| Some(vec![k]);
+    let shift = |k: KeyCode| Some(vec![K::KEY_LEFTSHIFT, k]);
+    if c.is_ascii_lowercase() {
+        return plain(letter(c));
+    }
+    if c.is_ascii_uppercase() {
+        return shift(letter(c.to_ascii_lowercase()));
+    }
+    let digit = |d: char| match d {
+        '0' => K::KEY_0,
+        _ => KeyCode(K::KEY_1.0 + (d as u16 - '1' as u16)),
+    };
+    match c {
+        '0'..='9' => plain(digit(c)),
+        ' ' => plain(K::KEY_SPACE),
+        '\n' => plain(K::KEY_ENTER),
+        '\t' => plain(K::KEY_TAB),
+        '-' => plain(K::KEY_MINUS),
+        '=' => plain(K::KEY_EQUAL),
+        '[' => plain(K::KEY_LEFTBRACE),
+        ']' => plain(K::KEY_RIGHTBRACE),
+        '\\' => plain(K::KEY_BACKSLASH),
+        ';' => plain(K::KEY_SEMICOLON),
+        '\'' => plain(K::KEY_APOSTROPHE),
+        '`' => plain(K::KEY_GRAVE),
+        ',' => plain(K::KEY_COMMA),
+        '.' => plain(K::KEY_DOT),
+        '/' => plain(K::KEY_SLASH),
+        '!' => shift(K::KEY_1),
+        '@' => shift(K::KEY_2),
+        '#' => shift(K::KEY_3),
+        '$' => shift(K::KEY_4),
+        '%' => shift(K::KEY_5),
+        '^' => shift(K::KEY_6),
+        '&' => shift(K::KEY_7),
+        '*' => shift(K::KEY_8),
+        '(' => shift(K::KEY_9),
+        ')' => shift(K::KEY_0),
+        '_' => shift(K::KEY_MINUS),
+        '+' => shift(K::KEY_EQUAL),
+        '{' => shift(K::KEY_LEFTBRACE),
+        '}' => shift(K::KEY_RIGHTBRACE),
+        '|' => shift(K::KEY_BACKSLASH),
+        ':' => shift(K::KEY_SEMICOLON),
+        '"' => shift(K::KEY_APOSTROPHE),
+        '~' => shift(K::KEY_GRAVE),
+        '<' => shift(K::KEY_COMMA),
+        '>' => shift(K::KEY_DOT),
+        '?' => shift(K::KEY_SLASH),
+        _ => None,
+    }
+}
+
+/// The key for a lowercase ASCII letter (evdev numbers keys by position, not alphabet).
+fn letter(c: char) -> KeyCode {
+    use KeyCode as K;
+    const LETTERS: [KeyCode; 26] = [
+        K::KEY_A,
+        K::KEY_B,
+        K::KEY_C,
+        K::KEY_D,
+        K::KEY_E,
+        K::KEY_F,
+        K::KEY_G,
+        K::KEY_H,
+        K::KEY_I,
+        K::KEY_J,
+        K::KEY_K,
+        K::KEY_L,
+        K::KEY_M,
+        K::KEY_N,
+        K::KEY_O,
+        K::KEY_P,
+        K::KEY_Q,
+        K::KEY_R,
+        K::KEY_S,
+        K::KEY_T,
+        K::KEY_U,
+        K::KEY_V,
+        K::KEY_W,
+        K::KEY_X,
+        K::KEY_Y,
+        K::KEY_Z,
+    ];
+    LETTERS[(c as u8 - b'a') as usize]
+}
+
+/// How to type some text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Typing {
+    /// Each character's keys.
+    Keys(Vec<Vec<KeyCode>>),
+    /// Through the clipboard (characters a US layout can't type, or long text).
+    Paste,
+}
+
+pub fn plan_typing(text: &str) -> Typing {
+    if text.chars().count() > MAX_TYPED {
+        return Typing::Paste;
+    }
+    text.chars()
+        .map(char_keys)
+        .collect::<Option<Vec<_>>>()
+        .map(Typing::Keys)
+        .unwrap_or(Typing::Paste)
+}
+
 /// A virtual keyboard that can press any key.
 pub struct VirtualKeyboard {
     dev: VirtualDevice,

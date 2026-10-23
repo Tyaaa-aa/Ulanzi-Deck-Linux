@@ -452,7 +452,36 @@ pub fn open_profile(state: &State, id: Uuid, activate: bool) {
     );
 }
 
-/// Connect to the service, load the active profile and settings, and follow events.
+thread_local! {
+    static SETTINGS_RELOAD: std::cell::RefCell<Option<glib::SourceId>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Read the settings again shortly (a turning brightness dial sends many changes).
+fn reload_settings_soon(state: &State) {
+    SETTINGS_RELOAD.with(|r| {
+        if let Some(id) = r.borrow_mut().take() {
+            id.remove();
+        }
+        let state = state.clone();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+            SETTINGS_RELOAD.with(|r| r.borrow_mut().take());
+            let Some(c) = state.client.borrow().clone() else {
+                return;
+            };
+            let s = state.clone();
+            runtime::run(async move { c.settings().await }, move |r| {
+                if let Ok(new) = r
+                    && *s.settings.borrow() != new
+                {
+                    *s.settings.borrow_mut() = new;
+                    s.notify(Change::Settings);
+                }
+            });
+        });
+        *r.borrow_mut() = Some(id);
+    });
+}
+
 /// Record the OBS state; when connected, fetch the scene list (for pickers and warnings).
 pub fn set_obs(state: &State, st: String, title: String, detail: String) {
     let connected = st == "connected";
@@ -477,6 +506,7 @@ pub fn set_obs(state: &State, st: String, title: String, detail: String) {
     }
 }
 
+/// Connect to the service, load the active profile and settings, and follow events.
 pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
     let state = state.clone();
     runtime::run(
@@ -607,6 +637,7 @@ fn follow_events(state: &State, c: &Client) {
                         });
                     }
                 }
+                ClientEvent::SettingsChanged => reload_settings_soon(&state),
                 ClientEvent::Obs {
                     state: st,
                     title,

@@ -643,6 +643,10 @@ impl DeckService {
     #[zbus(signal)]
     async fn page_changed(e: &SignalEmitter<'_>, profile: &str, page: u32) -> zbus::Result<()>;
 
+    /// Settings changed outside the app (tray, deck keys): read them again.
+    #[zbus(signal)]
+    async fn settings_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
+
     #[zbus(signal)]
     async fn action_failed(e: &SignalEmitter<'_>, control: &str, message: &str) -> zbus::Result<()>;
 }
@@ -717,6 +721,7 @@ pub async fn forward_signals(conn: Connection, mut events: broadcast::Receiver<D
             DeckEvent::ActionFailed { control, message } => {
                 DeckService::action_failed(&emitter, &control, &message).await
             }
+            DeckEvent::SettingsChanged => DeckService::settings_changed(&emitter).await,
         };
         if let Err(e) = r {
             tracing::debug!("signal not sent: {e}");
