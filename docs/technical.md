@@ -170,7 +170,7 @@ Plugins are WebAssembly components run by wasmtime inside `ulanzi-deckd`, one in
 64 MiB of memory, 500 ms per call and no access to files or sockets except through the host, which
 checks every connection against the plugin's permissions. A crash restarts the plugin once; a second
 one within 5 minutes leaves it `failed`. The contract, permissions and limits are in the
-[plugin guide](plugins.md). Plugin settings are `[plugins.<id>]` in `settings.toml`; a plugin's state
+[plugin guide](plugins.md). Each plugin has `[plugins.<id>]` in `settings.toml` (`enabled`, plus a `[plugins.<id>.settings]` subtable passed to the plugin); a plugin's state
 reaches key labels as `{<id>.<key>}`.
 
 ## Command line

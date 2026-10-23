@@ -35,7 +35,7 @@ The service compiles each `plugin.wasm` once and keeps the result in `~/.cache/u
 
 The sandbox is strict:
 
-- No files, no environment, no `wasi:sockets`, no `wasi:http`. Standard output and error go to the
+- No files, an empty environment (no variables are set), no `wasi:sockets`, no `wasi:http`. Standard output and error go to the
   service log. Clocks and random numbers work.
 - Every connection goes through the service, which checks it against the plugin's permissions first.
 - The plugin gets 64 MiB of memory and 500 ms for each call. It cannot run in the background between calls
@@ -56,7 +56,7 @@ What the service calls in your plugin (the exports):
 
 | Export | When |
 |---|---|
-| `init(settings)` | At start and when the plugin's settings change. `settings` is the `[plugins.<id>]` table from `settings.toml` as JSON. If it returns an error, the error is logged. |
+| `init(settings)` | At start and when the plugin's settings change. `settings` is the `[plugins.<id>.settings]` table from `settings.toml` as JSON. If it returns an error, the error is logged. |
 | `on-action(action, params)` | A key or dial runs one of your actions. `params` is the action's parameters as JSON. An error is shown to the user. |
 | `on-open(socket)` | A socket you opened is connected. |
 | `on-message(socket, data)` | Data arrived on a socket (text or binary). |
@@ -128,7 +128,7 @@ action = "greet"
 params = { name = "Ana" }
 ```
 
-Values in `params` and in `[plugins.<id>]` that have no JSON form (dates and times) reach the plugin as strings.
+Values in `params` and in `[plugins.<id>.settings]` that have no JSON form (dates and times) reach the plugin as strings.
 
 **Contract versions.** `contract = "1.0"` loads if the major version equals the service's (1) and the
 minor version is not newer than the service's (0 today). A plugin that asks for more shows as
@@ -315,7 +315,7 @@ ulanzi_plugin::export_plugin!(Hello);
 
 Walk-through:
 
-1. `init` reads the optional `start` value from `[plugins.hello]` in `settings.toml` and publishes the
+1. `init` reads the optional `start` value from `[plugins.hello.settings]` in `settings.toml` and publishes the
    count.
 2. `count` adds one and publishes it. A key labelled `Count: {hello.count}` shows the new number.
 3. `greet` reads its parameter and publishes `{hello.greeting}`. A missing name returns an error, which
@@ -337,12 +337,14 @@ ulanzictl plugin dev-mode on|off
 Statuses: `off` (turned off), `ready` (loaded, starts on first use), `starting`, `running`, `problem`
 (running, with the plugin's own message), `failed` (stopped working; restart it) and `incompatible`
 (cannot be loaded; the reason follows). The same operations exist on D-Bus, see the
-[technical guide](technical.md#d-bus-api). Plugin settings are the `[plugins.<id>]` table in
-`settings.toml`:
+[technical guide](technical.md#d-bus-api). Each plugin has a `[plugins.<id>]` table in `settings.toml` with `enabled` and a
+`[plugins.<id>.settings]` subtable; the subtable reaches `init` as JSON:
 
 ```toml
 [plugins.hello]
 enabled = true
+
+[plugins.hello.settings]
 start = 10        # whatever the plugin reads in init()
 ```
 
