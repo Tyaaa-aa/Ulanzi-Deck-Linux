@@ -47,14 +47,17 @@ const MAX_SECRETS: usize = 256;
 const MAX_STATE_KEYS: usize = 256;
 /// Longest key for `set-state` and secrets, in bytes.
 const MAX_KEY: usize = 256;
-/// Longest value for `set-state` and secrets, in bytes.
-const MAX_VALUE: usize = 64 * 1024;
+/// Longest `set-state` value, in bytes. Values are label text (`{<plugin>.<key>}`).
+const MAX_STATE_VALUE: usize = 1024;
+/// Longest secret value, in bytes.
+const MAX_SECRET_VALUE: usize = 64 * 1024;
 const MEMORY_LIMIT: usize = 64 << 20;
 /// Live timers per instance. Far above what a sane plugin needs, low enough to bound memory.
 const MAX_TIMERS: usize = 4096;
 /// Repeating timers fire at most this often.
 const MIN_REPEAT: Duration = Duration::from_millis(10);
-/// A guest stdout/stderr line longer than this is logged in pieces; a longer `log` is truncated.
+/// A guest stdout/stderr line longer than this is logged in pieces; a longer `log` or `set-status`
+/// message is truncated.
 const MAX_LOG_LINE: usize = 4096;
 
 /// What the host asks a plugin instance to do, in order.
@@ -134,8 +137,9 @@ pub enum Exit {
 /// [`Event::Stop`] or a crash; `exited` then resolves.
 ///
 /// The instance is gone (treat it as `<name> stopped working`) when an action's reply receiver
-/// errs with `RecvError` (the event was dropped: queue full, or the instance already ended) or
-/// when `exited` errs (the thread ended without reporting, which should not happen).
+/// errs with `RecvError` (the event was dropped because the instance already ended) or when
+/// `exited` errs (the thread ended without reporting, which should not happen). An action
+/// [`InstanceHandle::post`] refuses with [`Dropped::Full`] found the plugin busy instead.
 /// Await `exited` through `&mut handle.exited`: the handle stops the instance when dropped.
 pub struct InstanceHandle {
     /// Bounded (1024). Prefer [`InstanceHandle::post`], which never blocks.
@@ -169,10 +173,19 @@ impl InstanceHandle {
     }
 
     /// Queue an event without blocking. When the queue is full the event is dropped (an action's
-    /// reply sender with it) and one warning is logged per overflow episode. False when dropped.
-    pub fn post(&self, event: Event) -> bool {
-        self.queue.post(event)
+    /// reply sender with it) and one warning is logged per overflow episode.
+    pub fn post(&self, event: Event) -> Result<(), Dropped> {
+        self.queue.try_post(event)
     }
+}
+
+/// Why an event was not queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dropped {
+    /// The queue is full: the plugin is busy.
+    Full,
+    /// The instance has ended.
+    Gone,
 }
 
 /// The sending side of an instance's event queue, shared by the handle, timers and sockets.
@@ -184,14 +197,19 @@ pub(crate) struct Queue {
 }
 
 impl Queue {
+    /// [`Queue::try_post`], true when queued.
     pub(crate) fn post(&self, event: Event) -> bool {
+        self.try_post(event).is_ok()
+    }
+
+    pub(crate) fn try_post(&self, event: Event) -> Result<(), Dropped> {
         match self.tx.try_send(event) {
             Ok(()) => {
                 if self.overflowing.load(Ordering::Relaxed) && self.overflowing.swap(false, Ordering::Relaxed)
                 {
                     tracing::info!(target: "plugin", plugin = %self.plugin, "event queue has room again");
                 }
-                true
+                Ok(())
             }
             Err(TrySendError::Full(_)) => {
                 if !self.overflowing.swap(true, Ordering::Relaxed) {
@@ -200,9 +218,9 @@ impl Queue {
                         "event queue full ({EVENT_QUEUE}); dropping events until it drains"
                     );
                 }
-                false
+                Err(Dropped::Full)
             }
-            Err(TrySendError::Disconnected(_)) => false,
+            Err(TrySendError::Disconnected(_)) => Err(Dropped::Gone),
         }
     }
 }
@@ -234,6 +252,8 @@ pub struct HostState {
     timers_full_warned: bool,
     /// The `set-state` keys used so far (at most `MAX_STATE_KEYS`).
     state_keys: HashSet<String>,
+    /// The last `set-status` reported; a repeat is not reported again.
+    last_status: Option<(Status, String)>,
     /// Limits already warned about (one warning per instance and kind).
     warned: BTreeSet<&'static str>,
     /// Set by `InstanceHandle::stop`; checked between events and during guest calls.
@@ -358,8 +378,8 @@ impl core::Host for HostState {
     }
 
     fn set_state(&mut self, key: String, value: String) {
-        if key.len() > MAX_KEY || value.len() > MAX_VALUE {
-            let msg = format!("state over {MAX_KEY} B key / {MAX_VALUE} B value is ignored");
+        if key.len() > MAX_KEY || value.len() > MAX_STATE_VALUE {
+            let msg = format!("state over {MAX_KEY} B key / {MAX_STATE_VALUE} B value is ignored");
             self.warn_once("state-size", &msg);
             return;
         }
@@ -379,8 +399,8 @@ impl core::Host for HostState {
     }
 
     fn secret_set(&mut self, key: String, value: String) {
-        if key.len() > MAX_KEY || value.len() > MAX_VALUE {
-            let msg = format!("secret over {MAX_KEY} B key / {MAX_VALUE} B value is ignored");
+        if key.len() > MAX_KEY || value.len() > MAX_SECRET_VALUE {
+            let msg = format!("secret over {MAX_KEY} B key / {MAX_SECRET_VALUE} B value is ignored");
             self.warn_once("secret-size", &msg);
             return;
         }
@@ -402,6 +422,15 @@ impl core::Host for HostState {
     }
 
     fn set_status(&mut self, status: Status, message: String) {
+        let message = truncate(&message, MAX_LOG_LINE).to_string();
+        if self
+            .last_status
+            .as_ref()
+            .is_some_and(|(s, m)| *s == status && *m == message)
+        {
+            return;
+        }
+        self.last_status = Some((status, message.clone()));
         self.emit(Output::Status { status, message });
     }
 
@@ -472,6 +501,7 @@ pub fn spawn_instance(
         last_timer: 0,
         timers_full_warned: false,
         state_keys: HashSet::new(),
+        last_status: None,
         warned: BTreeSet::new(),
         stop: Arc::clone(&stop),
         ticks_left: CALL_DEADLINE,

@@ -23,8 +23,8 @@ use ulanzi_core::plugin::{CONTRACT, Manifest, ManifestError};
 use super::deck_queue::DeckQueue;
 use super::ulanzi::plugin::types::Status;
 use super::{
-    Event, Exit, InstanceHandle, LoadedPlugin, Output, PluginEngine, PluginError, PluginInfo, PluginStatus,
-    SecretStore, spawn_instance,
+    Dropped, Event, Exit, InstanceHandle, LoadedPlugin, Output, PluginEngine, PluginError, PluginInfo,
+    PluginStatus, SecretStore, spawn_instance,
 };
 use crate::deck::DeckMsg;
 
@@ -397,7 +397,7 @@ impl Host {
                 e.status = PluginStatus::Failed(err.to_string());
             }
             Ok(mut handle) => {
-                handle.post(Event::Init {
+                let _ = handle.post(Event::Init {
                     settings: table_to_json(&e.settings),
                 });
                 // The supervisor awaits the exit; the handle stays here, so dropping the entry
@@ -535,12 +535,15 @@ impl Host {
         };
 
         let (reply, rx) = oneshot::channel();
-        handle.post(Event::Action {
+        let posted = handle.post(Event::Action {
             action: action.to_string(),
             params,
             reply,
         });
         drop(handle);
+        if posted == Err(Dropped::Full) {
+            return Err(PluginError::Action(format!("{name} is busy")));
+        }
         let Ok(replied) = tokio::time::timeout(REPLY_WAIT, rx).await else {
             tracing::warn!(target: "plugin", plugin = %plugin, "no reply to an action within {} s", REPLY_WAIT.as_secs());
             return Err(PluginError::Failed(name));
@@ -553,7 +556,7 @@ impl Host {
                 Err(PluginError::Failed(name))
             }
             Ok(Err(msg)) => Err(PluginError::Action(msg)),
-            // The event was dropped: the queue was full or the instance is gone.
+            // The event was dropped: the instance is gone.
             Err(_) => Err(PluginError::Failed(name)),
         }
     }
@@ -590,7 +593,7 @@ impl Host {
                         self.launch(id, e);
                     }
                 } else if settings_changed && let Some(run) = &e.run {
-                    run.handle.post(Event::Init {
+                    let _ = run.handle.post(Event::Init {
                         settings: table_to_json(&e.settings),
                     });
                 }

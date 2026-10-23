@@ -427,6 +427,20 @@ async fn plugin_install_dir_needs_developer_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugin_install_dir_needs_an_absolute_path() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let e = p
+        .call::<_, _, String>("PluginInstallDir", &("plugins/hello",))
+        .await
+        .expect_err("relative path");
+    assert_eq!(
+        error_message(e),
+        "the plugin folder must be an absolute path, not \"plugins/hello\""
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugin_errors_use_the_user_facing_text() {
     let Some(r) = rig().await else { return };
     let p = proxy(&r.client).await;

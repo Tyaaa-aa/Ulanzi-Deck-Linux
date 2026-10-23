@@ -529,6 +529,11 @@ impl DeckService {
     /// Install (or replace) the plugin in the folder at `path` (absolute); returns its id. Only in
     /// Developer mode.
     async fn plugin_install_dir(&self, path: String) -> Result<String> {
+        if !std::path::Path::new(&path).is_absolute() {
+            return Err(DeckError::Invalid(format!(
+                "the plugin folder must be an absolute path, not \"{path}\""
+            )));
+        }
         let developer_mode = self
             .store
             .load_settings()
@@ -866,8 +871,10 @@ pub async fn forward_obs(
     }
 }
 
-/// Send `PluginsChanged` whenever the plugin list or a status changes.
+/// Send `PluginsChanged` whenever the plugin list or a status changes, at most once per
+/// `PLUGINS_CHANGED_EVERY` (changes meanwhile are folded into the next signal).
 pub async fn forward_plugins(conn: Connection, host: PluginHost) {
+    const PLUGINS_CHANGED_EVERY: std::time::Duration = std::time::Duration::from_millis(200);
     let Ok(emitter) = SignalEmitter::new(&conn, OBJECT_PATH) else {
         return;
     };
@@ -877,6 +884,8 @@ pub async fn forward_plugins(conn: Connection, host: PluginHost) {
         if let Err(e) = DeckService::plugins_changed(&emitter).await {
             tracing::debug!("signal not sent: {e}");
         }
+        // A plugin flipping its status quickly cannot flood the bus.
+        tokio::time::sleep(PLUGINS_CHANGED_EVERY).await;
     }
 }
 

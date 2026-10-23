@@ -208,18 +208,18 @@ The service enforces these for every plugin.
 
 | What | Limit |
 |---|---|
-| Time per call into the plugin | 500 ms; the call is then ended and the plugin counts as crashed |
+| Time per call into the plugin | 500 ms, waiting included (`std::thread::sleep` counts); the call is then ended and the plugin counts as crashed |
 | Memory | 64 MiB per plugin |
-| Events waiting for the plugin | 1024; when full, new events are dropped and one warning is logged per overflow |
+| Events waiting for the plugin | 1024; when full, new events are dropped and one warning is logged per overflow. A key pressed meanwhile reports "<name> is busy" |
 | Timers | 4096 per plugin; repeating timers at most every 10 ms |
 | Open sockets | 64; requests in flight: 64 |
 | Message size | 1 MiB per WebSocket message |
 | HTTP response body | 8 MiB |
 | Unsent data per socket | 8 MiB |
 | Connect / HTTP timeout | 15 s / 30 s |
-| State | 256 keys; key up to 256 bytes, value up to 64 KiB. Anything over is ignored with a log line |
+| State | 256 keys; key up to 256 bytes, value up to 1 KiB (it is label text). Anything over is ignored with a log line |
 | Secrets | 256 keys; key up to 256 bytes, value up to 64 KiB. Anything over is ignored with a log line |
-| Log line | 4096 bytes |
+| Log line, status message | 4096 bytes; longer ones are cut |
 
 Headers `Host`, `Connection`, `Transfer-Encoding` and `Content-Length` are set by the service; a request
 that includes one fails with `header not allowed: <name>`. HTTP requests use no proxy.
@@ -268,8 +268,9 @@ ulanzictl plugin list
 ```
 
 Installing from a folder is refused with "Turn on Developer mode to install plugins from a folder"
-until developer mode is on. The installer checks `plugin.toml` and the folder name before copying, and
-the service tells you in `plugin list` if anything is wrong. A broken plugin never stops the others:
+until developer mode is on. The installer checks `plugin.toml` and compiles `plugin.wasm` before
+copying. The source folder can have any name: the plugin is installed in a folder named after the `id`
+in its `plugin.toml`. The service tells you in `plugin list` if anything is wrong. A broken plugin never stops the others:
 it is listed as `incompatible` with the reason.
 
 ## Example: hello

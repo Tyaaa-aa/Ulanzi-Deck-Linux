@@ -84,7 +84,8 @@ pub struct PluginEngine {
 
 impl PluginEngine {
     /// Epoch interruption on, compiled code cached in `cache_dir` (used as given; the caller
-    /// passes the final directory, e.g. `<Store::cache_dir()>/plugins`). Spawns the 10 ms epoch
+    /// passes the final directory, e.g. `<Store::cache_dir()>/plugins`; when it cannot be used,
+    /// with a warning, nothing is cached). Spawns the 10 ms epoch
     /// ticker on the current tokio runtime, so it must be called inside one.
     pub fn new(cache_dir: &Path) -> Result<PluginEngine, PluginError> {
         let load = |e: wasmtime::Error| PluginError::Load(format!("{e:#}"));
@@ -93,10 +94,16 @@ impl PluginEngine {
 
         let mut cache_cfg = CacheConfig::new();
         cache_cfg.with_directory(cache_dir);
-        let cache = Cache::new(cache_cfg).map_err(load)?;
+        // Without a usable cache folder plugins still run; they are compiled at every start.
+        let cache = Cache::new(cache_cfg)
+            .inspect_err(|e| {
+                let dir = cache_dir.display();
+                tracing::warn!("no compile cache for plugins in {dir}: {e:#}");
+            })
+            .ok();
         let mut config = Config::new();
         config.epoch_interruption(true);
-        config.cache(Some(cache));
+        config.cache(cache);
         let engine = Engine::new(&config).map_err(load)?;
 
         let mut linker = Linker::<HostState>::new(&engine);

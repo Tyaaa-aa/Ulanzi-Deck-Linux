@@ -49,7 +49,7 @@ world plugin {
     use types.{payload, http-response};
     import core;
     import net;
-    /// Settings from `[plugins.<id>]` as JSON. Called at start and when settings change.
+    /// Settings from `[plugins.<id>.settings]` as JSON. Called at start and when settings change.
     export init: func(settings: string) -> result<_, string>;
     /// `params` is the key's action params as JSON. An error is shown to the user.
     export on-action: func(action: string, params: string) -> result<_, string>;

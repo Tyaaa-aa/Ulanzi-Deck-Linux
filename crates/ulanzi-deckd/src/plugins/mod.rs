@@ -18,7 +18,7 @@ use ulanzi_core::model::Settings;
 use crate::deck::DeckMsg;
 
 pub use engine::{LoadedPlugin, PluginEngine};
-pub use instance::{Event, Exit, HostState, InstanceHandle, Output, spawn_instance};
+pub use instance::{Dropped, Event, Exit, HostState, InstanceHandle, Output, spawn_instance};
 pub use secrets::{FileSecrets, KeyringSecrets, SecretStore, system_secrets};
 pub use ulanzi_core::plugin::ManifestError;
 

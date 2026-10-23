@@ -67,6 +67,17 @@ async fn loads_hello() {
 }
 
 #[tokio::test]
+async fn unwritable_cache_still_loads() {
+    // The cache "folder" sits under a regular file, so it can never be created.
+    let file = tempfile::NamedTempFile::new().expect("file");
+    let dir = common::plugins::fixture(HELLO_PACKAGE, HELLO_MANIFEST);
+    let engine = PluginEngine::new(&file.path().join("cache")).expect("engine without a cache");
+    engine
+        .load(&hello_manifest(), &dir.path().join("plugin.wasm"))
+        .expect("load hello");
+}
+
+#[tokio::test]
 async fn refuses_garbage_wasm() {
     let cache = tempfile::tempdir().expect("cache");
     let dir = tempfile::tempdir().expect("dir");
@@ -383,6 +394,22 @@ async fn stop_cuts_a_sleep_short() {
 }
 
 #[tokio::test]
+async fn status_is_capped_and_not_repeated() {
+    let mut p = probe();
+    let long = "é".repeat(3000); // 6000 bytes
+    assert_eq!(p.act("status", json!({"message": long, "n": 3})).await, Ok(()));
+    let mut seen = Vec::new();
+    while let Ok(Some(o)) = tokio::time::timeout(Duration::from_millis(200), p.out.recv()).await {
+        if let Output::Status { message, .. } = o {
+            seen.push(message);
+        }
+    }
+    assert_eq!(seen.len(), 1, "a repeated status is reported once");
+    assert_eq!(seen[0].len(), 4096);
+    assert!(long.starts_with(&seen[0]));
+}
+
+#[tokio::test]
 async fn dropping_the_handle_ends_the_instance() {
     let Running {
         handle,
@@ -403,9 +430,13 @@ async fn dropping_the_handle_ends_the_instance() {
 #[tokio::test]
 async fn oversized_state_is_ignored() {
     let mut p = probe();
-    let big = "x".repeat(64 * 1024 + 1);
+    // Values are label text: 1 KiB at most.
+    let big = "x".repeat(1024 + 1);
+    let most = "x".repeat(1024);
     assert_eq!(p.act("state", json!({"k": "big", "v": big})).await, Ok(()));
+    assert_eq!(p.act("state", json!({"k": "most", "v": most})).await, Ok(()));
     assert_eq!(p.act("state", json!({"k": "after", "v": "1"})).await, Ok(()));
+    let mut saw_most = false;
     loop {
         let o = tokio::time::timeout(PROMPTLY, p.out.recv())
             .await
@@ -413,10 +444,12 @@ async fn oversized_state_is_ignored() {
             .expect("output");
         match o {
             Output::State { key, .. } if key == "big" => panic!("oversized state was sent"),
+            Output::State { key, .. } if key == "most" => saw_most = true,
             o if o == state("after", "1") => break,
             _ => {}
         }
     }
+    assert!(saw_most, "a 1 KiB value is fine");
 }
 
 #[test]
@@ -1172,6 +1205,28 @@ async fn crash_policy() {
     h.wait_status("probe", |s| *s == PluginStatus::Running).await;
     assert_eq!(h.host.action("probe", "state", kv).await, Ok(()));
     assert!(h.saw_state("probe", "a", "b").await);
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_full_queue_is_busy_not_broken() {
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+    let h = host_with(setup, &Settings::default(), &["probe"], mem_secrets()).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    // Hold the plugin, then queue more actions than the queue takes.
+    let held = h.host.action("probe", "sleep", json!({"ms": 300}));
+    let kv = json!({"k": "a", "v": "b"});
+    let more = (0..1100).map(|_| h.host.action("probe", "state", kv.clone()));
+    let (held, more) = tokio::join!(held, futures_util::future::join_all(more));
+    assert_eq!(held, Ok(()));
+    let busy = more
+        .iter()
+        .filter(|r| **r == Err(PluginError::Action("Probe is busy".into())))
+        .count();
+    let ok = more.iter().filter(|r| r.is_ok()).count();
+    assert!(busy > 0, "some actions found the queue full");
+    assert_eq!(busy + ok, more.len(), "{more:?}");
+    assert_eq!(h.status("probe"), Some(PluginStatus::Running));
     h.host.shutdown().await;
 }
 

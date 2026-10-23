@@ -8,10 +8,10 @@
 //! connects to exactly those addresses (no second lookup), so DNS cannot answer differently
 //! between the check and the connection.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -262,6 +262,29 @@ fn not_allowed(host: &str) -> String {
     format!("not allowed: {}", host.to_ascii_lowercase())
 }
 
+/// Refusals already logged, as (plugin, host). Bounded: when full it starts over.
+static REFUSALS: LazyLock<Mutex<HashSet<(String, String)>>> = LazyLock::new(Default::default);
+const MAX_REFUSALS: usize = 1024;
+
+/// True the first time `plugin` is refused `host` (then it is logged).
+fn first_refusal(plugin: &str, host: &str) -> bool {
+    let mut seen = REFUSALS.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.len() >= MAX_REFUSALS {
+        seen.clear();
+    }
+    seen.insert((plugin.to_string(), host.to_ascii_lowercase()))
+}
+
+/// Log a refused connection once per plugin and host.
+fn log_refusal(plugin: &str, host: &str) {
+    if first_refusal(plugin, host) {
+        tracing::warn!(
+            target: "plugin", plugin = %plugin,
+            "connection refused: {} is not in the plugin's permissions", host.to_ascii_lowercase()
+        );
+    }
+}
+
 /// The check before any network access: literal host names and addresses only. A name that could
 /// still pass through `lan` once resolved is let through here and checked again after DNS.
 fn check_literal(p: &Permissions, host: &str) -> Result<(), String> {
@@ -275,7 +298,7 @@ fn check_literal(p: &Permissions, host: &str) -> Result<(), String> {
 }
 
 /// Resolve once and check what the name resolved to; the caller connects to exactly these.
-async fn resolve(p: &Permissions, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+async fn resolve(plugin: &str, p: &Permissions, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
     let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| format!("cannot find {host}: {e}"))?
@@ -285,15 +308,16 @@ async fn resolve(p: &Permissions, host: &str, port: u16) -> Result<Vec<SocketAdd
         return Err(format!("cannot find {host}"));
     }
     if !host_allowed(p, host, &ips) {
+        log_refusal(plugin, host);
         return Err(not_allowed(host));
     }
     Ok(addrs)
 }
 
 /// Resolve, check and connect to the first address that answers.
-async fn connect_tcp(p: &Permissions, host: &str, port: u16) -> Result<TcpStream, String> {
+async fn connect_tcp(plugin: &str, p: &Permissions, host: &str, port: u16) -> Result<TcpStream, String> {
     let mut last = String::from("no address");
-    for addr in resolve(p, host, port).await? {
+    for addr in resolve(plugin, p, host, port).await? {
         match TcpStream::connect(addr).await {
             Ok(s) => {
                 let _ = s.set_nodelay(true);
@@ -346,15 +370,16 @@ impl net::Host for HostState {
         let Target {
             host, port, secure, ..
         } = split_url(&url, ("ws", 80), ("wss", 443))?;
-        check_literal(&self.manifest.permissions, &host)?;
+        check_literal(&self.manifest.permissions, &host).inspect_err(|_| log_refusal(&self.plugin, &host))?;
         let tls = match secure {
             true => Some(TLS.clone().ok_or("TLS is unavailable")?),
             false => None,
         };
         let perms = self.manifest.permissions.clone();
+        let me = Arc::clone(&self.plugin);
         self.open_socket(move |id, queue, mut plugin| async move {
             let opening = async {
-                let tcp = connect_tcp(&perms, &host, port).await?;
+                let tcp = connect_tcp(&me, &perms, &host, port).await?;
                 let config = WebSocketConfig::default()
                     .max_message_size(Some(MAX_MESSAGE))
                     .max_frame_size(Some(MAX_MESSAGE));
@@ -383,7 +408,7 @@ impl net::Host for HostState {
         if host.is_empty() {
             return Err("no host".into());
         }
-        check_literal(&self.manifest.permissions, &host)?;
+        check_literal(&self.manifest.permissions, &host).inspect_err(|_| log_refusal(&self.plugin, &host))?;
         let tls = match tls {
             true => Some(TLS.clone().ok_or("TLS is unavailable")?),
             false => None,
@@ -396,9 +421,10 @@ impl net::Host for HostState {
             None => None,
         };
         let perms = self.manifest.permissions.clone();
+        let me = Arc::clone(&self.plugin);
         self.open_socket(move |id, queue, mut plugin| async move {
             let opening = async {
-                let tcp = connect_tcp(&perms, &host, port).await?;
+                let tcp = connect_tcp(&me, &perms, &host, port).await?;
                 match (tls, name) {
                     (Some(config), Some(name)) => tokio_rustls::TlsConnector::from(config)
                         .connect(name, tcp)
@@ -449,7 +475,7 @@ impl net::Host for HostState {
 
     fn fetch(&mut self, request: HttpRequest) -> Result<u32, String> {
         let Target { uri, host, port, .. } = split_url(&request.url, ("http", 80), ("https", 443))?;
-        check_literal(&self.manifest.permissions, &host)?;
+        check_literal(&self.manifest.permissions, &host).inspect_err(|_| log_refusal(&self.plugin, &host))?;
         let method = ureq::http::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| format!("not an HTTP method: {}", request.method))?;
         check_headers(&request.headers)?;
@@ -461,11 +487,12 @@ impl net::Host for HostState {
         }
         let id = self.net.next_id();
         let perms = self.manifest.permissions.clone();
+        let me = Arc::clone(&self.plugin);
         let queue = self.queue.clone();
         let budget = Arc::clone(&self.net.budget);
         let task = self.rt.spawn(async move {
             let answer = async {
-                let addrs = tokio::time::timeout(CONNECT_TIMEOUT, resolve(&perms, &host, port))
+                let addrs = tokio::time::timeout(CONNECT_TIMEOUT, resolve(&me, &perms, &host, port))
                     .await
                     .map_err(|_| format!("timed out looking up {host}"))??;
                 // ureq blocks; its own timeouts bound the thread even when this task is aborted.
@@ -913,6 +940,18 @@ mod tests {
     }
 
     #[test]
+    fn refusals_are_logged_once() {
+        assert!(first_refusal("refusal_test", "Evil.example"));
+        assert!(!first_refusal("refusal_test", "evil.example"));
+        assert!(first_refusal("refusal_test", "other.example"));
+        assert!(first_refusal("refusal_other", "evil.example"));
+        for i in 0..2 * MAX_REFUSALS {
+            first_refusal("refusal_test", &format!("h{i}"));
+        }
+        assert!(REFUSALS.lock().expect("lock").len() <= MAX_REFUSALS);
+    }
+
+    #[test]
     fn reserved_headers_are_refused() {
         let h = |name: &str| vec![(name.to_string(), "x".to_string())];
         assert_eq!(check_headers(&h("Accept")), Ok(()));
@@ -948,10 +987,10 @@ mod tests {
     #[tokio::test]
     async fn names_are_checked_after_resolving() {
         let lan = perms(&[], true);
-        assert!(resolve(&lan, "localhost", 80).await.is_ok());
+        assert!(resolve("t", &lan, "localhost", 80).await.is_ok());
         let none = perms(&["example.com"], false);
         assert_eq!(
-            resolve(&none, "localhost", 80).await,
+            resolve("t", &none, "localhost", 80).await,
             Err("not allowed: localhost".into())
         );
     }

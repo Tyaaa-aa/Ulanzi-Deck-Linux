@@ -3,7 +3,7 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use ulanzi_plugin::{Cx, HttpRequest, HttpResponse, Payload, Plugin, Request, Socket, Timer, Value};
+use ulanzi_plugin::{Cx, HttpRequest, HttpResponse, Payload, Plugin, Request, Socket, Status, Timer, Value};
 
 #[derive(Default)]
 pub struct Probe {
@@ -123,6 +123,13 @@ impl Plugin for Probe {
                 if let Err(e) = cx.fetch(request) {
                     cx.set_state("http", format!("error: {e}"));
                     return Err(e);
+                }
+            }
+            "status" => {
+                // The same problem `n` times.
+                let message = text(&params, "message", action)?;
+                for _ in 0..params["n"].as_u64().unwrap_or(1) {
+                    cx.set_status(Status::Problem, message);
                 }
             }
             "settings" => cx.set_state("settings", self.settings.to_string()),
