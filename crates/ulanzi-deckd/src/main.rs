@@ -15,7 +15,7 @@ use ulanzi_deckd::screen::Sampler;
 use ulanzi_deckd::transport::{DeviceState, Hidraw, probe, watch_dev};
 
 const EXIT_ALREADY_RUNNING: u8 = 3;
-const SAMPLE_EVERY: Duration = Duration::from_secs(2);
+const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 fn usage() -> ! {
     eprintln!(

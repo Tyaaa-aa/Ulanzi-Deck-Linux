@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use ulanzi_core::model::{Action, ImageSource, KeyLook, MediaControl, Profile, ScreenConfig};
+use ulanzi_core::model::{Action, ImageSource, KeyLook, MediaControl, Profile};
 use ulanzi_core::render::{RenderCtx, look_hash, render_key};
 use ulanzi_proto::{ButtonEntry, ButtonImage};
 
@@ -17,7 +17,11 @@ pub struct DynamicState {
     pub vars: BTreeMap<String, String>,
     /// Whether the active media player is playing (`None` = no player).
     pub playing: Option<bool>,
-    /// Pre-rendered wide-screen image when the screen is `Custom`.
+    /// System stats with history, for the System widget.
+    pub stats: Option<ulanzi_core::render::screen::StatsData>,
+    /// The playing track, for the Now Playing widget.
+    pub media: Option<ulanzi_core::render::screen::MediaData>,
+    /// The wide-screen picture (widget mode, or the volume overlay). Set by the deck, not the sampler.
     pub screen_png: Option<Vec<u8>>,
 }
 
@@ -136,9 +140,7 @@ pub fn build_page(
     }
 
     let mut screen = ButtonEntry::default();
-    if matches!(profile.screen, ScreenConfig::Custom { .. })
-        && let Some(png) = &dynamic.screen_png
-    {
+    if let Some(png) = &dynamic.screen_png {
         let mut sh = DefaultHasher::new();
         png.hash(&mut sh);
         let name = format!("screen_{:016x}_{:08x}.png", sh.finish(), cache.generation);
@@ -195,7 +197,7 @@ mod tests {
     use std::str::FromStr;
 
     use ulanzi_core::Color;
-    use ulanzi_core::model::{IconSet, Key, Model, Widget};
+    use ulanzi_core::model::{IconSet, Key, Model};
     use ulanzi_core::render::IconLibrary;
 
     use super::*;
@@ -274,18 +276,25 @@ mod tests {
     }
 
     #[test]
-    fn screen_image_only_in_custom_mode() {
+    fn screen_image_goes_out_when_drawn() {
+        // The deck draws the picture (widgets, or the volume overlay over a firmware mode).
+        let p = profile();
+        let b = build_page(
+            &p,
+            0,
+            &ctx(),
+            &DynamicState::default(),
+            &mut RenderCache::default(),
+        );
+        assert_eq!(b.entries[&SCREEN_INDEX].icon, None);
         let d = DynamicState {
             screen_png: Some(vec![1, 2, 3]),
             ..DynamicState::default()
         };
-        let mut p = profile();
-        let b = build_page(&p, 0, &ctx(), &d, &mut RenderCache::default());
-        assert_eq!(b.entries[&SCREEN_INDEX].icon, None);
-        p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, None);
         let b = build_page(&p, 0, &ctx(), &d, &mut RenderCache::default());
         assert!(b.entries[&SCREEN_INDEX].icon.is_some());
     }
+
     #[test]
     fn partial_updates_use_fresh_image_names() {
         let mut changed = BTreeMap::new();

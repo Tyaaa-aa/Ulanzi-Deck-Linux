@@ -7,6 +7,11 @@ pub struct SysStats {
     pub cpu: u8,
     pub ram: u8,
     pub cpu_temp: u8,
+    /// The busiest GPU's load (AMD and Intel report it; 0 when unknown).
+    pub gpu: u8,
+    /// Bytes received and sent so far on all interfaces but loopback.
+    pub net_rx: u64,
+    pub net_tx: u64,
 }
 
 /// Samples system stats; CPU usage is the delta between consecutive samples.
@@ -25,11 +30,42 @@ impl SysSampler {
     }
 
     pub fn sample(&mut self) -> SysStats {
+        let (net_rx, net_tx) = self.net();
         SysStats {
             cpu: self.cpu(),
             ram: self.ram(),
             cpu_temp: self.temp(),
+            gpu: self.gpu(),
+            net_rx,
+            net_tx,
         }
+    }
+
+    fn gpu(&self) -> u8 {
+        let Ok(cards) = std::fs::read_dir(self.root.join("sys/class/drm")) else {
+            return 0;
+        };
+        cards
+            .flatten()
+            .filter_map(|c| std::fs::read_to_string(c.path().join("device/gpu_busy_percent")).ok())
+            .filter_map(|v| v.trim().parse::<u8>().ok())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn net(&self) -> (u64, u64) {
+        let Some(dev) = self.read("proc/net/dev") else {
+            return (0, 0);
+        };
+        dev.lines()
+            .skip(2)
+            .filter_map(|l| l.split_once(':'))
+            .filter(|(name, _)| name.trim() != "lo")
+            .map(|(_, rest)| {
+                let f: Vec<u64> = rest.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                (f.first().copied().unwrap_or(0), f.get(8).copied().unwrap_or(0))
+            })
+            .fold((0, 0), |(a, b), (r, t)| (a + r, b + t))
     }
 
     fn read(&self, rel: &str) -> Option<String> {

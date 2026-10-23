@@ -4,6 +4,7 @@
 mod nav;
 mod press;
 mod push;
+mod screen_rt;
 mod sleep;
 
 use std::collections::{BTreeMap, HashMap};
@@ -12,7 +13,9 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
-use ulanzi_core::model::{Action, BrightnessOp, ClockStyle, Model, Profile, ScreenConfig, Settings};
+use ulanzi_core::model::{
+    Action, AudioTarget, BrightnessOp, ClockStyle, Model, Profile, ScreenConfig, Settings,
+};
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_proto::{
@@ -29,6 +32,7 @@ pub use sleep::SleepTimer;
 
 use crate::actions::ActionRunner;
 use crate::transport::{DeviceState, Transport};
+use screen_rt::ScreenRuntime;
 
 /// The wide-screen update goes out this often; like Ulanzi Studio's, it also keeps the deck from
 /// locking itself (it locks after ~2 minutes without host traffic).
@@ -127,6 +131,46 @@ pub fn start_deck(
     events_rx
 }
 
+/// Reads the volume after volume actions, off the action queue, one read at a time: a burst of
+/// dial steps gives one read now and one more after the burst.
+#[derive(Clone)]
+struct LevelReader {
+    tx: mpsc::UnboundedSender<(u8, bool)>,
+    busy: Arc<std::sync::atomic::AtomicBool>,
+    again: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl LevelReader {
+    fn new(tx: mpsc::UnboundedSender<(u8, bool)>) -> LevelReader {
+        LevelReader {
+            tx,
+            busy: Arc::default(),
+            again: Arc::default(),
+        }
+    }
+
+    fn request(&self, input: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.busy.swap(true, SeqCst) {
+            self.again.store(true, SeqCst);
+            return;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            loop {
+                me.again.store(false, SeqCst);
+                if let Some(level) = crate::actions::audio::current_level(input).await {
+                    let _ = me.tx.send(level);
+                }
+                if !me.again.load(SeqCst) {
+                    break;
+                }
+            }
+            me.busy.store(false, SeqCst);
+        });
+    }
+}
+
 struct Deck {
     store: Store,
     settings: Settings,
@@ -159,6 +203,13 @@ struct Deck {
     upload_seq: u32,
     /// The window in front, as last reported by the desktop.
     focused: Option<ulanzi_core::autoswitch::Window>,
+    /// Widgets and the volume overlay on the wide screen.
+    screen: ScreenRuntime,
+    /// Hash of the wide-screen picture last handed to the page.
+    screen_hash: Option<u64>,
+    /// Volume levels read after volume actions, for the overlay.
+    level_tx: LevelReader,
+    level_rx: Option<mpsc::UnboundedReceiver<(u8, bool)>>,
 }
 
 impl Deck {
@@ -188,6 +239,8 @@ impl Deck {
             .and_then(|id| profiles.iter().position(|p| p.id == id))
             .unwrap_or(0);
         let now = Instant::now();
+        let (level_tx, level_rx) = mpsc::unbounded_channel();
+        let level_tx = LevelReader::new(level_tx);
         Deck {
             press: PressTracker::new(settings.hold_ms),
             sleep: SleepTimer::new(settings.sleep_after_min, now),
@@ -213,6 +266,10 @@ impl Deck {
             firmware: None,
             upload_seq: 0,
             focused: None,
+            screen: ScreenRuntime::new(now),
+            screen_hash: None,
+            level_tx,
+            level_rx: Some(level_rx),
         }
     }
 
@@ -227,6 +284,8 @@ impl Deck {
     async fn run(mut self, mut rx: mpsc::Receiver<DeckMsg>) {
         let mut tick = tokio::time::interval_at(Instant::now() + TICK, TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let wake = self.screen.wake.clone();
+        let mut levels = self.level_rx.take().expect("run once");
         loop {
             let hold_deadline = self.press.next_deadline();
             // Only arm the upload timer when an upload can actually happen; otherwise a deadline in
@@ -269,6 +328,11 @@ impl Deck {
                     }
                 } => self.push_page(false).await,
                 _ = tick.tick() => self.on_tick().await,
+                _ = wake.notified() => self.refresh_screen().await,
+                Some((pct, muted)) = levels.recv() => {
+                    self.screen.show_overlay(pct, muted, Instant::now());
+                    self.refresh_screen().await;
+                },
             }
         }
     }
@@ -294,6 +358,8 @@ impl Deck {
                     None => self.profiles.push(profile),
                 }
                 self.nav.clamp(self.profile().pages.len());
+                self.update_screen();
+                self.send_window().await;
                 self.push_page(false).await;
             }
             DeckMsg::Settings(s) => {
@@ -337,9 +403,12 @@ impl Deck {
             DeckMsg::Brightness(op) => {
                 self.internal(&Action::Brightness { op }).await;
             }
-            DeckMsg::Dynamic(d) => {
-                if d != self.dynamic {
-                    self.dynamic = d;
+            DeckMsg::Dynamic(mut d) => {
+                // The sampler sends values only; the screen picture is ours.
+                d.screen_png = self.dynamic.screen_png.clone();
+                let changed = d != self.dynamic;
+                self.dynamic = d;
+                if self.update_screen() || changed {
                     self.push_page(false).await;
                 }
             }
@@ -454,6 +523,12 @@ impl Deck {
             },
             ScreenConfig::FirmwareStats => (ScreenMode::Stats, String::new()),
             ScreenConfig::Custom { .. } => (ScreenMode::Image, String::new()),
+        };
+        // The volume overlay is a picture, so a firmware mode gives way to it for a moment.
+        let (mode, date) = if self.screen.overlay_active(Instant::now()) {
+            (ScreenMode::Image, String::new())
+        } else {
+            (mode, date)
         };
         let pct = |k: &str| {
             self.dynamic
@@ -590,8 +665,31 @@ impl Deck {
             self.last_unlock = now;
             self.send(&[unlock()]).await;
         }
-        {
-            self.send_window().await;
+        self.refresh_screen().await;
+        self.send_window().await;
+    }
+
+    /// Redraw the wide-screen picture; true if it changed.
+    fn update_screen(&mut self) -> bool {
+        let p = &self.profiles[self.active];
+        let dir = self.store.profile_dir(p.id);
+        let png = self.screen.picture(p, &dir, &self.dynamic, Instant::now());
+        if !screen_rt::changed(&mut self.screen_hash, png.as_deref()) {
+            return false;
+        }
+        self.dynamic.screen_png = png;
+        true
+    }
+
+    /// Redraw the wide screen and upload it if it changed.
+    async fn refresh_screen(&mut self) {
+        let was = self.dynamic.screen_png.is_some();
+        if self.update_screen() {
+            if was != self.dynamic.screen_png.is_some() {
+                // Overlay came or went on a firmware mode.
+                self.send_window().await;
+            }
+            self.push_page(false).await;
         }
     }
 
@@ -651,7 +749,7 @@ impl Deck {
             Control::Small(_) => p.small_buttons.right.clone(),
             Control::Dial(i) => p.pages.get(self.nav.page)?.dials.get(i as usize)?.press.clone(),
             Control::Screen => match &p.screen {
-                ScreenConfig::Custom { tap, .. } => tap.clone(),
+                ScreenConfig::Custom { tap, .. } => tap.clone().or_else(|| self.screen.default_tap(p)),
                 _ => None,
             },
             Control::Unknown(_) => None,
@@ -690,10 +788,25 @@ impl Deck {
             let (tx, mut rx) = mpsc::unbounded_channel::<Action>();
             let runner = self.runner.clone();
             let events = self.events.clone();
+            let levels = self.level_tx.clone();
             let name = c.as_str();
             tokio::spawn(async move {
                 while let Some(a) = rx.recv().await {
-                    if let Err(e) = runner.run(&a).await {
+                    let input = match &a {
+                        Action::Volume { target, .. } => match target {
+                            AudioTarget::Default => Some(false),
+                            AudioTarget::Input => Some(true),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let result = runner.run(&a).await;
+                    if result.is_ok()
+                        && let Some(input) = input
+                    {
+                        levels.request(input);
+                    }
+                    if let Err(e) = result {
                         tracing::warn!("{name}: {e}");
                         let _ = events.send(DeckEvent::ActionFailed {
                             control: name.clone(),
@@ -751,6 +864,16 @@ impl Deck {
                     tracing::warn!("could not save brightness: {e}");
                 }
                 self.send(&[brightness(self.settings.brightness)]).await;
+                return true;
+            }
+            Action::ScreenNext => {
+                self.screen.next(Instant::now());
+                self.refresh_screen().await;
+                return true;
+            }
+            Action::Timer { op } => {
+                self.screen.timer(*op, Instant::now());
+                self.refresh_screen().await;
                 return true;
             }
             Action::SleepNow => {
@@ -832,6 +955,7 @@ impl Deck {
     }
 
     async fn page_changed(&mut self) {
+        self.update_screen();
         let profile = self.profile().id;
         self.emit(DeckEvent::Page {
             profile,

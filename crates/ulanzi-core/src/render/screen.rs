@@ -32,7 +32,7 @@ pub struct ScreenStyle {
     pub profile_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatsData {
     /// Percent histories, newest last.
     pub cpu: Vec<u8>,
@@ -44,7 +44,7 @@ pub struct StatsData {
     pub net_up: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaData {
     pub title: String,
     pub artist: String,

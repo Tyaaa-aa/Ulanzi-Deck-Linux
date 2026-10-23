@@ -95,6 +95,30 @@ pub fn app_volume_argv(inputs: &[(u32, u8)], op: &VolumeOp, step: u8, limit_100:
         .collect()
 }
 
+/// Percent and mute state from `wpctl get-volume` ("Volume: 0.45 [MUTED]").
+pub fn parse_wpctl_volume(out: &str) -> Option<(u8, bool)> {
+    let v: f32 = out.split_whitespace().nth(1)?.parse().ok()?;
+    Some((
+        (v * 100.0).round().clamp(0.0, 255.0) as u8,
+        out.contains("[MUTED]"),
+    ))
+}
+
+/// The current level of the default output (or the microphone), for the volume overlay.
+pub async fn current_level(input: bool) -> Option<(u8, bool)> {
+    let target = if input {
+        "@DEFAULT_AUDIO_SOURCE@"
+    } else {
+        "@DEFAULT_AUDIO_SINK@"
+    };
+    let out = tokio::process::Command::new("wpctl")
+        .args(["get-volume", target])
+        .output()
+        .await
+        .ok()?;
+    parse_wpctl_volume(&String::from_utf8_lossy(&out.stdout))
+}
+
 pub fn play_sound_argv(path: &str, device: Option<&str>) -> Vec<String> {
     match device {
         Some(d) => s(&["pw-play", "--target", d, path]),
@@ -172,4 +196,16 @@ pub fn play_sound(path: &str, device: Option<&str>) -> Result<(), ActionError> {
     }
     argv.push(path.to_string());
     spawn_detached(&argv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wpctl_volume_parses() {
+        assert_eq!(parse_wpctl_volume("Volume: 0.45\n"), Some((45, false)));
+        assert_eq!(parse_wpctl_volume("Volume: 1.20 [MUTED]"), Some((120, true)));
+        assert_eq!(parse_wpctl_volume("nothing"), None);
+    }
 }

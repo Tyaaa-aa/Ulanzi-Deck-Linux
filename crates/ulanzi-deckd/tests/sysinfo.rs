@@ -84,3 +84,18 @@ fn art_cache_key_stable() {
     );
     assert!(art_cache_path(d, "https://a/b.jpg").starts_with("/c/art"));
 }
+
+#[test]
+fn gpu_and_network_counters() {
+    let d = tempfile::tempdir().expect("tmp");
+    write(d.path(), "sys/class/drm/card0/device/gpu_busy_percent", "12\n");
+    write(d.path(), "sys/class/drm/card1/device/gpu_busy_percent", "57\n");
+    write(
+        d.path(),
+        "proc/net/dev",
+        "Inter-|   Receive                                                |  Transmit\n face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n    lo: 9999 1 0 0 0 0 0 0 9999 1 0 0 0 0 0 0\n  eth0: 1000 10 0 0 0 0 0 0 300 3 0 0 0 0 0 0\n wlan0: 500 5 0 0 0 0 0 0 200 2 0 0 0 0 0 0\n",
+    );
+    let s = ulanzi_deckd::sysinfo::SysSampler::new(d.path()).sample();
+    assert_eq!(s.gpu, 57, "the busiest GPU");
+    assert_eq!((s.net_rx, s.net_tx), (1500, 500), "loopback left out");
+}

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ulanzi_core::render::{Fonts, NowPlaying, render_now_playing};
+use ulanzi_core::render::screen::{MediaData, StatsData};
 
 use crate::actions::media::{MediaClient, MediaInfo, PlaybackStatus};
 use crate::deck::DynamicState;
@@ -112,13 +112,32 @@ fn download(url: &str, to: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Produces a [`DynamicState`] on demand.
+/// How many samples the System widget's graphs keep (one a second).
+pub const HISTORY: usize = 60;
+
+/// Appends `v`, keeping the newest [`HISTORY`] values.
+pub fn push_history(h: &mut Vec<u8>, v: u8) {
+    h.push(v);
+    if h.len() > HISTORY {
+        h.drain(..h.len() - HISTORY);
+    }
+}
+
+/// Bytes per second between two counter readings `secs` apart (0 after a counter reset).
+pub fn rate(prev: u64, now: u64, secs: f64) -> u64 {
+    if secs <= 0.0 {
+        return 0;
+    }
+    (now.saturating_sub(prev) as f64 / secs) as u64
+}
+
+/// Produces a [`DynamicState`] on demand: values only; the deck draws the wide screen.
 pub struct Sampler {
     sys: SysSampler,
     media: Option<MediaClient>,
     art: ArtCache,
-    fonts: Option<Fonts>,
-    last_screen: Option<(NowPlaying, Option<PathBuf>, Vec<u8>)>,
+    stats: StatsData,
+    prev_net: Option<(u64, u64, std::time::Instant)>,
 }
 
 impl Sampler {
@@ -127,20 +146,33 @@ impl Sampler {
             sys: SysSampler::new("/"),
             media,
             art: ArtCache::new(cache_dir),
-            fonts: None,
-            last_screen: None,
+            stats: StatsData::default(),
+            prev_net: None,
         }
     }
 
     pub async fn sample(&mut self) -> DynamicState {
-        let stats = self.sys.sample();
+        let sys = self.sys.sample();
         let now = chrono::Local::now();
         let mut vars = BTreeMap::new();
-        vars.insert("cpu".into(), stats.cpu.to_string());
-        vars.insert("ram".into(), stats.ram.to_string());
-        vars.insert("cpu_temp".into(), stats.cpu_temp.to_string());
+        vars.insert("cpu".into(), sys.cpu.to_string());
+        vars.insert("ram".into(), sys.ram.to_string());
+        vars.insert("gpu".into(), sys.gpu.to_string());
+        vars.insert("cpu_temp".into(), sys.cpu_temp.to_string());
         vars.insert("time".into(), now.format("%H:%M").to_string());
         vars.insert("date".into(), now.format("%Y-%m-%d").to_string());
+
+        push_history(&mut self.stats.cpu, sys.cpu);
+        push_history(&mut self.stats.ram, sys.ram);
+        push_history(&mut self.stats.gpu, sys.gpu);
+        self.stats.temp = (sys.cpu_temp > 0).then_some(sys.cpu_temp as i32);
+        let t = std::time::Instant::now();
+        if let Some((rx, tx, at)) = self.prev_net {
+            let secs = t.duration_since(at).as_secs_f64();
+            self.stats.net_down = rate(rx, sys.net_rx, secs);
+            self.stats.net_up = rate(tx, sys.net_tx, secs);
+        }
+        self.prev_net = Some((sys.net_rx, sys.net_tx, t));
 
         let media: Option<MediaInfo> = match &self.media {
             Some(m) => m.now_playing().await,
@@ -164,30 +196,40 @@ impl Sampler {
         );
         vars.insert("media_status".into(), status.into());
 
-        let np = NowPlaying {
-            title: media.as_ref().map(|m| m.title.clone()).unwrap_or_default(),
-            artist: media.as_ref().map(|m| m.artist.clone()).unwrap_or_default(),
-        };
-        let art = media
-            .as_ref()
-            .and_then(|m| m.art_url.as_deref())
-            .and_then(|u| self.art.get(u));
-        let screen_png = match &self.last_screen {
-            Some((n, a, png)) if *n == np && *a == art => png.clone(),
-            _ => {
-                let fonts = self.fonts.get_or_insert_with(Fonts::system);
-                let png = tokio::task::block_in_place(|| {
-                    render_now_playing(&np, art.as_deref(), fonts, SCREEN_OUT)
-                });
-                self.last_screen = Some((np, art, png.clone()));
-                png
-            }
-        };
+        let media_data = media.as_ref().map(|m| MediaData {
+            title: m.title.clone(),
+            artist: m.artist.clone(),
+            art: m.art_url.as_deref().and_then(|u| self.art.get(u)),
+            position_s: m.position_us.map(|u| (u / 1_000_000) as u32),
+            length_s: m.length_us.map(|u| (u / 1_000_000) as u32),
+            playing: m.status == PlaybackStatus::Playing,
+        });
 
         DynamicState {
             vars,
             playing: media.as_ref().map(|m| m.status == PlaybackStatus::Playing),
-            screen_png: Some(screen_png),
+            stats: Some(self.stats.clone()),
+            media: media_data,
+            screen_png: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_keeps_newest_and_rates_survive_resets() {
+        let mut h = Vec::new();
+        for v in 0..70u8 {
+            push_history(&mut h, v);
+        }
+        assert_eq!(h.len(), HISTORY);
+        assert_eq!(h.first(), Some(&10));
+        assert_eq!(h.last(), Some(&69));
+        assert_eq!(rate(1000, 3000, 2.0), 1000);
+        assert_eq!(rate(5000, 10, 1.0), 0);
+        assert_eq!(rate(0, 10, 0.0), 0);
     }
 }

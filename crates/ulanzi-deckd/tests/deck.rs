@@ -683,3 +683,32 @@ async fn auto_switch_can_be_turned_off() {
     settle().await;
     assert_eq!(active_profile(&r).await, before);
 }
+
+#[tokio::test(start_paused = true)]
+async fn screen_updates_are_rate_limited() {
+    let r = rig().await;
+    let mut p = profile();
+    p.screen = ulanzi_core::model::ScreenConfig::custom(
+        vec![ulanzi_core::model::Widget::Clock {
+            face: ulanzi_core::model::ClockFace::Digital,
+            hour24: true,
+            seconds: true,
+            date: false,
+        }],
+        None,
+        None,
+    );
+    r.tx.send(DeckMsg::Apply { profile: Box::new(p) })
+        .await
+        .expect("send");
+    settle().await;
+    r.mock.clear();
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let uploads = r
+        .mock
+        .commands()
+        .iter()
+        .filter(|c| **c == PARTIAL || **c == BUTTONS)
+        .count();
+    assert!(uploads <= 6, "{uploads} uploads in 5 s");
+}
