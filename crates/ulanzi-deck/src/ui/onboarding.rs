@@ -334,7 +334,8 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, start: Option<&str>) 
     );
     nav.add(&page("done", "Done", 5, &done, Some(&finish)));
 
-    if let Some(tag) = start {
+    // The welcome page is where it starts anyway.
+    if let Some(tag) = start.filter(|t| *t != "welcome") {
         // Build the history so Back works from a deep link.
         for t in ["connect", "permissions", "import", "background", "done"] {
             nav.push_by_tag(t);
