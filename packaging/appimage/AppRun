@@ -1,17 +1,58 @@
 #!/bin/sh
-# AppImage entry point: the app, or the service/CLI when called by those names.
+# AppImage entry point.
+#
+#   Ulanzi_Deck.AppImage               the app (starts the background service if none runs)
+#   Ulanzi_Deck.AppImage --install     add it to the app menu and start the service at login
+#   Ulanzi_Deck.AppImage --uninstall   undo --install (your profiles stay)
+#   Ulanzi_Deck.AppImage --service     the background service
+#   Ulanzi_Deck.AppImage --ctl ARGS    the command-line tool (ulanzictl)
 here=$(dirname "$(readlink -f "$0")")
 export PATH="$here/usr/bin:$PATH"
+id=io.github.tyaaa_aa.UlanziDeck
+data=${XDG_DATA_HOME:-$HOME/.local/share}
+units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+me=${APPIMAGE:-$0}
+
 case "${ARGV0##*/}" in
   ulanzi-deckd*) exec "$here/usr/bin/ulanzi-deckd" "$@" ;;
   ulanzictl*) exec "$here/usr/bin/ulanzictl" "$@" ;;
 esac
+
 case "${1:-}" in
   --service) shift; exec "$here/usr/bin/ulanzi-deckd" "$@" ;;
   --ctl) shift; exec "$here/usr/bin/ulanzictl" "$@" ;;
+  --install)
+    mkdir -p "$data/applications" "$data/icons/hicolor/scalable/apps" "$data/icons/hicolor/symbolic/apps" \
+      "$data/dbus-1/services" "$data/mime/packages" "$units"
+    sed "s|^Exec=.*|Exec=\"$me\" %f|" "$here/$id.desktop" >"$data/applications/$id.desktop"
+    cp "$here/usr/share/icons/hicolor/scalable/apps/"*.svg "$data/icons/hicolor/scalable/apps/"
+    cp "$here/usr/share/icons/hicolor/symbolic/apps/"*.svg "$data/icons/hicolor/symbolic/apps/"
+    cp "$here/usr/share/mime/packages/$id.mime.xml" "$data/mime/packages/"
+    cp "$here/usr/share/dbus-1/services/$id.Service.service" "$data/dbus-1/services/"
+    sed "s|^ExecStart=.*|ExecStart=\"$me\" --service|" "$here/usr/lib/systemd/user/ulanzi-deckd.service" \
+      >"$units/ulanzi-deckd.service"
+    update-mime-database "$data/mime" >/dev/null 2>&1 || true
+    update-desktop-database -q "$data/applications" >/dev/null 2>&1 || true
+    systemctl --user daemon-reload
+    busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
+    systemctl --user enable --now ulanzi-deckd.service
+    echo "Installed: “Ulanzi Deck” is in your app menu and its service starts at login."
+    echo "If you move this AppImage, run --install again."
+    exit 0
+    ;;
+  --uninstall)
+    systemctl --user disable --now ulanzi-deckd.service 2>/dev/null || true
+    rm -f "$data/applications/$id.desktop" "$data/icons/hicolor/scalable/apps/$id.svg" \
+      "$data/icons/hicolor/symbolic/apps/$id-symbolic.svg" "$data/icons/hicolor/symbolic/apps/$id-auto-symbolic.svg" \
+      "$data/mime/packages/$id.mime.xml" "$data/dbus-1/services/$id.Service.service" "$units/ulanzi-deckd.service"
+    systemctl --user daemon-reload
+    echo "Removed. Your profiles are still in ~/.config/ulanzi-deck."
+    exit 0
+    ;;
 esac
+
 # The window needs the background service; start it from this AppImage if none is running.
-if ! busctl --user status io.github.tyaaa_aa.UlanziDeck.Service >/dev/null 2>&1; then
+if ! busctl --user status $id.Service >/dev/null 2>&1; then
   setsid "$here/usr/bin/ulanzi-deckd" >/dev/null 2>&1 &
   sleep 0.5
 fi

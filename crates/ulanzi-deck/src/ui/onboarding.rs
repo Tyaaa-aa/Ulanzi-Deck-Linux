@@ -65,6 +65,16 @@ pub fn needs_rules(checks: &[Check]) -> bool {
     checks.iter().any(|c| c.ok == Some(false))
 }
 
+/// The program to run as administrator for `--install-rules`: the AppImage file itself when
+/// running from one (root can't read the AppImage's private mount), else this program.
+pub fn rules_exe() -> PathBuf {
+    std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or_else(|| PathBuf::from("ulanzi-deck"))
+}
+
 /// The command that installs the rules with administrator rights.
 pub fn install_rules_cmd(exe: &Path) -> Vec<String> {
     vec![
@@ -538,7 +548,7 @@ fn permissions_page(state: &State, nav: &adw::NavigationView) -> adw::Navigation
         .css_classes(["pill", "suggested-action"])
         .build();
     body.append(&grant);
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ulanzi-deck"));
+    let exe = rules_exe();
     // The same fix for people who prefer a terminal, in plain words.
     let manual_group = adw::PreferencesGroup::builder()
         .title("Prefer the Terminal?")
