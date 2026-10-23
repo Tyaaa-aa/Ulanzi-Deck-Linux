@@ -52,6 +52,14 @@ id = "close"
 name = "Close"
 
 [[actions]]
+id = "blast"
+name = "Blast"
+
+[[actions]]
+id = "sleep"
+name = "Sleep"
+
+[[actions]]
 id = "fetch"
 name = "Fetch"
 

@@ -24,7 +24,7 @@ use wasmtime_wasi_io::poll::Pollable;
 use wasmtime_wasi_io::streams::{OutputStream, StreamResult};
 
 use super::engine::Ticker;
-use super::net::Net;
+use super::net::{Budget, Net};
 use super::ulanzi::plugin::types::{HttpResponse, LogLevel, Payload, Status};
 use super::ulanzi::plugin::{core, types};
 use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
@@ -136,6 +136,7 @@ pub struct InstanceHandle {
     pub exited: oneshot::Receiver<Exit>,
     queue: Queue,
     stop: Arc<AtomicBool>,
+    net_budget: Arc<Budget>,
 }
 
 impl Drop for InstanceHandle {
@@ -152,6 +153,12 @@ impl InstanceHandle {
         self.stop.store(true, Ordering::Relaxed);
         // Best effort wake-up; when the queue is full the flag is seen before the next event.
         let _ = self.queue.tx.try_send(Event::Stop);
+    }
+
+    /// Bytes of network data (socket messages, HTTP bodies) waiting in the event queue. Bounded:
+    /// sockets stop reading while the budget (16 MiB) is used up.
+    pub fn net_queued(&self) -> usize {
+        self.net_budget.used()
     }
 
     /// Queue an event without blocking. When the queue is full the event is dropped (an action's
@@ -408,6 +415,7 @@ pub fn spawn_instance(
 
     let (tx, rx) = std::sync::mpsc::sync_channel(EVENT_QUEUE);
     let stop = Arc::new(AtomicBool::new(false));
+    let net_budget = Arc::new(Budget::default());
     let queue = Queue {
         tx: tx.clone(),
         overflowing: Arc::new(AtomicBool::new(false)),
@@ -437,7 +445,7 @@ pub fn spawn_instance(
         manifest,
         rt,
         queue: queue.clone(),
-        net: Net::default(),
+        net: Net::new(Arc::clone(&net_budget)),
         out,
         secrets,
         secrets_dirty: false,
@@ -477,6 +485,7 @@ pub fn spawn_instance(
         exited,
         queue,
         stop,
+        net_budget,
     })
 }
 
@@ -559,14 +568,21 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
                         Err(e)
                     }
                 },
-                Event::Open(socket) => guest.call_on_open(s, socket),
-                Event::Message(socket, data) => guest.call_on_message(s, socket, &data),
-                Event::Closed(socket, reason) => {
-                    s.data_mut().net.socket_closed(socket);
-                    guest.call_on_closed(s, socket, &reason)
-                }
+                // Socket events reach the plugin only while it has the socket open.
+                Event::Open(socket) => match s.data().net.socket_open(socket) {
+                    true => guest.call_on_open(s, socket),
+                    false => Ok(()),
+                },
+                Event::Message(socket, data) => match s.data().net.message_taken(socket, &data) {
+                    true => guest.call_on_message(s, socket, &data),
+                    false => Ok(()),
+                },
+                Event::Closed(socket, reason) => match s.data_mut().net.socket_closed(socket) {
+                    true => guest.call_on_closed(s, socket, &reason),
+                    false => Ok(()),
+                },
                 Event::Http(id, response) => {
-                    s.data_mut().net.fetch_done(id);
+                    s.data_mut().net.fetch_done(id, &response);
                     guest.call_on_http(s, id, response.as_ref().map_err(String::as_str))
                 }
                 Event::Timer(id) => match s.data_mut().timer_due(id) {

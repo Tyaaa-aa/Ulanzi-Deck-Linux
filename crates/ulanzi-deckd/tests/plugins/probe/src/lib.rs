@@ -78,6 +78,19 @@ impl Plugin for Probe {
                 let sent = cx.send(socket, Payload::Text("late".into()));
                 cx.set_state("send", sent.err().unwrap_or_else(|| "ok".into()));
             }
+            "blast" => {
+                // Send `kib` KiB in 64 KiB pieces on the last socket, then close it.
+                let socket = self.socket.ok_or("no socket")?;
+                let kib = params["kib"].as_u64().ok_or("blast needs kib")?;
+                for _ in 0..kib / 64 {
+                    cx.send(socket, Payload::Binary(vec![b'x'; 64 * 1024]))?;
+                }
+                cx.close(socket);
+            }
+            "sleep" => {
+                let ms = params["ms"].as_u64().ok_or("sleep needs ms")?;
+                std::thread::sleep(Duration::from_millis(ms));
+            }
             "fetch" => {
                 let request = HttpRequest {
                     method: "GET".into(),

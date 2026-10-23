@@ -10,14 +10,14 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::AbortHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -36,7 +36,9 @@ const MAX_SOCKETS: usize = 64;
 /// HTTP requests in flight per instance.
 const MAX_FETCHES: usize = 64;
 /// Largest incoming WebSocket message (and frame); a bigger one closes the socket.
-const MAX_MESSAGE: usize = 8 << 20;
+const MAX_MESSAGE: usize = 1 << 20;
+/// Network data (messages, response bodies) an instance may have waiting in its event queue.
+const QUEUED_NET: usize = 16 << 20;
 /// Largest HTTP response body; a bigger one fails with `response too large`.
 const MAX_BODY: u64 = 8 << 20;
 /// Bytes a socket may have waiting to be sent; `send` fails beyond that.
@@ -66,23 +68,85 @@ static TLS: LazyLock<Option<Arc<rustls::ClientConfig>>> = LazyLock::new(|| {
     }
 });
 
+/// Network data (message payloads, response bodies) waiting in an instance's event queue. Socket
+/// and HTTP tasks reserve room before posting and wait while there is none, so a flood backs up
+/// into the peer's TCP window instead of the daemon's memory; the instance thread releases the
+/// room as it takes each event.
+#[derive(Default)]
+pub(crate) struct Budget {
+    used: AtomicUsize,
+    freed: Notify,
+}
+
+impl Budget {
+    pub(crate) fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    /// Wait until `n` more bytes fit, then count them.
+    async fn reserve(&self, n: usize) {
+        let n = n.min(QUEUED_NET);
+        loop {
+            let freed = self.freed.notified();
+            tokio::pin!(freed);
+            // Register before checking, so a release in between is not missed.
+            freed.as_mut().enable();
+            let mut used = self.used.load(Ordering::Acquire);
+            while used + n <= QUEUED_NET {
+                match self
+                    .used
+                    .compare_exchange_weak(used, used + n, Ordering::AcqRel, Ordering::Acquire)
+                {
+                    Ok(_) => return,
+                    Err(now) => used = now,
+                }
+            }
+            freed.await;
+        }
+    }
+
+    fn release(&self, n: usize) {
+        let n = n.min(QUEUED_NET);
+        if n > 0 {
+            self.used.fetch_sub(n, Ordering::AcqRel);
+            self.freed.notify_waiters();
+        }
+    }
+
+    /// Post `event` carrying `n` bytes once they fit; the room is returned if it is dropped.
+    async fn post(&self, queue: &Queue, event: Event, n: usize) {
+        self.reserve(n).await;
+        if !queue.post(event) {
+            self.release(n);
+        }
+    }
+}
+
 /// The network side of an instance: its sockets and HTTP requests. Dropping it (with the Store,
 /// however the instance ends) aborts them all, which closes their connections.
-#[derive(Default)]
 pub(crate) struct Net {
     sockets: HashMap<u32, SocketEntry>,
     fetches: HashMap<u32, AbortHandle>,
     last_id: u32,
+    budget: Arc<Budget>,
 }
 
 struct SocketEntry {
+    /// Kept after the plugin closes the socket, until the task ends: a closing socket still
+    /// counts toward `MAX_SOCKETS` and is aborted with the instance.
     task: AbortHandle,
-    /// Dropping the sender (the entry) tells the task the plugin closed the socket.
-    tx: mpsc::UnboundedSender<Payload>,
-    /// Dropped with the entry; tells a socket that is still connecting to give up.
-    _gone: oneshot::Sender<()>,
-    /// Bytes queued on `tx` and not yet written.
+    /// The plugin's end; None once the plugin closed the socket.
+    open: Option<PluginEnd>,
+    /// Bytes queued by `send` and not yet written.
     unsent: Arc<AtomicUsize>,
+    /// The task ended but its `on-closed` was dropped (queue full): nothing more will come.
+    lost: Arc<AtomicBool>,
+}
+
+/// Dropping this tells the socket's task the plugin closed it.
+struct PluginEnd {
+    tx: mpsc::UnboundedSender<Payload>,
+    _gone: oneshot::Sender<()>,
 }
 
 impl Drop for Net {
@@ -97,6 +161,15 @@ impl Drop for Net {
 }
 
 impl Net {
+    pub(crate) fn new(budget: Arc<Budget>) -> Self {
+        Net {
+            sockets: HashMap::new(),
+            fetches: HashMap::new(),
+            last_id: 0,
+            budget,
+        }
+    }
+
     /// Socket and request ids share one counter, so an id names one thing at a time.
     fn next_id(&mut self) -> u32 {
         loop {
@@ -110,8 +183,11 @@ impl Net {
 
     fn room_for_socket(&mut self) -> Result<(), String> {
         if self.sockets.len() >= MAX_SOCKETS {
-            // Sockets that ended while their `on-closed` was dropped (queue full) are gone.
-            self.sockets.retain(|_, s| !s.task.is_finished());
+            // Ended sockets with nothing left to report: closed by the plugin, or their
+            // `on-closed` was dropped. One whose `on-closed` is still queued stays.
+            self.sockets.retain(|_, s| {
+                !(s.task.is_finished() && (s.open.is_none() || s.lost.load(Ordering::Relaxed)))
+            });
         }
         if self.sockets.len() >= MAX_SOCKETS {
             return Err(format!("too many sockets (at most {MAX_SOCKETS})"));
@@ -119,14 +195,53 @@ impl Net {
         Ok(())
     }
 
-    /// The socket ended and the plugin is being told so; forget it.
-    pub(crate) fn socket_closed(&mut self, id: u32) {
-        self.sockets.remove(&id);
+    /// Is the socket open as far as the plugin knows? Its events reach the plugin only then.
+    pub(crate) fn socket_open(&self, id: u32) -> bool {
+        self.sockets.get(&id).is_some_and(|s| s.open.is_some())
+    }
+
+    /// The instance thread took a message; true when it should reach the plugin.
+    pub(crate) fn message_taken(&self, id: u32, data: &Payload) -> bool {
+        self.budget.release(payload_len(data));
+        self.socket_open(id)
+    }
+
+    /// The socket ended; forget it. True when the plugin should hear of it (it did not close the
+    /// socket itself).
+    pub(crate) fn socket_closed(&mut self, id: u32) -> bool {
+        self.sockets.remove(&id).is_some_and(|s| s.open.is_some())
     }
 
     /// The request's answer is being delivered; forget it.
-    pub(crate) fn fetch_done(&mut self, id: u32) {
+    pub(crate) fn fetch_done(&mut self, id: u32, response: &Result<HttpResponse, String>) {
+        if let Ok(r) = response {
+            self.budget.release(r.body.len());
+        }
         self.fetches.remove(&id);
+    }
+}
+
+/// Headers the host sets itself; a plugin may not supply them.
+const RESERVED_HEADERS: [&str; 4] = ["host", "connection", "transfer-encoding", "content-length"];
+
+fn check_headers(headers: &[(String, String)]) -> Result<(), String> {
+    match headers.iter().find(|(name, _)| {
+        RESERVED_HEADERS
+            .iter()
+            .any(|r| name.trim().eq_ignore_ascii_case(r))
+    }) {
+        Some((name, _)) => Err(format!("header not allowed: {name}")),
+        None => Ok(()),
+    }
+}
+
+/// A host as given, without IPv6 brackets; `1.2.3.4.` is the address `1.2.3.4`, never a name to
+/// look up.
+fn host_of(host: &str) -> String {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.strip_suffix('.') {
+        Some(ip) if ip.parse::<IpAddr>().is_ok() => ip.to_string(),
+        _ => host.to_string(),
     }
 }
 
@@ -203,7 +318,7 @@ fn split_url(url: &str, plain: (&str, u16), secure: (&str, u16)) -> Result<Targe
         .host()
         .filter(|h| !h.is_empty())
         .ok_or_else(|| format!("no host in {url}"))?;
-    let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+    let host = host_of(host);
     let port = uri.port_u16().unwrap_or(default_port);
     Ok(Target {
         uri,
@@ -251,7 +366,7 @@ impl net::Host for HostState {
     }
 
     fn tcp_open(&mut self, host: String, port: u16, tls: bool) -> Result<u32, String> {
-        let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
+        let host = host_of(&host);
         if host.is_empty() {
             return Err("no host".into());
         }
@@ -297,20 +412,26 @@ impl net::Host for HostState {
             .sockets
             .get(&socket)
             .ok_or_else(|| format!("unknown socket {socket}"))?;
+        let end = entry
+            .open
+            .as_ref()
+            .ok_or_else(|| format!("socket {socket} is closed"))?;
         let len = payload_len(&data);
         if entry.unsent.load(Ordering::Relaxed) + len > MAX_UNSENT {
             return Err("too much data waiting to be sent".into());
         }
         entry.unsent.fetch_add(len, Ordering::Relaxed);
-        entry.tx.send(data).map_err(|_| {
+        end.tx.send(data).map_err(|_| {
             entry.unsent.fetch_sub(len, Ordering::Relaxed);
             format!("socket {socket} is closed")
         })
     }
 
     fn close(&mut self, socket: u32) {
-        // Dropping the entry ends the task once the queued data is sent; no `on-closed` follows.
-        self.net.sockets.remove(&socket);
+        // The task sends what is queued and closes, within CLOSE_TIMEOUT; no `on-closed` follows.
+        if let Some(entry) = self.net.sockets.get_mut(&socket) {
+            entry.open = None;
+        }
     }
 
     fn fetch(&mut self, request: HttpRequest) -> Result<u32, String> {
@@ -318,6 +439,7 @@ impl net::Host for HostState {
         check_literal(&self.manifest.permissions, &host)?;
         let method = ureq::http::Method::from_bytes(request.method.as_bytes())
             .map_err(|_| format!("not an HTTP method: {}", request.method))?;
+        check_headers(&request.headers)?;
         if self.net.fetches.len() >= MAX_FETCHES {
             self.net.fetches.retain(|_, f| !f.is_finished());
         }
@@ -327,6 +449,7 @@ impl net::Host for HostState {
         let id = self.net.next_id();
         let perms = self.manifest.permissions.clone();
         let queue = self.queue.clone();
+        let budget = Arc::clone(&self.net.budget);
         let task = self.rt.spawn(async move {
             let answer = async {
                 let addrs = tokio::time::timeout(CONNECT_TIMEOUT, resolve(&perms, &host, port))
@@ -337,7 +460,9 @@ impl net::Host for HostState {
                     .await
                     .map_err(|_| "the request failed".to_string())?
             };
-            queue.post(Event::Http(id, answer.await));
+            let answer = answer.await;
+            let size = answer.as_ref().map_or(0, |r| r.body.len());
+            budget.post(&queue, Event::Http(id, answer), size).await;
         });
         self.net.fetches.insert(id, task.abort_handle());
         Ok(id)
@@ -345,10 +470,8 @@ impl net::Host for HostState {
 }
 
 impl HostState {
-    /// Register a socket and run `body` as its task. `body` gets the socket id, the data the
-    /// plugin sends, the count of unsent bytes, and a signal that resolves when the plugin closes
-    /// the socket. It returns why the socket ended, or None when the plugin closed it (then no
-    /// `on-closed` is sent).
+    /// Register a socket and run `body` as its task. It returns why the socket ended, or None
+    /// when the plugin closed it (then no `on-closed` is sent).
     fn open_socket<F, Fut>(&mut self, body: F) -> Result<u32, String>
     where
         F: FnOnce(u32, Queue, Plugin) -> Fut,
@@ -359,6 +482,7 @@ impl HostState {
         let (tx, data) = mpsc::unbounded_channel();
         let (gone_tx, gone) = oneshot::channel();
         let unsent = Arc::new(AtomicUsize::new(0));
+        let lost = Arc::new(AtomicBool::new(false));
         let queue = self.queue.clone();
         let run = body(
             id,
@@ -367,22 +491,28 @@ impl HostState {
                 data,
                 gone,
                 unsent: Arc::clone(&unsent),
+                budget: Arc::clone(&self.net.budget),
             },
         );
-        let task = self.rt.spawn(async move {
-            let reason = match run.await {
-                Ok(Some(reason)) | Err(reason) => reason,
-                Ok(None) => return,
-            };
-            queue.post(Event::Closed(id, reason));
+        let task = self.rt.spawn({
+            let lost = Arc::clone(&lost);
+            async move {
+                let reason = match run.await {
+                    Ok(Some(reason)) | Err(reason) => reason,
+                    Ok(None) => return,
+                };
+                if !queue.post(Event::Closed(id, reason)) {
+                    lost.store(true, Ordering::Relaxed);
+                }
+            }
         });
         self.net.sockets.insert(
             id,
             SocketEntry {
                 task: task.abort_handle(),
-                tx,
-                _gone: gone_tx,
+                open: Some(PluginEnd { tx, _gone: gone_tx }),
                 unsent,
+                lost,
             },
         );
         Ok(id)
@@ -396,6 +526,16 @@ struct Plugin {
     /// Resolves when the plugin closes the socket.
     gone: oneshot::Receiver<()>,
     unsent: Arc<AtomicUsize>,
+    budget: Arc<Budget>,
+}
+
+/// One step of a socket's relay.
+enum Step {
+    Go,
+    /// The plugin closed the socket: send what is queued, close, report nothing.
+    Finish,
+    /// The connection ended; report why.
+    Ended(String),
 }
 
 impl Plugin {
@@ -419,10 +559,32 @@ impl Plugin {
     }
 }
 
+/// Run `step` unless the plugin closes the socket first.
+async fn unless_gone(gone: &mut oneshot::Receiver<()>, step: impl Future<Output = Step>) -> Step {
+    tokio::select! {
+        s = step => s,
+        _ = gone => Step::Finish,
+    }
+}
+
+/// Hand a message to the plugin once the instance's network budget has room for it.
+async fn deliver(budget: &Budget, queue: &Queue, id: u32, data: Payload) -> Step {
+    let n = payload_len(&data);
+    budget.post(queue, Event::Message(id, data), n).await;
+    Step::Go
+}
+
 fn payload_len(data: &Payload) -> usize {
     match data {
         Payload::Text(t) => t.len(),
         Payload::Binary(b) => b.len(),
+    }
+}
+
+fn ws_message(data: Payload) -> Message {
+    match data {
+        Payload::Text(t) => Message::text(t),
+        Payload::Binary(b) => Message::binary(b),
     }
 }
 
@@ -431,42 +593,63 @@ async fn pump_ws<S>(id: u32, mut ws: WebSocketStream<S>, mut plugin: Plugin, que
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let mut close_reason = None;
+    let mut close_reason: Option<String> = None;
     loop {
-        tokio::select! {
+        let step = tokio::select! {
+            _ = &mut plugin.gone => Step::Finish,
             out = plugin.data.recv() => match out {
                 Some(data) => {
                     plugin.sent(&data);
-                    let msg = match data {
-                        Payload::Text(t) => Message::text(t),
-                        Payload::Binary(b) => Message::binary(b),
-                    };
-                    if let Err(e) = ws.send(msg).await {
-                        return Some(format!("connection lost: {e}"));
-                    }
+                    let send = ws.send(ws_message(data));
+                    unless_gone(&mut plugin.gone, async {
+                        match send.await {
+                            Ok(()) => Step::Go,
+                            Err(e) => Step::Ended(format!("connection lost: {e}")),
+                        }
+                    })
+                    .await
                 }
-                None => {
-                    // The plugin closed the socket and everything it sent is out.
-                    let _ = tokio::time::timeout(CLOSE_TIMEOUT, ws.close(None)).await;
-                    return None;
-                }
+                None => Step::Finish,
             },
             msg = ws.next() => match msg {
                 Some(Ok(Message::Text(t))) => {
-                    queue.post(Event::Message(id, Payload::Text(t.as_str().to_owned())));
+                    let data = Payload::Text(t.as_str().to_owned());
+                    unless_gone(&mut plugin.gone, deliver(&plugin.budget, queue, id, data)).await
                 }
                 Some(Ok(Message::Binary(b))) => {
-                    queue.post(Event::Message(id, Payload::Binary(b.to_vec())));
+                    let data = Payload::Binary(b.to_vec());
+                    unless_gone(&mut plugin.gone, deliver(&plugin.budget, queue, id, data)).await
                 }
                 Some(Ok(Message::Close(frame))) => {
                     // tungstenite answers the close; the stream ends after that.
                     let reason = frame.map(|f| f.reason.as_str().to_owned()).unwrap_or_default();
                     close_reason = Some(if reason.is_empty() { "closed by the server".into() } else { reason });
+                    Step::Go
                 }
-                Some(Ok(_)) => {}
-                Some(Err(e)) => return Some(close_reason.unwrap_or_else(|| format!("connection lost: {e}"))),
-                None => return Some(close_reason.unwrap_or_else(|| "connection lost".into())),
+                Some(Ok(_)) => Step::Go,
+                Some(Err(e)) => Step::Ended(format!("connection lost: {e}")),
+                None => Step::Ended("connection lost".into()),
             },
+        };
+        match step {
+            Step::Go => {}
+            // A close the server already announced explains the end best.
+            Step::Ended(why) => return Some(close_reason.unwrap_or(why)),
+            Step::Finish => {
+                let data = &mut plugin.data;
+                let unsent = &plugin.unsent;
+                let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+                    while let Some(d) = data.recv().await {
+                        unsent.fetch_sub(payload_len(&d), Ordering::Relaxed);
+                        if ws.send(ws_message(d)).await.is_err() {
+                            return;
+                        }
+                    }
+                    let _ = ws.close(None).await;
+                })
+                .await;
+                return None;
+            }
         }
     }
 }
@@ -478,31 +661,57 @@ where
 {
     let mut buf = vec![0u8; READ_CHUNK];
     loop {
-        tokio::select! {
+        let step = tokio::select! {
+            _ = &mut plugin.gone => Step::Finish,
             out = plugin.data.recv() => match out {
                 Some(data) => {
                     plugin.sent(&data);
-                    let bytes = match &data {
-                        Payload::Text(t) => t.as_bytes(),
-                        Payload::Binary(b) => b.as_slice(),
-                    };
-                    if let Err(e) = stream.write_all(bytes).await {
-                        return Some(format!("connection lost: {e}"));
-                    }
+                    let write = stream.write_all(payload_bytes(&data));
+                    unless_gone(&mut plugin.gone, async {
+                        match write.await {
+                            Ok(()) => Step::Go,
+                            Err(e) => Step::Ended(format!("connection lost: {e}")),
+                        }
+                    })
+                    .await
                 }
-                None => {
-                    let _ = tokio::time::timeout(CLOSE_TIMEOUT, stream.shutdown()).await;
-                    return None;
-                }
+                None => Step::Finish,
             },
             read = stream.read(&mut buf) => match read {
-                Ok(0) => return Some("closed by the server".into()),
+                Ok(0) => Step::Ended("closed by the server".into()),
                 Ok(n) => {
-                    queue.post(Event::Message(id, Payload::Binary(buf[..n].to_vec())));
+                    let data = Payload::Binary(buf[..n].to_vec());
+                    unless_gone(&mut plugin.gone, deliver(&plugin.budget, queue, id, data)).await
                 }
-                Err(e) => return Some(format!("connection lost: {e}")),
+                Err(e) => Step::Ended(format!("connection lost: {e}")),
             },
+        };
+        match step {
+            Step::Go => {}
+            Step::Ended(why) => return Some(why),
+            Step::Finish => {
+                let data = &mut plugin.data;
+                let unsent = &plugin.unsent;
+                let _ = tokio::time::timeout(CLOSE_TIMEOUT, async {
+                    while let Some(d) = data.recv().await {
+                        unsent.fetch_sub(payload_len(&d), Ordering::Relaxed);
+                        if stream.write_all(payload_bytes(&d)).await.is_err() {
+                            return;
+                        }
+                    }
+                    let _ = stream.shutdown().await;
+                })
+                .await;
+                return None;
+            }
         }
+    }
+}
+
+fn payload_bytes(data: &Payload) -> &[u8] {
+    match data {
+        Payload::Text(t) => t.as_bytes(),
+        Payload::Binary(b) => b.as_slice(),
     }
 }
 
@@ -619,6 +828,44 @@ mod tests {
         // A name may still resolve to the local network: checked again after DNS.
         assert_eq!(check_literal(&lan, "printer.lan"), Ok(()));
         assert!(check_literal(&listed, "192.168.1.2").is_err());
+        // An address with a trailing dot is still an address, not a name for DNS.
+        assert_eq!(host_of("8.8.8.8."), "8.8.8.8");
+        assert_eq!(
+            check_literal(&lan, &host_of("8.8.8.8.")),
+            Err("not allowed: 8.8.8.8".into())
+        );
+        assert_eq!(host_of("[::1]"), "::1");
+        assert_eq!(host_of("printer.lan."), "printer.lan.");
+    }
+
+    #[test]
+    fn reserved_headers_are_refused() {
+        let h = |name: &str| vec![(name.to_string(), "x".to_string())];
+        assert_eq!(check_headers(&h("Accept")), Ok(()));
+        for name in ["Host", "connection", "Transfer-Encoding", "CONTENT-LENGTH"] {
+            assert_eq!(
+                check_headers(&h(name)),
+                Err(format!("header not allowed: {name}"))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn budget_waits_for_room() {
+        let budget = Arc::new(Budget::default());
+        budget.reserve(QUEUED_NET - 10).await;
+        let waiting = tokio::spawn({
+            let budget = Arc::clone(&budget);
+            async move { budget.reserve(20).await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiting.is_finished(), "reserved past the budget");
+        budget.release(QUEUED_NET - 10);
+        tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("room after release")
+            .expect("task");
+        assert_eq!(budget.used(), 20);
     }
 
     #[tokio::test]

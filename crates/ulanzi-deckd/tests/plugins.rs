@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use ulanzi_core::plugin::Manifest;
@@ -604,4 +605,128 @@ async fn sockets_close_when_instance_stops() {
         .expect("server sees the close within 1 s")
         .expect("close reported");
     assert_eq!(p.exit().await, Exit::Stopped);
+}
+
+#[tokio::test]
+async fn closing_sockets_end_with_the_instance() {
+    const BLAST: usize = 7680 * 1024;
+    // A peer with a tiny receive buffer that stops reading after the probe's "ping".
+    let socket = tokio::net::TcpSocket::new_v4().expect("socket");
+    socket.set_recv_buffer_size(4096).expect("rcvbuf");
+    socket.bind("127.0.0.1:0".parse().expect("addr")).expect("bind");
+    let port = socket.local_addr().expect("addr").port();
+    let listener = socket.listen(1).expect("listen");
+    let (opened_tx, opened) = oneshot::channel::<()>();
+    let (go_tx, go) = oneshot::channel::<()>();
+    let (seen_tx, seen) = oneshot::channel::<(usize, std::io::Result<()>, Duration)>();
+    tokio::spawn(async move {
+        let Ok((mut tcp, _)) = listener.accept().await else {
+            return;
+        };
+        let mut ping = [0u8; 4];
+        if tcp.read_exact(&mut ping).await.is_err() {
+            return;
+        }
+        let _ = opened_tx.send(());
+        let _ = go.await;
+        // The instance is gone: poke the connection, then read until it ends.
+        let started = Instant::now();
+        let _ = tcp.write_all(b"x").await;
+        let mut total = 0;
+        let mut buf = vec![0u8; 64 * 1024];
+        let end = loop {
+            match tcp.read(&mut buf).await {
+                Ok(0) => break Ok(()),
+                Ok(n) => total += n,
+                Err(e) => break Err(e),
+            }
+        };
+        let _ = seen_tx.send((total, end, started.elapsed()));
+    });
+    let mut p = probe();
+    assert_eq!(
+        p.act("tcp", json!({"host": "127.0.0.1", "port": port})).await,
+        Ok(())
+    );
+    tokio::time::timeout(PROMPTLY, opened)
+        .await
+        .expect("socket opens")
+        .expect("peer saw ping");
+    // Queue far more than the peer takes, then close: the socket is closing, not gone.
+    assert_eq!(p.act("blast", json!({"kib": BLAST / 1024})).await, Ok(()));
+    p.handle.stop();
+    tokio::time::timeout(PROMPTLY, &mut p.handle.exited)
+        .await
+        .expect("instance exits")
+        .expect("exit reported");
+    let _ = go_tx.send(());
+    let (total, end, took) = tokio::time::timeout(Duration::from_secs(1), seen)
+        .await
+        .expect("peer sees the connection end within 1 s")
+        .expect("peer reported");
+    // A socket left running would deliver everything and then close cleanly.
+    assert!(
+        end.is_err() || total < BLAST,
+        "socket kept sending after the instance stopped: {total} B, {end:?}, {took:?}"
+    );
+}
+
+#[tokio::test]
+async fn queued_network_data_is_bounded() {
+    const BUDGET: usize = 16 << 20;
+    const PIECE: usize = 512 * 1024;
+    const PIECES: usize = 100;
+    let (opened_tx, opened) = oneshot::channel::<()>();
+    let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(opened_tx)));
+    // After the probe's "ping", flood 50 MiB, then say "done".
+    let url = ws_server(move |mut ws| {
+        let opened_tx = slot.lock().ok().and_then(|mut s| s.take());
+        async move {
+            let _ = ws.next().await;
+            if let Some(tx) = opened_tx {
+                let _ = tx.send(());
+            }
+            for _ in 0..PIECES {
+                if ws.send(Message::binary(vec![b'x'; PIECE])).await.is_err() {
+                    return;
+                }
+            }
+            let _ = ws.send(Message::text("done")).await;
+            while ws.next().await.is_some() {}
+        }
+    })
+    .await;
+    let mut p = probe();
+    assert_eq!(p.act("ws", json!({"url": url})).await, Ok(()));
+    tokio::time::timeout(PROMPTLY, opened)
+        .await
+        .expect("socket opens")
+        .expect("server saw ping");
+    // Keep the plugin busy while the flood arrives.
+    let busy: Vec<_> = (0..3).map(|_| p.queue("sleep", json!({"ms": 300}))).collect();
+    let mut most = 0;
+    let deadline = tokio::time::Instant::now() + PROMPTLY;
+    loop {
+        most = most.max(p.handle.net_queued());
+        tokio::select! {
+            o = p.out.recv() => match o {
+                Some(o) if o == state("ws", "done") => break,
+                Some(_) => {}
+                None => panic!("instance ended"),
+            },
+            () = tokio::time::sleep(Duration::from_millis(2)) => {}
+            () = tokio::time::sleep_until(deadline) => panic!("flood not delivered in time"),
+        }
+    }
+    for rx in busy {
+        let reply = tokio::time::timeout(PROMPTLY, rx).await.expect("reply in time");
+        assert_eq!(reply, Ok(Ok(())));
+    }
+    assert!(most <= BUDGET, "{most} B of network data queued");
+    // The budget was actually reached: the socket waited instead of reading on.
+    assert!(
+        most > BUDGET / 2,
+        "only {most} B queued; the flood never backed up"
+    );
+    assert_eq!(p.handle.net_queued(), 0);
 }
