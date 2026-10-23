@@ -352,7 +352,10 @@ impl Migrator {
                         a: s("scene1"),
                         b: s("scene2"),
                     },
-                    "set_scene" => ObsAction::SetScene { scene: s("scene") },
+                    "set_scene" => ObsAction::SetScene {
+                        scene: s("scene"),
+                        preview: false,
+                    },
                     "toggle_source" => ObsAction::ToggleSource {
                         scene: s("scene"),
                         source: s("source"),

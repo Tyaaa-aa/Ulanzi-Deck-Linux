@@ -425,3 +425,37 @@ fn widget_defaults_and_actions() {
         }
     );
 }
+
+#[test]
+fn obs_actions_round_trip_and_old_ones_parse() {
+    // Written by earlier versions: no `preview` field.
+    let old: Key = toml::from_str("[tap]\nkind = \"obs\"\nobs = \"set_scene\"\nscene = \"Live\"\n")
+        .expect("old set_scene");
+    assert_eq!(
+        old.tap,
+        Some(Action::Obs(ObsAction::SetScene {
+            scene: "Live".into(),
+            preview: false
+        }))
+    );
+    for a in [
+        Action::Obs(ObsAction::InputVolume {
+            input: "Mic/Aux".into(),
+            op: VolumeOp::Down,
+            step: 3,
+        }),
+        Action::Obs(ObsAction::ToggleFilter {
+            source: "Cam".into(),
+            filter: "Blur".into(),
+        }),
+        Action::Obs(ObsAction::PauseRecord),
+        Action::Obs(ObsAction::Screenshot),
+    ] {
+        let k = Key {
+            tap: Some(a),
+            ..Key::default()
+        };
+        let text = toml::to_string(&k).expect("serialize");
+        assert_eq!(toml::from_str::<Key>(&text).expect("parse"), k, "{text}");
+    }
+}

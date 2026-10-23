@@ -306,7 +306,10 @@ static CATALOG: &[ActionSpec] = &[
         "Switch Scene",
         Obs,
         "clapperboard",
-        Action::Obs(ObsAction::SetScene { scene: String::new() }),
+        Action::Obs(ObsAction::SetScene {
+            scene: String::new(),
+            preview: false
+        }),
         Action::Obs(ObsAction::SetScene { .. })
     ),
     spec!(
@@ -346,6 +349,163 @@ static CATALOG: &[ActionSpec] = &[
         "radio",
         Action::Obs(ObsAction::ToggleStream),
         Action::Obs(ObsAction::ToggleStream)
+    ),
+    spec!(
+        "obs_record_start",
+        "Start Recording",
+        Obs,
+        "circle-play",
+        Action::Obs(ObsAction::StartRecord),
+        Action::Obs(ObsAction::StartRecord)
+    ),
+    spec!(
+        "obs_record_stop",
+        "Stop Recording",
+        Obs,
+        "circle-stop",
+        Action::Obs(ObsAction::StopRecord),
+        Action::Obs(ObsAction::StopRecord)
+    ),
+    spec!(
+        "obs_record_pause",
+        "Pause Recording",
+        Obs,
+        "circle-pause",
+        Action::Obs(ObsAction::PauseRecord),
+        Action::Obs(ObsAction::PauseRecord)
+    ),
+    spec!(
+        "obs_stream_start",
+        "Go Live",
+        Obs,
+        "cast",
+        Action::Obs(ObsAction::StartStream),
+        Action::Obs(ObsAction::StartStream)
+    ),
+    spec!(
+        "obs_stream_stop",
+        "End Stream",
+        Obs,
+        "square",
+        Action::Obs(ObsAction::StopStream),
+        Action::Obs(ObsAction::StopStream)
+    ),
+    spec!(
+        "obs_replay",
+        "Replay Buffer",
+        Obs,
+        "history",
+        Action::Obs(ObsAction::ToggleReplay),
+        Action::Obs(ObsAction::ToggleReplay)
+    ),
+    spec!(
+        "obs_replay_save",
+        "Save Replay",
+        Obs,
+        "save",
+        Action::Obs(ObsAction::SaveReplay),
+        Action::Obs(ObsAction::SaveReplay)
+    ),
+    spec!(
+        "obs_vcam",
+        "Virtual Camera",
+        Obs,
+        "webcam",
+        Action::Obs(ObsAction::ToggleVirtualCam),
+        Action::Obs(ObsAction::ToggleVirtualCam)
+    ),
+    spec!(
+        "obs_mute",
+        "Mute Input",
+        Obs,
+        "mic-off",
+        Action::Obs(ObsAction::ToggleMute { input: String::new() }),
+        Action::Obs(ObsAction::ToggleMute { .. })
+    ),
+    spec!(
+        "obs_volume_up",
+        "Input Volume Up",
+        Obs,
+        "volume-2",
+        Action::Obs(ObsAction::InputVolume {
+            input: String::new(),
+            op: VolumeOp::Up,
+            step: 2
+        }),
+        Action::Obs(ObsAction::InputVolume { op: VolumeOp::Up, .. })
+    ),
+    spec!(
+        "obs_volume_down",
+        "Input Volume Down",
+        Obs,
+        "volume-1",
+        Action::Obs(ObsAction::InputVolume {
+            input: String::new(),
+            op: VolumeOp::Down,
+            step: 2
+        }),
+        Action::Obs(ObsAction::InputVolume {
+            op: VolumeOp::Down,
+            ..
+        })
+    ),
+    spec!(
+        "obs_volume_set",
+        "Set Input Volume",
+        Obs,
+        "volume",
+        Action::Obs(ObsAction::InputVolume {
+            input: String::new(),
+            op: VolumeOp::Set { percent: 100 },
+            step: 2
+        }),
+        Action::Obs(ObsAction::InputVolume {
+            op: VolumeOp::Set { .. } | VolumeOp::Mute,
+            ..
+        })
+    ),
+    spec!(
+        "obs_filter",
+        "Filter On / Off",
+        Obs,
+        "sparkles",
+        Action::Obs(ObsAction::ToggleFilter {
+            source: String::new(),
+            filter: String::new()
+        }),
+        Action::Obs(ObsAction::ToggleFilter { .. })
+    ),
+    spec!(
+        "obs_transition",
+        "Studio Transition",
+        Obs,
+        "arrow-right-left",
+        Action::Obs(ObsAction::StudioTransition),
+        Action::Obs(ObsAction::StudioTransition)
+    ),
+    spec!(
+        "obs_collection",
+        "Scene Collection",
+        Obs,
+        "library",
+        Action::Obs(ObsAction::SetCollection { name: String::new() }),
+        Action::Obs(ObsAction::SetCollection { .. })
+    ),
+    spec!(
+        "obs_profile",
+        "OBS Profile",
+        Obs,
+        "user-cog",
+        Action::Obs(ObsAction::SetProfile { name: String::new() }),
+        Action::Obs(ObsAction::SetProfile { .. })
+    ),
+    spec!(
+        "obs_screenshot",
+        "OBS Screenshot",
+        Obs,
+        "camera",
+        Action::Obs(ObsAction::Screenshot),
+        Action::Obs(ObsAction::Screenshot)
     ),
     spec!(
         "brightness_up",
@@ -567,7 +727,28 @@ pub fn describe(a: &Action) -> String {
             VolumeOp::Set { percent } => format!("Volume {percent}% · {}", target_name(target)),
         },
         Action::Multi { steps } => format!("{} steps", steps.len()),
-        Action::Obs(ObsAction::SetScene { scene }) if !scene.is_empty() => format!("Scene · {scene}"),
+        Action::Obs(ObsAction::SetScene { scene, preview }) if !scene.is_empty() => {
+            if *preview {
+                format!("Preview · {scene}")
+            } else {
+                format!("Scene · {scene}")
+            }
+        }
+        Action::Obs(ObsAction::ToggleMute { input }) if !input.is_empty() => format!("Mute · {input}"),
+        Action::Obs(ObsAction::InputVolume { input, op, step }) if !input.is_empty() => match op {
+            VolumeOp::Up => format!("{input} +{step} dB"),
+            VolumeOp::Down => format!("{input} −{step} dB"),
+            VolumeOp::Mute => format!("Mute · {input}"),
+            VolumeOp::Set { percent } => format!("{input} at {percent}%"),
+        },
+        Action::Obs(ObsAction::ToggleFilter { source, filter }) if !filter.is_empty() => {
+            format!("{filter} on {source}")
+        }
+        Action::Obs(ObsAction::SetCollection { name }) | Action::Obs(ObsAction::SetProfile { name })
+            if !name.is_empty() =>
+        {
+            format!("{title} · {name}")
+        }
         Action::Obs(ObsAction::ToggleScenes { a, b }) if !a.is_empty() => format!("{a} ⇄ {b}"),
         Action::Obs(ObsAction::ToggleSource { source, .. }) if !source.is_empty() => {
             format!("Show / hide · {source}")

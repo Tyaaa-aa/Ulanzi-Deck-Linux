@@ -93,7 +93,10 @@ fn samples() -> Vec<Action> {
             op: TimerOp::Add { minutes: 5 },
         },
         Action::Multi { steps: vec![] },
-        Action::Obs(ObsAction::SetScene { scene: "A".into() }),
+        Action::Obs(ObsAction::SetScene {
+            scene: "A".into(),
+            preview: false,
+        }),
         Action::Obs(ObsAction::ToggleScenes {
             a: "A".into(),
             b: "B".into(),
@@ -104,6 +107,30 @@ fn samples() -> Vec<Action> {
         }),
         Action::Obs(ObsAction::ToggleRecord),
         Action::Obs(ObsAction::ToggleStream),
+        Action::Obs(ObsAction::StartRecord),
+        Action::Obs(ObsAction::StopRecord),
+        Action::Obs(ObsAction::PauseRecord),
+        Action::Obs(ObsAction::StartStream),
+        Action::Obs(ObsAction::StopStream),
+        Action::Obs(ObsAction::ToggleReplay),
+        Action::Obs(ObsAction::SaveReplay),
+        Action::Obs(ObsAction::ToggleVirtualCam),
+        Action::Obs(ObsAction::ToggleMute { input: "Mic".into() }),
+        Action::Obs(ObsAction::InputVolume {
+            input: "Mic".into(),
+            op: VolumeOp::Up,
+            step: 2,
+        }),
+        Action::Obs(ObsAction::ToggleFilter {
+            source: "Cam".into(),
+            filter: "Blur".into(),
+        }),
+        Action::Obs(ObsAction::StudioTransition),
+        Action::Obs(ObsAction::SetCollection { name: "Main".into() }),
+        Action::Obs(ObsAction::SetProfile {
+            name: "Twitch".into(),
+        }),
+        Action::Obs(ObsAction::Screenshot),
     ]
 }
 

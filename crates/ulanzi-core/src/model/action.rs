@@ -131,13 +131,61 @@ pub enum BrightnessOp {
     Down { step: u8 },
 }
 
-/// OBS actions available in M1 (migrated from the Python config). The full set arrives in M3.
+fn two_db() -> u8 {
+    2
+}
+
+/// What the deck can do in OBS Studio (obs-websocket 5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "obs", rename_all = "snake_case")]
 pub enum ObsAction {
-    SetScene { scene: String },
-    ToggleScenes { a: String, b: String },
-    ToggleSource { scene: String, source: String },
+    /// Show a scene (on the preview instead, in studio mode, with `preview`).
+    SetScene {
+        scene: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        preview: bool,
+    },
+    ToggleScenes {
+        a: String,
+        b: String,
+    },
+    ToggleSource {
+        scene: String,
+        source: String,
+    },
     ToggleRecord,
+    StartRecord,
+    StopRecord,
+    /// Pause or resume the recording.
+    PauseRecord,
     ToggleStream,
+    StartStream,
+    StopStream,
+    ToggleReplay,
+    SaveReplay,
+    ToggleVirtualCam,
+    ToggleMute {
+        input: String,
+    },
+    /// Change an input's volume; `step` is in dB.
+    InputVolume {
+        input: String,
+        op: VolumeOp,
+        #[serde(default = "two_db")]
+        step: u8,
+    },
+    ToggleFilter {
+        source: String,
+        filter: String,
+    },
+    /// Studio mode: send the preview to the program.
+    StudioTransition,
+    SetCollection {
+        name: String,
+    },
+    SetProfile {
+        name: String,
+    },
+    /// OBS's own screenshot of the program (saved where OBS saves them).
+    Screenshot,
 }

@@ -225,7 +225,10 @@ fn volume(target: AudioTarget, op: VolumeOp) -> Action {
 }
 
 fn scene(name: &str) -> Action {
-    Action::Obs(ObsAction::SetScene { scene: name.into() })
+    Action::Obs(ObsAction::SetScene {
+        scene: name.into(),
+        preview: false,
+    })
 }
 
 fn profile(name: &str, keys: Vec<Key>, dials: [Dial; 3], screen: ScreenConfig) -> Profile {

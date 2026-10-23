@@ -899,8 +899,8 @@ fn obs_rows(ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {
         }
     }
     match o {
-        ObsAction::SetScene { scene } => vec![entry_row(ed, "Scene", scene, "obs-scene", |a, t| {
-            if let Some(ObsAction::SetScene { scene }) = obs(a) {
+        ObsAction::SetScene { scene, .. } => vec![entry_row(ed, "Scene", scene, "obs-scene", |a, t| {
+            if let Some(ObsAction::SetScene { scene, .. }) = obs(a) {
                 *scene = t;
             }
         })],
@@ -928,7 +928,7 @@ fn obs_rows(ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {
                 }
             }),
         ],
-        ObsAction::ToggleRecord | ObsAction::ToggleStream => Vec::new(),
+        _ => Vec::new(),
     }
 }
 
