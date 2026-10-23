@@ -429,7 +429,7 @@ fn widget_defaults_and_actions() {
 #[test]
 fn obs_actions_round_trip_and_old_ones_parse() {
     // Written by earlier versions: no `preview` field.
-    let old: Key = toml::from_str("[tap]\nkind = \"obs\"\nobs = \"set_scene\"\nscene = \"Live\"\n")
+    let old: Key = toml::from_str("[tap]\ntype = \"obs\"\nobs = \"set_scene\"\nscene = \"Live\"\n")
         .expect("old set_scene");
     assert_eq!(
         old.tap,
