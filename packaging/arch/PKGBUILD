@@ -8,6 +8,8 @@ url="https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'dbus' 'systemd')
 makedepends=('cargo')
+# GCC's LTO objects (ring's C code) can't be read by Rust's linker.
+options=('!lto')
 optdepends=(
   'pipewire-pulse: switch audio outputs'
   'wireplumber: volume control and the volume overlay'
@@ -19,20 +21,17 @@ sha256sums=('SKIP')
 
 prepare() {
   cd "Ulanzi-Deck-Linux-$pkgver"
-  export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
   cd "Ulanzi-Deck-Linux-$pkgver"
-  export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
   cargo build --frozen --release --bins
 }
 
 check() {
   cd "Ulanzi-Deck-Linux-$pkgver"
-  export RUSTUP_TOOLCHAIN=stable
   cargo test --frozen --release -p ulanzi-proto -p ulanzi-core
 }
 
