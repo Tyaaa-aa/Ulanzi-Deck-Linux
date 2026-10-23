@@ -11,6 +11,7 @@ use ulanzi_core::catalog::{self, Category};
 use ulanzi_core::model::*;
 use uuid::Uuid;
 
+use crate::runtime;
 use crate::state::State;
 
 /// How an edit should be applied.
@@ -837,7 +838,7 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         }
         Action::SwitchProfile { profile } => vec![profile_combo(&ed, state, *profile)],
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
-        Action::Obs(o) => obs_rows(&ed, o),
+        Action::Obs(o) => obs_rows(state, &ed, o),
         Action::Timer { op } => timer_rows(&ed, *op),
         Action::NextPage
         | Action::PrevPage
@@ -891,45 +892,397 @@ fn timer_rows(ed: &Ed, op: TimerOp) -> Vec<gtk::Widget> {
     rows
 }
 
-fn obs_rows(ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {
+/// A name from OBS: type it, or pick it from what OBS has now (`kind` as in the service's ObsList;
+/// `arg` gives the scene or source the list belongs to).
+#[allow(clippy::too_many_arguments)]
+fn obs_name_row(
+    state: &State,
+    ed: &Ed,
+    title: &str,
+    value: &str,
+    kind: &'static str,
+    arg: impl Fn(&Action) -> String + 'static,
+    key: &'static str,
+    set: impl Fn(&mut Action, String) + 'static,
+) -> gtk::Widget {
+    let row = adw::EntryRow::builder().title(title).text(value).build();
+    {
+        let ed = ed.clone();
+        row.connect_changed(move |r| {
+            let t = r.text().to_string();
+            ed.apply(How::Typing(key), |a| set(a, t));
+        });
+    }
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["navigation-sidebar"])
+        .build();
+    list.connect_row_activated(|_, r| {
+        r.activate();
+    });
+    let scroller = gtk::ScrolledWindow::builder()
+        .child(&list)
+        .propagate_natural_height(true)
+        .max_content_height(320)
+        .min_content_width(220)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .build();
+    let popover = gtk::Popover::builder().child(&scroller).build();
+    let button = gtk::MenuButton::builder()
+        .icon_name("view-list-symbolic")
+        .tooltip_text("Choose from OBS")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .popover(&popover)
+        .build();
+    {
+        let (state, ed, row, pop) = (state.clone(), ed.clone(), row.downgrade(), popover.downgrade());
+        let arg = Rc::new(arg);
+        popover.connect_show(move |_| {
+            let Some(popover) = pop.upgrade() else { return };
+            while let Some(c) = list.first_child() {
+                list.remove(&c);
+            }
+            let note = |text: &str| {
+                gtk::Label::builder()
+                    .label(text)
+                    .wrap(true)
+                    .max_width_chars(28)
+                    .margin_top(8)
+                    .margin_bottom(8)
+                    .margin_start(8)
+                    .margin_end(8)
+                    .css_classes(["dim-label"])
+                    .build()
+            };
+            let Some(c) = state.client.borrow().clone() else {
+                list.append(&note("The service isn’t running"));
+                return;
+            };
+            if !state.obs.borrow().connected() {
+                let t = state.obs.borrow().title.clone();
+                list.append(&note(&format!(
+                    "OBS isn’t connected ({t}). Type the name instead."
+                )));
+                return;
+            }
+            list.append(&note("Loading…"));
+            let a = arg(&ed.cur.borrow());
+            let (list, row, popover) = (list.clone(), row.clone(), popover.clone());
+            runtime::run(async move { c.obs_list(kind, &a).await }, move |r| {
+                while let Some(c) = list.first_child() {
+                    list.remove(&c);
+                }
+                match r {
+                    Ok(names) if names.is_empty() => list.append(&note("Nothing here in OBS")),
+                    Ok(names) => {
+                        for n in names.into_iter() {
+                            let n: String = n;
+                            let item = gtk::ListBoxRow::builder()
+                                .child(&gtk::Label::builder().label(&n).xalign(0.0).build())
+                                .build();
+                            let (row, popover) = (row.clone(), popover.clone());
+                            item.connect_activate(move |_| {
+                                if let Some(r) = row.upgrade() {
+                                    r.set_text(&n);
+                                }
+                                popover.popdown();
+                            });
+                            list.append(&item);
+                        }
+                    }
+                    Err(e) => list.append(&note(&e.to_string())),
+                }
+            });
+        });
+    }
+    row.add_suffix(&button);
+    row.upcast()
+}
+
+fn obs_rows(state: &State, ed: &Ed, o: &ObsAction) -> Vec<gtk::Widget> {
     fn obs(a: &mut Action) -> Option<&mut ObsAction> {
         match a {
             Action::Obs(o) => Some(o),
             _ => None,
         }
     }
-    match o {
-        ObsAction::SetScene { scene, .. } => vec![entry_row(ed, "Scene", scene, "obs-scene", |a, t| {
-            if let Some(ObsAction::SetScene { scene, .. }) = obs(a) {
-                *scene = t;
-            }
-        })],
-        ObsAction::ToggleScenes { a: first, b: second } => vec![
-            entry_row(ed, "First Scene", first, "obs-a", |a, t| {
-                if let Some(ObsAction::ToggleScenes { a, .. }) = obs(a) {
-                    *a = t;
-                }
-            }),
-            entry_row(ed, "Second Scene", second, "obs-b", |a, t| {
-                if let Some(ObsAction::ToggleScenes { b, .. }) = obs(a) {
-                    *b = t;
-                }
-            }),
-        ],
-        ObsAction::ToggleSource { scene, source } => vec![
-            entry_row(ed, "Scene", scene, "obs-scene", |a, t| {
-                if let Some(ObsAction::ToggleSource { scene, .. }) = obs(a) {
-                    *scene = t;
-                }
-            }),
-            entry_row(ed, "Source", source, "obs-source", |a, t| {
-                if let Some(ObsAction::ToggleSource { source, .. }) = obs(a) {
-                    *source = t;
-                }
-            }),
-        ],
-        _ => Vec::new(),
+    fn obs_ref(a: &Action) -> Option<&ObsAction> {
+        match a {
+            Action::Obs(o) => Some(o),
+            _ => None,
+        }
     }
+    let none = |_: &Action| String::new();
+    let mut rows: Vec<gtk::Widget> = Vec::new();
+    let info = state.obs.borrow().clone();
+    if !info.connected() {
+        let banner = adw::ActionRow::builder()
+            .title("OBS isn’t connected")
+            .subtitle(if info.title.is_empty() {
+                "Connecting…".to_string()
+            } else {
+                info.title.clone()
+            })
+            .build();
+        banner.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+        let setup = gtk::Button::builder()
+            .label("Set Up…")
+            .valign(gtk::Align::Center)
+            .build();
+        {
+            let state = state.clone();
+            setup.connect_clicked(move |b| crate::ui::obs_setup::open_dialog(&state, b));
+        }
+        banner.add_suffix(&setup);
+        rows.push(banner.upcast());
+    }
+    let missing_scene = |scene: &str| -> Option<gtk::Widget> {
+        (info.connected()
+            && !scene.is_empty()
+            && !info.scenes.is_empty()
+            && !info.scenes.iter().any(|s| s == scene))
+        .then(|| {
+            let r = adw::ActionRow::builder()
+                .title(format!("OBS has no scene “{scene}”"))
+                .subtitle("Pick one from the list, or check the scene collection in OBS")
+                .build();
+            r.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+            r.add_css_class("warning");
+            r.upcast()
+        })
+    };
+    match o {
+        ObsAction::SetScene { scene, preview } => {
+            rows.extend(missing_scene(scene));
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Scene",
+                scene,
+                "scenes",
+                none,
+                "obs-scene",
+                |a, t| {
+                    if let Some(ObsAction::SetScene { scene, .. }) = obs(a) {
+                        *scene = t;
+                    }
+                },
+            ));
+            rows.push(switch_row(
+                ed,
+                "Preview Only",
+                "In studio mode, put the scene on the preview instead of on air",
+                *preview,
+                |a, v| {
+                    if let Some(ObsAction::SetScene { preview, .. }) = obs(a) {
+                        *preview = v;
+                    }
+                },
+            ));
+        }
+        ObsAction::ToggleScenes { a: first, b: second } => {
+            rows.extend(missing_scene(first));
+            rows.extend(missing_scene(second));
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "First Scene",
+                first,
+                "scenes",
+                none,
+                "obs-a",
+                |a, t| {
+                    if let Some(ObsAction::ToggleScenes { a, .. }) = obs(a) {
+                        *a = t;
+                    }
+                },
+            ));
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Second Scene",
+                second,
+                "scenes",
+                none,
+                "obs-b",
+                |a, t| {
+                    if let Some(ObsAction::ToggleScenes { b, .. }) = obs(a) {
+                        *b = t;
+                    }
+                },
+            ));
+        }
+        ObsAction::ToggleSource { scene, source } => {
+            rows.extend(missing_scene(scene));
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Scene",
+                scene,
+                "scenes",
+                none,
+                "obs-scene",
+                |a, t| {
+                    if let Some(ObsAction::ToggleSource { scene, .. }) = obs(a) {
+                        *scene = t;
+                    }
+                },
+            ));
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Source",
+                source,
+                "sources",
+                |a| match obs_ref(a) {
+                    Some(ObsAction::ToggleSource { scene, .. }) => scene.clone(),
+                    _ => String::new(),
+                },
+                "obs-source",
+                |a, t| {
+                    if let Some(ObsAction::ToggleSource { source, .. }) = obs(a) {
+                        *source = t;
+                    }
+                },
+            ));
+        }
+        ObsAction::ToggleMute { input } => {
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Audio Input",
+                input,
+                "inputs",
+                none,
+                "obs-input",
+                |a, t| {
+                    if let Some(ObsAction::ToggleMute { input }) = obs(a) {
+                        *input = t;
+                    }
+                },
+            ));
+        }
+        ObsAction::InputVolume { input, op, step } => {
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Audio Input",
+                input,
+                "inputs",
+                none,
+                "obs-input",
+                |a, t| {
+                    if let Some(ObsAction::InputVolume { input, .. }) = obs(a) {
+                        *input = t;
+                    }
+                },
+            ));
+            match op {
+                VolumeOp::Set { percent } => rows.push(spin_row(
+                    ed,
+                    "Volume",
+                    "Percent of full volume",
+                    (0.0, 100.0, 5.0),
+                    *percent as f64,
+                    "obs-vol",
+                    |a, v| {
+                        if let Some(ObsAction::InputVolume { op, .. }) = obs(a) {
+                            *op = VolumeOp::Set { percent: v as u8 };
+                        }
+                    },
+                )),
+                VolumeOp::Up | VolumeOp::Down => rows.push(spin_row(
+                    ed,
+                    "Step",
+                    "Decibels per press or dial click",
+                    (1.0, 20.0, 1.0),
+                    *step as f64,
+                    "obs-step",
+                    |a, v| {
+                        if let Some(ObsAction::InputVolume { step, .. }) = obs(a) {
+                            *step = v as u8;
+                        }
+                    },
+                )),
+                VolumeOp::Mute => {}
+            }
+        }
+        ObsAction::ToggleFilter { source, filter } => {
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Source",
+                source,
+                "inputs",
+                none,
+                "obs-fsource",
+                |a, t| {
+                    if let Some(ObsAction::ToggleFilter { source, .. }) = obs(a) {
+                        *source = t;
+                    }
+                },
+            ));
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Filter",
+                filter,
+                "filters",
+                |a| match obs_ref(a) {
+                    Some(ObsAction::ToggleFilter { source, .. }) => source.clone(),
+                    _ => String::new(),
+                },
+                "obs-filter",
+                |a, t| {
+                    if let Some(ObsAction::ToggleFilter { filter, .. }) = obs(a) {
+                        *filter = t;
+                    }
+                },
+            ));
+        }
+        ObsAction::SetCollection { name } => {
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "Scene Collection",
+                name,
+                "collections",
+                none,
+                "obs-coll",
+                |a, t| {
+                    if let Some(ObsAction::SetCollection { name }) = obs(a) {
+                        *name = t;
+                    }
+                },
+            ));
+        }
+        ObsAction::SetProfile { name } => {
+            rows.push(obs_name_row(
+                state,
+                ed,
+                "OBS Profile",
+                name,
+                "profiles",
+                none,
+                "obs-prof",
+                |a, t| {
+                    if let Some(ObsAction::SetProfile { name }) = obs(a) {
+                        *name = t;
+                    }
+                },
+            ));
+        }
+        ObsAction::Screenshot => rows.push(
+            adw::ActionRow::builder()
+                .subtitle("Saved where OBS saves screenshots (Settings → Advanced → Recording)")
+                .css_classes(["dim-label"])
+                .build()
+                .upcast(),
+        ),
+        _ => {}
+    }
+    rows
 }
 
 /// A small rendered key showing the action's default look (or an empty slot).
@@ -1046,13 +1399,19 @@ pub fn picker_button(
         search.connect_search_changed(move |_| list.invalidate_filter());
     }
     {
-        let popover = popover.clone();
+        let (popover, state, button) = (popover.clone(), state.clone(), button.downgrade());
         list.connect_row_activated(move |_, row| {
             let Some(Some(i)) = index.get(row.index().max(0) as usize).copied() else {
                 return;
             };
             popover.popdown();
-            on_pick((specs[i].make)());
+            let a = (specs[i].make)();
+            let is_obs = matches!(a, Action::Obs(_));
+            on_pick(a);
+            // The first OBS action while OBS is away: show how to connect.
+            if is_obs && let Some(b) = button.upgrade() {
+                crate::ui::obs_setup::offer_once(&state, &b);
+            }
         });
     }
     {

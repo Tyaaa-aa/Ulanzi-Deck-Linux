@@ -29,6 +29,25 @@ pub enum Change {
     Preview,
     /// Dragging an action from the library started or ended.
     Drag,
+    /// The OBS connection changed.
+    Obs,
+}
+
+/// What the app knows about the OBS connection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObsInfo {
+    /// `connected`, `not-running`, … (see the service's ObsStatus).
+    pub state: String,
+    pub title: String,
+    pub detail: String,
+    /// Scenes in OBS, while connected.
+    pub scenes: Vec<String>,
+}
+
+impl ObsInfo {
+    pub fn connected(&self) -> bool {
+        self.state == "connected"
+    }
 }
 
 /// Device / service status shown in the header pill and banner.
@@ -64,6 +83,7 @@ pub struct AppState {
     pub preview: RefCell<Option<ulanzi_core::edit::Field>>,
     /// Expandable rows the user opened, by path, so rebuilding the inspector keeps them open.
     pub expanded: RefCell<std::collections::HashSet<String>>,
+    pub obs: RefCell<ObsInfo>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -100,6 +120,7 @@ impl AppState {
             dragging_action: Cell::new(false),
             rules: RefCell::new(std::collections::HashMap::new()),
             expanded: RefCell::new(std::collections::HashSet::new()),
+            obs: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
         })
     }

@@ -17,22 +17,6 @@ pub fn appearance_to_color_scheme(a: AppearancePref) -> adw::ColorScheme {
     }
 }
 
-/// Port and password from obs-websocket's `config.json` (the password only when it is required).
-pub fn obs_from_websocket_config(json: &str) -> Option<(u16, Option<String>)> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let port = u16::try_from(v.get("server_port")?.as_u64()?).ok()?;
-    let auth = v.get("auth_required").and_then(|a| a.as_bool()).unwrap_or(false);
-    let password = auth
-        .then(|| {
-            v.get("server_password")
-                .and_then(|p| p.as_str())
-                .map(String::from)
-        })
-        .flatten()
-        .filter(|p| !p.is_empty());
-    Some((port, password))
-}
-
 /// Apply the appearance setting now and whenever settings change.
 pub fn follow_appearance(state: &State) {
     let apply = {
@@ -52,6 +36,11 @@ pub fn follow_appearance(state: &State) {
 
 thread_local! {
     static PENDING: RefCell<Option<glib::SourceId>> = const { RefCell::new(None) };
+}
+
+/// [`change`] for callers that hold the edit as a boxed closure.
+pub fn change_boxed(state: &State, f: Box<dyn FnOnce(&mut Settings)>) {
+    change(state, f)
 }
 
 /// Change a setting and send it to the service (debounced, so sliders don't flood it).
@@ -333,72 +322,13 @@ fn device_page(state: &State) -> adw::PreferencesPage {
 }
 
 fn integrations_page(state: &State) -> adw::PreferencesPage {
-    let s = state.settings.borrow().clone();
     let page = adw::PreferencesPage::builder()
+        .name("integrations")
         .title("Integrations")
         .icon_name("application-x-addon-symbolic")
         .build();
 
-    let obs = adw::PreferencesGroup::builder()
-        .title("OBS Studio")
-        .description("Scene, source, recording and streaming actions talk to OBS through obs-websocket")
-        .build();
-    let host = adw::EntryRow::builder().title("Host").text(&s.obs.host).build();
-    let port = spin("Port", "", (1.0, 65535.0, 1.0), s.obs.port as f64);
-    let password = adw::PasswordEntryRow::builder()
-        .title("Password")
-        .text(s.obs.password.as_deref().unwrap_or(""))
-        .build();
-    {
-        let state = state.clone();
-        host.connect_changed(move |r| {
-            let v = r.text().to_string();
-            change(&state, |s| s.obs.host = v)
-        });
-    }
-    {
-        let state = state.clone();
-        port.connect_value_notify(move |r| {
-            let v = r.value() as u16;
-            change(&state, |s| s.obs.port = v)
-        });
-    }
-    {
-        let state = state.clone();
-        password.connect_changed(move |r| {
-            let v = r.text().to_string();
-            change(&state, |s| s.obs.password = (!v.is_empty()).then_some(v))
-        });
-    }
-    let read = adw::ButtonRow::builder()
-        .title("Read from OBS Settings")
-        .start_icon_name("document-open-symbolic")
-        .build();
-    {
-        let (state, port, password) = (state.clone(), port.clone(), password.clone());
-        read.connect_activated(move |_| {
-            let path = glib::user_config_dir().join("obs-studio/plugin_config/obs-websocket/config.json");
-            match std::fs::read_to_string(&path)
-                .ok()
-                .and_then(|t| obs_from_websocket_config(&t))
-            {
-                Some((p, pw)) => {
-                    port.set_value(p as f64);
-                    password.set_text(pw.as_deref().unwrap_or(""));
-                    crate::ui::toast(&state, "Filled in from OBS");
-                }
-                None => crate::ui::toast(
-                    &state,
-                    "OBS settings not found. Turn on the WebSocket server in OBS (Tools menu) first",
-                ),
-            }
-        });
-    }
-    obs.add(&host);
-    obs.add(&port);
-    obs.add(&password);
-    obs.add(&read);
-    page.add(&obs);
+    page.add(&crate::ui::obs_setup::group(state, |st, f| change_boxed(st, f)));
 
     let input = adw::PreferencesGroup::builder().title("Keyboard").build();
     let ok = std::fs::OpenOptions::new()
@@ -634,17 +564,5 @@ mod tests {
             appearance_to_color_scheme(AppearancePref::Dark),
             adw::ColorScheme::ForceDark
         );
-    }
-
-    #[test]
-    fn reads_obs_websocket_config() {
-        let json = r#"{"alerts_enabled":false,"auth_required":true,"first_load":false,"server_enabled":true,"server_password":"s3cret","server_port":4456}"#;
-        assert_eq!(
-            obs_from_websocket_config(json),
-            Some((4456, Some("s3cret".to_string())))
-        );
-        let no_auth = r#"{"auth_required":false,"server_password":"x","server_port":4455}"#;
-        assert_eq!(obs_from_websocket_config(no_auth), Some((4455, None)));
-        assert_eq!(obs_from_websocket_config("{}"), None);
     }
 }

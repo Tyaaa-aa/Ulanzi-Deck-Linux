@@ -288,6 +288,13 @@ fn main() -> glib::ExitCode {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
+                Some("integrations") => {
+                    ui::preferences::open(&state2, &window);
+                    if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {
+                        d.set_visible_page_name("integrations");
+                    }
+                }
+                Some("obs-setup") => ui::obs_setup::open_dialog(&state2, &window),
                 Some("backups") => {
                     ui::preferences::open(&state2, &window);
                     if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {

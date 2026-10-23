@@ -113,6 +113,12 @@ pub enum ClientEvent {
         message: String,
     },
     ProfilesChanged,
+    /// The OBS connection changed: (state id, title, detail).
+    Obs {
+        state: String,
+        title: String,
+        detail: String,
+    },
     /// The service went away; edits are kept and sent when it returns.
     Disconnected,
     Reconnected,
@@ -366,6 +372,29 @@ impl Client {
         Ok(self.inner.proxy.call("FocusStatus", &()).await?)
     }
 
+    /// The OBS connection: (state id, title, detail).
+    pub async fn obs_status(&self) -> Result<(String, String, String)> {
+        Ok(self.inner.proxy.call("ObsStatus", &()).await?)
+    }
+
+    /// Names from OBS: scenes, inputs, sources (of a scene), filters (of a source), collections, profiles.
+    pub async fn obs_list(&self, kind: &str, arg: &str) -> Result<Vec<String>> {
+        Ok(self.inner.proxy.call("ObsList", &(kind, arg)).await?)
+    }
+
+    /// Use OBS's own WebSocket settings; returns what was found, in words.
+    pub async fn obs_use_detected(&self) -> Result<String> {
+        Ok(self.inner.proxy.call("ObsUseDetected", &()).await?)
+    }
+
+    pub async fn obs_enable_server(&self) -> Result<String> {
+        Ok(self.inner.proxy.call("ObsEnableServer", &()).await?)
+    }
+
+    pub async fn obs_reconnect(&self) -> Result<()> {
+        Ok(self.inner.proxy.call("ObsReconnect", &()).await?)
+    }
+
     pub async fn create_profile(&self, name: &str) -> Result<Uuid> {
         let id: String = self.inner.proxy.call("CreateProfile", &(name,)).await?;
         Uuid::parse_str(&id).map_err(|e| ClientError::Protocol(e.to_string()))
@@ -537,6 +566,10 @@ impl Client {
                         .map(|profile| ClientEvent::Page { profile, page })
                 }),
                 "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
+                "ObsStatusChanged" => body
+                    .deserialize::<(String, String, String)>()
+                    .ok()
+                    .map(|(state, title, detail)| ClientEvent::Obs { state, title, detail }),
                 _ => None,
             };
             if let Some(e) = event {

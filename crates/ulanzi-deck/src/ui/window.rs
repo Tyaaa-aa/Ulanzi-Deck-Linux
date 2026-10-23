@@ -453,6 +453,30 @@ pub fn open_profile(state: &State, id: Uuid, activate: bool) {
 }
 
 /// Connect to the service, load the active profile and settings, and follow events.
+/// Record the OBS state; when connected, fetch the scene list (for pickers and warnings).
+pub fn set_obs(state: &State, st: String, title: String, detail: String) {
+    let connected = st == "connected";
+    {
+        let mut o = state.obs.borrow_mut();
+        o.state = st;
+        o.title = title;
+        o.detail = detail;
+        if !connected {
+            o.scenes.clear();
+        }
+    }
+    state.notify(Change::Obs);
+    if connected && let Some(c) = state.client.borrow().clone() {
+        let s = state.clone();
+        runtime::run(async move { c.obs_list("scenes", "").await }, move |r| {
+            if let Ok(list) = r {
+                s.obs.borrow_mut().scenes = list;
+                s.notify(Change::Obs);
+            }
+        });
+    }
+}
+
 pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
     let state = state.clone();
     runtime::run(
@@ -482,6 +506,14 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
                     }
                     state.notify(Change::Profiles);
                     state.notify(Change::Settings);
+                    if let Some(c) = state.client.borrow().clone() {
+                        let s = state.clone();
+                        runtime::run(async move { c.obs_status().await }, move |r| {
+                            if let Ok((st, title, detail)) = r {
+                                set_obs(&s, st, title, detail);
+                            }
+                        });
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("{e}");
@@ -574,6 +606,13 @@ fn follow_events(state: &State, c: &Client) {
                             }
                         });
                     }
+                }
+                ClientEvent::Obs {
+                    state: st,
+                    title,
+                    detail,
+                } => {
+                    set_obs(&state, st, title, detail);
                 }
                 ClientEvent::ActionFailed { control, message } => {
                     tracing::info!("{control}: {message}");
