@@ -80,6 +80,13 @@ pub enum Action {
         steps: Vec<Step>,
     },
     Obs(ObsAction),
+    /// An action a plugin provides. Kept as written when the plugin is missing or off.
+    Plugin {
+        plugin: String,
+        action: String,
+        #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
+        params: toml::Table,
+    },
 }
 
 fn default_step() -> u8 {
@@ -199,4 +206,23 @@ pub enum ObsAction {
     },
     /// OBS's own screenshot of the program (saved where OBS saves them).
     Screenshot,
+}
+
+/// A TOML table as JSON, for handing to a plugin. Datetimes become RFC 3339 strings.
+pub fn table_to_json(t: &toml::Table) -> serde_json::Value {
+    serde_json::Value::Object(t.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect())
+}
+
+fn value_to_json(v: &toml::Value) -> serde_json::Value {
+    use serde_json::Value as J;
+    match v {
+        toml::Value::String(s) => J::String(s.clone()),
+        toml::Value::Integer(i) => J::from(*i),
+        // NaN and infinity have no JSON form.
+        toml::Value::Float(f) => serde_json::Number::from_f64(*f).map_or(J::Null, J::Number),
+        toml::Value::Boolean(b) => J::Bool(*b),
+        toml::Value::Datetime(d) => J::String(d.to_string()),
+        toml::Value::Array(a) => J::Array(a.iter().map(value_to_json).collect()),
+        toml::Value::Table(t) => table_to_json(t),
+    }
 }

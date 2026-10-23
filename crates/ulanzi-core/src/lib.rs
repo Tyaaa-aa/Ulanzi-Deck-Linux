@@ -11,6 +11,7 @@ pub mod import;
 pub mod migrate;
 pub mod model;
 pub mod obs;
+pub mod plugin;
 pub mod render;
 pub mod snapshot;
 pub mod steam;

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -39,6 +41,28 @@ pub struct Settings {
     /// The order profiles are listed in (ids not listed come after, in their own order).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub profile_order: Vec<Uuid>,
+    /// Per-plugin switch and settings, by plugin id (`[plugins.<id>]`).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, PluginEntry>,
+    /// Allows installing plugins from a folder.
+    pub developer_mode: bool,
+}
+
+/// One plugin's entry in `settings.toml`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginEntry {
+    pub enabled: bool,
+    pub settings: toml::Table,
+}
+
+impl Default for PluginEntry {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            settings: toml::Table::new(),
+        }
+    }
 }
 
 /// Sort `list` by `order`; entries not in `order` keep their relative order at the end.
@@ -64,6 +88,8 @@ impl Default for Settings {
             auto_switch: true,
             volume_overlay: true,
             profile_order: Vec::new(),
+            plugins: BTreeMap::new(),
+            developer_mode: false,
         }
     }
 }

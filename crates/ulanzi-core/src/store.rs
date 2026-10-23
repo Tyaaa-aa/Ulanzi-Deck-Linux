@@ -42,6 +42,11 @@ fn xdg(var: &str, fallback: &str) -> Result<PathBuf, CoreError> {
     Ok(PathBuf::from(home).join(fallback))
 }
 
+/// Where installed plugins and other app data live: `~/.local/share/ulanzi-deck`.
+pub fn data_dir() -> Result<PathBuf, CoreError> {
+    Ok(xdg("XDG_DATA_HOME", ".local/share")?.join("ulanzi-deck"))
+}
+
 impl Store {
     /// Standard XDG locations: `~/.config/ulanzi-deck`, `~/.local/state/ulanzi-deck`, `~/.cache/ulanzi-deck`.
     pub fn xdg() -> Result<Store, CoreError> {

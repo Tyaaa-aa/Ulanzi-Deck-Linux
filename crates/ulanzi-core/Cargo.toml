@@ -15,6 +15,7 @@ ulanzi-proto.workspace = true
 serde.workspace = true
 serde_norway.workspace = true
 toml.workspace = true
+serde_json.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

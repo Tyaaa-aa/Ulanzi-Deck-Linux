@@ -215,6 +215,7 @@ impl ActionRunner for Executor {
                 limit_100,
             } => audio::volume(target, op, *step, *limit_100).await,
             Action::Multi { steps } => run_multi(self, steps).await,
+            Action::Plugin { .. } => Err(ActionError::NotYet("plugin host")),
             Action::Obs(o) => match &self.obs {
                 Some(obs) => obs.action(o).await.map_err(ActionError::Failed),
                 None => Err(ActionError::Unavailable("OBS support is off".into())),

@@ -69,6 +69,8 @@ pub struct Dial {
     pub hold: Option<Action>,
 }
 
+/// `Custom` holds actions that can carry plugin params, which makes it larger than the others; one per profile, so boxing buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScreenConfig {

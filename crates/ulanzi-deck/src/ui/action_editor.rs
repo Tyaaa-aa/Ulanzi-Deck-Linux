@@ -869,7 +869,8 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         | Action::Back
         | Action::AutoProfile
         | Action::SleepNow
-        | Action::ScreenNext => Vec::new(),
+        | Action::ScreenNext
+        | Action::Plugin { .. } => Vec::new(),
     }
 }
 
