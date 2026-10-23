@@ -356,6 +356,50 @@ struct KeyWidget {
     button: gtk::Button,
     picture: gtk::Picture,
     label: gtk::Label,
+    /// Shown when the key's action can't work (a missing app, scene, file…).
+    warning: gtk::Image,
+}
+
+/// Why a key's tap or hold action can't work, if it can't.
+pub fn key_problem(state: &State, key: &ulanzi_core::model::Key) -> Option<String> {
+    let dirs = ulanzi_core::apps::application_dirs();
+    let id_file = |id: &str| {
+        if id.ends_with(".desktop") {
+            id.to_string()
+        } else {
+            format!("{id}.desktop")
+        }
+    };
+    let app_installed = |id: &str| dirs.iter().any(|d| d.join(id_file(id)).is_file());
+    let dir = profile_dir(state);
+    let file_exists = |p: &str| {
+        let p = std::path::Path::new(p);
+        p.is_file() || dir.join(p).is_file()
+    };
+    let (pages, profiles): (Vec<uuid::Uuid>, Vec<uuid::Uuid>) = (
+        state
+            .editor
+            .borrow()
+            .profile()
+            .pages
+            .iter()
+            .map(|p| p.id)
+            .collect(),
+        state.profiles.borrow().iter().map(|(id, _)| *id).collect(),
+    );
+    let obs = state.obs.borrow();
+    let scenes = obs.connected().then_some(obs.scenes.as_slice());
+    let ctx = ulanzi_core::catalog::Problems {
+        app_installed: &app_installed,
+        file_exists: &file_exists,
+        pages: &pages,
+        profiles: &profiles,
+        obs_scenes: scenes,
+    };
+    [&key.tap, &key.hold]
+        .into_iter()
+        .flatten()
+        .find_map(|a| ulanzi_core::catalog::problem(a, &ctx))
 }
 
 fn key_widget(width: i32) -> KeyWidget {
@@ -373,6 +417,14 @@ fn key_widget(width: i32) -> KeyWidget {
         .build();
     let overlay = gtk::Overlay::builder().child(&picture).build();
     overlay.add_overlay(&label);
+    let warning = gtk::Image::builder()
+        .icon_name("dialog-warning-symbolic")
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .css_classes(["key-warning"])
+        .visible(false)
+        .build();
+    overlay.add_overlay(&warning);
     let button = gtk::Button::builder()
         .child(&overlay)
         .css_classes(["deck-key"])
@@ -382,6 +434,7 @@ fn key_widget(width: i32) -> KeyWidget {
         button,
         picture,
         label,
+        warning,
     }
 }
 
@@ -771,7 +824,12 @@ pub fn build(state: &State) -> Canvas {
             faces.clone(),
         );
         move |c: Change| match c {
-            Change::Profile | Change::Page | Change::Settings | Change::Preview => {
+            Change::Profile
+            | Change::Page
+            | Change::Settings
+            | Change::Preview
+            | Change::Obs
+            | Change::Profiles => {
                 let dir = profile_dir(&state);
                 let hide = state.settings.borrow().hide_labels;
                 let align = state.settings.borrow().label_style.align.clone();
@@ -816,13 +874,21 @@ pub fn build(state: &State) -> Canvas {
                             k.label.set_valign(label_valign(&align));
                             k.label
                                 .set_visible(!hide && !own && key.look.label.visible && !text.is_empty());
-                            k.button.set_tooltip_text(
-                                key.tap
-                                    .as_ref()
-                                    .map(ulanzi_core::catalog::describe)
-                                    .as_deref()
-                                    .or(Some("No action")),
-                            );
+                            let what = key
+                                .tap
+                                .as_ref()
+                                .map(ulanzi_core::catalog::describe)
+                                .unwrap_or_else(|| "No action".into());
+                            match key_problem(&state, key) {
+                                Some(p) => {
+                                    k.warning.set_visible(true);
+                                    k.button.set_tooltip_text(Some(&format!("{what}\n⚠ {p}")));
+                                }
+                                None => {
+                                    k.warning.set_visible(false);
+                                    k.button.set_tooltip_text(Some(&what));
+                                }
+                            }
                         }
                         None => {
                             k.picture.set_paintable(Some(&or_blank(
@@ -831,6 +897,7 @@ pub fn build(state: &State) -> Canvas {
                                 ulanzi_core::render::KEY_PX as i32,
                             )));
                             k.label.set_visible(false);
+                            k.warning.set_visible(false);
                             k.button
                                 .set_tooltip_text(Some("Empty key: drop an action or an image here"));
                         }

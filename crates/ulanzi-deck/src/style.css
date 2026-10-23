@@ -285,3 +285,13 @@ row.drop-target {
   background-color: #0c0c0e;
   color: alpha(white, 0.7);
 }
+
+/* A key whose action can't work (missing app, scene, file…). */
+.key-warning {
+  color: #f6d32d;
+  background-color: rgba(0, 0, 0, 0.65);
+  border-radius: 999px;
+  padding: 3px;
+  margin: 5px;
+  -gtk-icon-size: 14px;
+}

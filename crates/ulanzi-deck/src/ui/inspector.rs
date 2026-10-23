@@ -242,6 +242,20 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) {
     header.append(&titles);
     content.append(&header);
 
+    let problem = state
+        .editor
+        .borrow()
+        .key(k)
+        .and_then(|key| crate::ui::canvas::key_problem(state, key));
+    if let Some(p) = problem {
+        let banner = adw::Banner::builder()
+            .title(format!("⚠ {p}"))
+            .revealed(true)
+            .build();
+        banner.add_css_class("key-problem");
+        content.append(&banner);
+    }
+
     content.append(&appearance_group(ctx, vec![k]));
 
     let (tap, hold) = {

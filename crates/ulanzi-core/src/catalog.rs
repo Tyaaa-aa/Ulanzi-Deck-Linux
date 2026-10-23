@@ -790,3 +790,70 @@ pub fn describe(a: &Action) -> String {
         _ => title.into(),
     }
 }
+
+/// What [`problem`] checks against.
+#[derive(Clone, Copy)]
+pub struct Problems<'a> {
+    pub app_installed: &'a dyn Fn(&str) -> bool,
+    pub file_exists: &'a dyn Fn(&str) -> bool,
+    /// Pages of the profile the key is in.
+    pub pages: &'a [Uuid],
+    /// Every profile; empty means "don't check".
+    pub profiles: &'a [Uuid],
+    /// Scenes in OBS while connected; `None` when OBS can't be asked.
+    pub obs_scenes: Option<&'a [String]>,
+}
+
+/// Why this action can't work as it is, in words for a warning badge; `None` when it looks fine.
+pub fn problem(a: &Action, c: &Problems) -> Option<String> {
+    let blank = |s: &str| s.trim().is_empty();
+    let scene = |s: &str| -> Option<String> {
+        if blank(s) {
+            return Some("Choose a scene".into());
+        }
+        c.obs_scenes
+            .filter(|list| !list.is_empty() && !list.iter().any(|x| x == s))
+            .map(|_| format!("OBS has no scene “{s}”"))
+    };
+    match a {
+        Action::Command { cmd, .. } if blank(cmd) => Some("No command entered".into()),
+        Action::LaunchApp {
+            desktop_id: Some(id), ..
+        } if !(c.app_installed)(id) => Some(format!("“{}” isn’t installed", id.trim_end_matches(".desktop"))),
+        Action::LaunchApp {
+            desktop_id: None,
+            exec: None,
+        } => Some("No app chosen".into()),
+        Action::OpenUrl { url } if blank(url) => Some("No address entered".into()),
+        Action::Shortcut { keys } if blank(keys) => Some("No keys recorded".into()),
+        Action::TypeText { text } if text.is_empty() => Some("No text entered".into()),
+        Action::PlaySound { path, .. } if blank(path) || !(c.file_exists)(path) => {
+            Some("The sound file is missing".into())
+        }
+        Action::GoToPage { page } | Action::OpenFolder { page } if !c.pages.contains(page) => {
+            Some("That page no longer exists".into())
+        }
+        Action::SwitchProfile { profile } if !c.profiles.is_empty() && !c.profiles.contains(profile) => {
+            Some("That profile no longer exists".into())
+        }
+        Action::Multi { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
+        Action::Obs(o) => match o {
+            ObsAction::SetScene { scene: s, .. } => scene(s),
+            ObsAction::ToggleScenes { a, b } => scene(a).or_else(|| scene(b)),
+            ObsAction::ToggleSource { scene: s, source } => {
+                scene(s).or_else(|| blank(source).then(|| "Choose a source".into()))
+            }
+            ObsAction::ToggleMute { input } | ObsAction::InputVolume { input, .. } if blank(input) => {
+                Some("Choose an audio input".into())
+            }
+            ObsAction::ToggleFilter { source, filter } if blank(source) || blank(filter) => {
+                Some("Choose a source and a filter".into())
+            }
+            ObsAction::SetCollection { name } | ObsAction::SetProfile { name } if blank(name) => {
+                Some("Choose one from OBS".into())
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}

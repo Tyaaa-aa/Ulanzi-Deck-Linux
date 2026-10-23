@@ -238,3 +238,71 @@ fn describe_examples() {
         "Play / Pause"
     );
 }
+
+#[test]
+fn problems_name_what_is_missing() {
+    use ulanzi_core::catalog::{Problems, problem};
+    let page = uuid::Uuid::new_v4();
+    let ctx = Problems {
+        app_installed: &|id| id == "firefox.desktop",
+        file_exists: &|p| p == "/sounds/ding.oga",
+        pages: &[page],
+        profiles: &[],
+        obs_scenes: Some(&["Live".to_string()]),
+    };
+    let app = |id: &str| Action::LaunchApp {
+        desktop_id: Some(id.into()),
+        exec: None,
+    };
+    assert_eq!(problem(&app("firefox.desktop"), &ctx), None);
+    assert!(problem(&app("gimp.desktop"), &ctx).is_some_and(|p| p.contains("gimp")));
+    let sound = |p: &str| Action::PlaySound {
+        path: p.into(),
+        device: None,
+    };
+    assert_eq!(problem(&sound("/sounds/ding.oga"), &ctx), None);
+    assert!(problem(&sound("/gone.oga"), &ctx).is_some());
+    assert_eq!(problem(&Action::GoToPage { page }, &ctx), None);
+    assert!(
+        problem(
+            &Action::GoToPage {
+                page: uuid::Uuid::new_v4()
+            },
+            &ctx
+        )
+        .is_some()
+    );
+    let scene = |s: &str| {
+        Action::Obs(ObsAction::SetScene {
+            scene: s.into(),
+            preview: false,
+        })
+    };
+    assert_eq!(problem(&scene("Live"), &ctx), None);
+    assert!(problem(&scene("Gone"), &ctx).is_some_and(|p| p.contains("Gone")));
+    assert!(problem(&scene(""), &ctx).is_some());
+    // OBS not connected: scene names can't be checked, so no warning for them.
+    let offline = Problems {
+        obs_scenes: None,
+        ..ctx
+    };
+    assert_eq!(problem(&scene("Gone"), &offline), None);
+    // Inside a multi-action too.
+    let multi = Action::Multi {
+        steps: vec![Step {
+            action: app("gimp.desktop"),
+            delay_ms: 0,
+        }],
+    };
+    assert!(problem(&multi, &ctx).is_some());
+    assert!(
+        problem(
+            &Action::Command {
+                cmd: " ".into(),
+                terminal: false
+            },
+            &ctx
+        )
+        .is_some()
+    );
+}
