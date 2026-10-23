@@ -595,7 +595,7 @@ impl Deck {
                 }
                 self.upload_seq = self.upload_seq.wrapping_add(1);
                 let (changed, images) = push::with_fresh_names(&changed, &built.images, self.upload_seq);
-                tracing::info!("partial upload: keys {:?}", changed.keys().collect::<Vec<_>>());
+                tracing::debug!("partial upload: keys {:?}", changed.keys().collect::<Vec<_>>());
                 file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
             }
             None => {
@@ -610,7 +610,7 @@ impl Deck {
         let bytes = packets.len() * ulanzi_proto::PACKET_SIZE;
         if self.send(&packets).await {
             let done = Instant::now();
-            tracing::info!(
+            tracing::debug!(
                 "upload of {} KB sent in {} ms",
                 bytes / 1024,
                 done.duration_since(now).as_millis()
