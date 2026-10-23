@@ -6,5 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 include = ["src", "wit"]
 
+[dependencies]
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen.workspace = true
+
 [lints]
 workspace = true

@@ -1,0 +1,14 @@
+id = "hello"
+name = "Hello"
+version = "1.0.0"
+contract = "1.0"
+description = "A minimal example: a counter and a greeting."
+
+[[actions]]
+id = "count"
+name = "Count"
+
+[[actions]]
+id = "greet"
+name = "Greet"
+params = [{ key = "name", kind = "text", label = "Name" }]
