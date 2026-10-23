@@ -34,6 +34,9 @@ const CRASH_WINDOW: Duration = Duration::from_secs(5 * 60);
 const START_WAIT: Duration = Duration::from_secs(2);
 /// Stopping waits this long for an instance to end.
 const STOP_WAIT: Duration = Duration::from_secs(5);
+/// An action waits this long for its reply once queued: the 500 ms call budget plus a generous
+/// margin (a call never outlasts its budget, blocking waits included).
+const REPLY_WAIT: Duration = Duration::from_secs(2);
 
 pub(super) struct Host {
     pub(super) dir: PathBuf,
@@ -72,6 +75,9 @@ struct Entry {
     /// which cancels a start in progress.
     attempt: u64,
     run: Option<Run>,
+    /// The instance last detached by a stop: its final outputs (secrets) still count while it
+    /// ends. A late one, from an instance that outlived its stop, is ignored.
+    draining: Option<u64>,
     last_crash: Option<Instant>,
 }
 
@@ -281,6 +287,7 @@ impl Host {
                         settings: table,
                         attempt: 0,
                         run: None,
+                        draining: None,
                         last_crash: None,
                     },
                     Err(bad) => Entry {
@@ -293,6 +300,7 @@ impl Host {
                         wanted: false,
                         attempt: 0,
                         run: None,
+                        draining: None,
                         last_crash: None,
                     },
                 };
@@ -435,6 +443,15 @@ impl Host {
                 }
             }
             Output::SecretsChanged(secrets) => {
+                // A removed plugin, or an instance that outlived its stop, must not write its
+                // secrets back (a late save would bring back deleted ones).
+                let current = self.state().plugins.get(id).is_some_and(|e| {
+                    e.run.as_ref().is_some_and(|r| r.attempt == attempt) || e.draining == Some(attempt)
+                });
+                if !current {
+                    tracing::debug!(target: "plugin", plugin = %id, "secrets of a stopped instance ignored");
+                    return;
+                }
                 if let Err(why) = self.secrets.save(id, &secrets).await {
                     tracing::warn!(target: "plugin", plugin = %id, "cannot save its secrets: {why}");
                 }
@@ -475,6 +492,7 @@ impl Host {
     /// Detach `e`'s instance (and cancel a start in progress); stop it with [`stop_run`].
     fn take_run(e: &mut Entry) -> Option<Run> {
         e.attempt = 0;
+        e.draining = e.run.as_ref().map(|r| r.attempt);
         e.run.take()
     }
 
@@ -523,7 +541,11 @@ impl Host {
             reply,
         });
         drop(handle);
-        match rx.await {
+        let Ok(replied) = tokio::time::timeout(REPLY_WAIT, rx).await else {
+            tracing::warn!(target: "plugin", plugin = %plugin, "no reply to an action within {} s", REPLY_WAIT.as_secs());
+            return Err(PluginError::Failed(name));
+        };
+        match replied {
             Ok(Ok(())) => Ok(()),
             // The instance answers with these exact texts when it stops or crashes meanwhile.
             Ok(Err(msg)) if msg == PluginError::Off(name.clone()).to_string() => Err(PluginError::Off(name)),
@@ -722,6 +744,7 @@ impl Host {
             wanted: true,
             attempt: 0,
             run: None,
+            draining: None,
             last_crash: None,
         };
         st.plugins.insert(id.clone(), entry);
@@ -795,4 +818,69 @@ async fn supervise(
         host.output(&id, attempt, output).await;
     }
     host.ended(&id, attempt, exit);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Counts saves.
+    #[derive(Default)]
+    struct Saves(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl SecretStore for Saves {
+        async fn load(&self, _plugin: &str) -> Result<BTreeMap<String, String>, String> {
+            Ok(BTreeMap::new())
+        }
+        async fn save(&self, plugin: &str, _secrets: &BTreeMap<String, String>) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(plugin.to_string());
+            Ok(())
+        }
+    }
+
+    fn entry(draining: Option<u64>) -> Entry {
+        Entry {
+            name: "Ghost".into(),
+            version: "1.0.0".into(),
+            status: PluginStatus::Ready,
+            loaded: None,
+            enabled: true,
+            settings: toml::Table::new(),
+            wanted: false,
+            attempt: 0,
+            run: None,
+            draining,
+            last_crash: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn late_secrets_are_not_saved() {
+        let dir = tempfile::tempdir().expect("dir");
+        let saves = Arc::new(Saves::default());
+        let (deck, _rx) = mpsc::channel(16);
+        let host = Host::start(
+            dir.path().join("plugins"),
+            dir.path().join("cache"),
+            Arc::clone(&saves) as Arc<dyn SecretStore>,
+            &Settings::default(),
+            &BTreeSet::new(),
+            deck,
+        )
+        .await;
+        let secrets = || Output::SecretsChanged(BTreeMap::from([("k".into(), "v".into())]));
+        // Removed: no entry at all.
+        host.output("ghost", 7, secrets()).await;
+        // Installed again since, or stopped long ago: another instance's attempt.
+        host.state().plugins.insert("ghost".into(), entry(Some(3)));
+        host.output("ghost", 7, secrets()).await;
+        assert!(saves.0.lock().expect("saves").is_empty());
+        // The instance being stopped still saves its last change.
+        host.output("ghost", 3, secrets()).await;
+        assert_eq!(*saves.0.lock().expect("saves"), ["ghost"]);
+    }
 }

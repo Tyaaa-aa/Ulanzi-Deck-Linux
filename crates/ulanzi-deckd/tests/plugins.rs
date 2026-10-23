@@ -337,6 +337,52 @@ async fn stop_works_with_a_full_queue() {
 }
 
 #[tokio::test]
+async fn a_short_sleep_is_fine() {
+    let p = probe();
+    assert_eq!(p.act("sleep", json!({"ms": 100})).await, Ok(()));
+    assert_eq!(p.act("state", json!({"k": "a", "v": "b"})).await, Ok(()));
+}
+
+#[tokio::test]
+async fn a_long_sleep_is_over_budget() {
+    // A blocking WASI wait (std's sleep) counts against the 500 ms call budget.
+    let p = probe();
+    let started = Instant::now();
+    assert_eq!(
+        p.act("sleep", json!({"ms": 2000})).await,
+        Err("Probe stopped working".to_string())
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(1000),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(p.exit().await, Exit::Crashed("took longer than 500 ms".into()));
+}
+
+#[tokio::test]
+async fn stop_cuts_a_sleep_short() {
+    let mut p = probe();
+    let busy = p.queue("sleep", json!({"ms": 10_000}));
+    // Let the call start sleeping.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let started = Instant::now();
+    p.handle.stop();
+    let exit = tokio::time::timeout(Duration::from_secs(1), &mut p.handle.exited)
+        .await
+        .expect("stops within 1 s")
+        .expect("exit reported");
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(exit, Exit::Stopped);
+    let reply = tokio::time::timeout(PROMPTLY, busy).await.expect("reply in time");
+    assert_eq!(reply, Ok(Err("the Probe plugin is turned off".to_string())));
+}
+
+#[tokio::test]
 async fn dropping_the_handle_ends_the_instance() {
     let Running {
         handle,

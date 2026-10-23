@@ -12,7 +12,7 @@ use wasmtime_wasi::WasiView;
 use wasmtime_wasi::p2::bindings::{cli, clocks, random};
 
 use super::PluginError;
-use super::instance::HostState;
+use super::instance::{BoundedPoll, HostState};
 use super::ulanzi::plugin::{core, net};
 
 /// How often the epoch advances; guest call deadlines are counted in these ticks.
@@ -23,13 +23,19 @@ impl HasData for HasIo {
     type Data<'a> = &'a mut ResourceTable;
 }
 
+struct HasPoll;
+impl HasData for HasPoll {
+    type Data<'a> = BoundedPoll<'a>;
+}
+
 struct HasHost;
 impl HasData for HasHost {
     type Data<'a> = &'a mut HostState;
 }
 
 /// Link the WASI p2 interfaces std needs, and nothing else: clocks, random, cli stdio/env/exit,
-/// io. No filesystem, sockets or http (a component importing them fails to link).
+/// io. No filesystem, sockets or http (a component importing them fails to link). `wasi:io/poll`
+/// is the host's own [`BoundedPoll`], so a blocking wait cannot outlast the call budget or a stop.
 fn add_wasi(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
     use wasmtime_wasi::cli::{WasiCli, WasiCliView as _};
     use wasmtime_wasi::clocks::WasiClocks;
@@ -54,7 +60,7 @@ fn add_wasi(linker: &mut Linker<HostState>) -> wasmtime::Result<()> {
     cli::terminal_stdout::add_to_linker::<HostState, WasiCli>(l, HostState::cli)?;
     cli::terminal_stderr::add_to_linker::<HostState, WasiCli>(l, HostState::cli)?;
     wasmtime_wasi_io::bindings::wasi::io::error::add_to_linker::<HostState, HasIo>(l, |t| t.ctx().table)?;
-    io::poll::add_to_linker::<HostState, HasIo>(l, |t| t.ctx().table)?;
+    io::poll::add_to_linker::<HostState, HasPoll>(l, HostState::bounded_poll)?;
     io::streams::add_to_linker::<HostState, HasIo>(l, |t| t.ctx().table)?;
     Ok(())
 }

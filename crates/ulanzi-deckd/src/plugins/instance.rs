@@ -9,18 +9,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
 use ulanzi_core::plugin::Manifest;
-use wasmtime::component::ResourceTable;
+use wasmtime::component::{Resource, ResourceTable};
 use wasmtime::{Store, StoreLimits, StoreLimitsBuilder, Trap, UpdateDeadline};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_io::bindings::wasi::io::poll as async_poll;
 use wasmtime_wasi_io::bytes::Bytes;
-use wasmtime_wasi_io::poll::Pollable;
+use wasmtime_wasi_io::poll::{DynPollable, Pollable};
 use wasmtime_wasi_io::streams::{OutputStream, StreamResult};
 
 use super::engine::Ticker;
@@ -33,6 +34,10 @@ use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
 const EVENT_QUEUE: usize = 1024;
 /// Per guest call: 50 epoch ticks of 10 ms = 500 ms.
 const CALL_DEADLINE: u64 = 50;
+/// The same budget in wall time, for blocking WASI waits (no epoch ticks are counted in them).
+const CALL_BUDGET: Duration = Duration::from_millis(500);
+/// A blocking WASI wait checks the stop flag and the call budget this often.
+const WAIT_SLICE: Duration = Duration::from_millis(10);
 /// A running guest call checks for a stop request this often (in epoch ticks).
 const STOP_CHECK: u64 = 5;
 /// An idle instance re-checks its stop flag this often, in case the wake-up event was lost.
@@ -235,6 +240,8 @@ pub struct HostState {
     stop: Arc<AtomicBool>,
     /// Epoch ticks left in the current guest call's budget.
     ticks_left: u64,
+    /// When the current guest call started; bounds blocking WASI waits.
+    call_started: Instant,
     /// A running instance keeps the epoch ticker alive.
     _ticker: Arc<Ticker>,
 }
@@ -468,6 +475,7 @@ pub fn spawn_instance(
         warned: BTreeSet::new(),
         stop: Arc::clone(&stop),
         ticks_left: CALL_DEADLINE,
+        call_started: Instant::now(),
         _ticker: Arc::clone(&loaded.ticker),
     };
     let mut store = Store::new(engine.engine(), state);
@@ -502,7 +510,8 @@ pub fn spawn_instance(
     })
 }
 
-/// Returned from the epoch callback when the instance is asked to stop during a guest call.
+/// Returned from the epoch callback (or a blocking WASI wait) when the instance is asked to stop
+/// during a guest call.
 #[derive(Debug)]
 struct Stopping;
 
@@ -516,8 +525,74 @@ impl std::error::Error for Stopping {}
 
 /// Give the next guest call its full budget, checked for stop requests every `STOP_CHECK` ticks.
 fn arm(store: &mut Store<HostState>) {
-    store.data_mut().ticks_left = CALL_DEADLINE;
+    let s = store.data_mut();
+    s.ticks_left = CALL_DEADLINE;
+    s.call_started = Instant::now();
     store.set_epoch_deadline(STOP_CHECK);
+}
+
+/// `wasi:io/poll` whose blocking waits (`poll`, `pollable.block`; std's `thread::sleep` is one)
+/// give up when the instance is asked to stop or the call's budget is spent. wasmtime-wasi's own
+/// version blocks the instance thread until the pollable is ready, and epoch interruption cannot
+/// cut that short: it only fires while wasm code runs.
+pub(crate) struct BoundedPoll<'a> {
+    table: &'a mut ResourceTable,
+    stop: &'a AtomicBool,
+    call_started: Instant,
+}
+
+impl HostState {
+    pub(crate) fn bounded_poll(&mut self) -> BoundedPoll<'_> {
+        BoundedPoll {
+            table: &mut self.table,
+            stop: &self.stop,
+            call_started: self.call_started,
+        }
+    }
+}
+
+/// Wait for `ready` in slices of `WAIT_SLICE`. Ends like the epoch callback would: `Stopping` when
+/// asked to stop, an interrupt trap ("took longer than 500 ms") when the call's budget is spent.
+fn bounded<T>(
+    stop: &AtomicBool,
+    call_started: Instant,
+    ready: impl Future<Output = wasmtime::Result<T>>,
+) -> wasmtime::Result<T> {
+    wasmtime_wasi::runtime::in_tokio(async {
+        let mut ready = std::pin::pin!(ready);
+        loop {
+            if let Ok(done) = tokio::time::timeout(WAIT_SLICE, ready.as_mut()).await {
+                return done;
+            }
+            if stop.load(Ordering::Relaxed) {
+                return Err(wasmtime::Error::new(Stopping));
+            }
+            if call_started.elapsed() >= CALL_BUDGET {
+                return Err(wasmtime::Error::new(Trap::Interrupt));
+            }
+        }
+    })
+}
+
+impl wasmtime_wasi::p2::bindings::sync::io::poll::Host for BoundedPoll<'_> {
+    fn poll(&mut self, pollables: Vec<Resource<DynPollable>>) -> wasmtime::Result<Vec<u32>> {
+        let ready = async_poll::Host::poll(&mut *self.table, pollables);
+        bounded(self.stop, self.call_started, ready)
+    }
+}
+
+impl wasmtime_wasi::p2::bindings::sync::io::poll::HostPollable for BoundedPoll<'_> {
+    fn ready(&mut self, pollable: Resource<DynPollable>) -> wasmtime::Result<bool> {
+        // Does not wait: it checks readiness once.
+        wasmtime_wasi::runtime::in_tokio(async_poll::HostPollable::ready(&mut *self.table, pollable))
+    }
+    fn block(&mut self, pollable: Resource<DynPollable>) -> wasmtime::Result<()> {
+        let ready = async_poll::HostPollable::block(&mut *self.table, pollable);
+        bounded(self.stop, self.call_started, ready)
+    }
+    fn drop(&mut self, pollable: Resource<DynPollable>) -> wasmtime::Result<()> {
+        async_poll::HostPollable::drop(&mut *self.table, pollable)
+    }
 }
 
 /// How a failed guest call ends the instance.
