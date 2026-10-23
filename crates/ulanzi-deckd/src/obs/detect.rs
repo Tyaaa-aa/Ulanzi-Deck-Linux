@@ -12,6 +12,15 @@ pub struct ObsConfig {
     pub path: PathBuf,
 }
 
+/// [`config_paths`] for this session. `ULANZI_OBS_CONFIG_HOME` points at OBS's config folder when
+/// it differs from ours (the test sandbox moves `XDG_CONFIG_HOME` but OBS keeps its own).
+pub fn session_config_paths() -> Vec<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let xdg = var("ULANZI_OBS_CONFIG_HOME").or_else(|| var("XDG_CONFIG_HOME"));
+    config_paths(&home, xdg.as_deref())
+}
+
 /// Where OBS keeps the WebSocket settings: the native build, then the Flatpak.
 pub fn config_paths(home: &Path, xdg_config: Option<&Path>) -> Vec<PathBuf> {
     let rel = "obs-studio/plugin_config/obs-websocket/config.json";

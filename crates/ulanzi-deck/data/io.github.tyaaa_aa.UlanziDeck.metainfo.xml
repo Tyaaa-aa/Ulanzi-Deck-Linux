@@ -4,7 +4,7 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Ulanzi Deck</name>
-  <summary>Set up your Ulanzi D200 stream deck</summary>
+  <summary>Set up your Ulanzi D200 and D200X stream decks</summary>
   <developer id="io.github.tyaaa_aa">
     <name>Tyaaa-aa</name>
   </developer>
@@ -15,9 +15,10 @@
     </p>
     <ul>
       <li>Keys, dials, small buttons and the wide screen, with tap and hold actions</li>
-      <li>Media, volume, shortcuts, typing, commands, apps, websites and OBS Studio</li>
-      <li>Profiles and pages, edit many keys at once, undo and redo</li>
-      <li>Clock styles, system stats and Now Playing on the wide screen</li>
+      <li>Media, volume, outputs, shortcuts, typing, commands, apps, websites and OBS Studio</li>
+      <li>Wide-screen widgets: clocks, system stats, Now Playing, timer, weather, command output, pictures and OBS</li>
+      <li>Profiles that switch with the app in front, pages and folders, undo and redo</li>
+      <li>Templates, import and export, and automatic backups</li>
       <li>A small background service runs the deck with the window closed</li>
     </ul>
   </description>
@@ -32,15 +33,26 @@
   <requires>
     <display_length compare="ge">360</display_length>
   </requires>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/Tyaaa-aa/Ulanzi-Deck-Linux/main/docs/screenshots/main-light.png</image>
+      <caption>Keys, dials and the wide screen</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/Tyaaa-aa/Ulanzi-Deck-Linux/main/docs/screenshots/widgets-dark.png</image>
+      <caption>Wide-screen widgets with a live preview</caption>
+    </screenshot>
+  </screenshots>
   <provides>
     <binary>ulanzi-deck</binary>
     <binary>ulanzi-deckd</binary>
     <binary>ulanzictl</binary>
   </provides>
   <releases>
-    <release version="2.0.0~alpha1" date="2026-10-22">
+    <release version="2.0.0" date="2026-10-23">
       <description>
-        <p>A full rewrite in Rust with a new GTK interface.</p>
+        <p>A full rewrite in Rust with a new GTK interface: wide-screen widgets, OBS Studio control,
+        profiles that follow the app in front, templates, import and export, and backups.</p>
       </description>
     </release>
   </releases>

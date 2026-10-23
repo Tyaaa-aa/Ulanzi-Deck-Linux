@@ -67,6 +67,8 @@ if [ "$inner" = 0 ]; then
 fi
 
 # Inside: everything below sees only the sandbox.
+# OBS keeps its own settings in your real config folder; "Find OBS Settings" should read them there.
+export ULANZI_OBS_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CONFIG_HOME="$dir/config" XDG_STATE_HOME="$dir/state" XDG_CACHE_HOME="$dir/cache" \
   XDG_DATA_HOME="$dir/data"
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"

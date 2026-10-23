@@ -23,7 +23,7 @@ install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck.svg" "$icons/scalable/
 install -m 0644 "$gui/icons/io.github.tyaaa_aa.UlanziDeck-symbolic.svg" "$icons/symbolic/apps/"
 update-desktop-database -q "$data/applications" 2>/dev/null || true
 gtk-update-icon-cache -q -t "$icons" 2>/dev/null || true
-install -m 0644 packaging/systemd/ulanzi-deckd.service "$units/"
+sed "s|@BINDIR@|$bin|" packaging/systemd/ulanzi-deckd.service >"$units/ulanzi-deckd.service"
 install -m 0644 packaging/dbus/io.github.tyaaa_aa.UlanziDeck.Service.service "$dbus/"
 # The service used the app's own name before; that stopped the window from opening.
 rm -f "$dbus/io.github.tyaaa_aa.UlanziDeck.service"

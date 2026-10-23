@@ -1,0 +1,18 @@
+#!/bin/sh
+# AppImage entry point: the app, or the service/CLI when called by those names.
+here=$(dirname "$(readlink -f "$0")")
+export PATH="$here/usr/bin:$PATH"
+case "${ARGV0##*/}" in
+  ulanzi-deckd*) exec "$here/usr/bin/ulanzi-deckd" "$@" ;;
+  ulanzictl*) exec "$here/usr/bin/ulanzictl" "$@" ;;
+esac
+case "${1:-}" in
+  --service) shift; exec "$here/usr/bin/ulanzi-deckd" "$@" ;;
+  --ctl) shift; exec "$here/usr/bin/ulanzictl" "$@" ;;
+esac
+# The window needs the background service; start it from this AppImage if none is running.
+if ! busctl --user status io.github.tyaaa_aa.UlanziDeck.Service >/dev/null 2>&1; then
+  setsid "$here/usr/bin/ulanzi-deckd" >/dev/null 2>&1 &
+  sleep 0.5
+fi
+exec "$here/usr/bin/ulanzi-deck" "$@"

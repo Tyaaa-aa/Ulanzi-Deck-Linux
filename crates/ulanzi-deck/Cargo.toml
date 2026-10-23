@@ -9,6 +9,64 @@ description = "Ulanzi Deck: GTK app for the Ulanzi D200 / D200X"
 [lints]
 workspace = true
 
+[package.metadata.deb]
+name = "ulanzi-deck"
+maintainer = "Tyaaa-aa <https://github.com/Tyaaa-aa>"
+copyright = "2026, Tya"
+section = "utils"
+priority = "optional"
+depends = "libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libc6, dbus-user-session"
+recommends = "pipewire-pulse, wireplumber, wl-clipboard"
+extended-description = """\
+Set up the keys, dials and wide screen of an Ulanzi D200 or D200X stream deck: actions for media,\
+volume, shortcuts, apps and OBS Studio, wide-screen widgets, profiles that follow the app in front,\
+templates and backups. A small user service runs the deck in the background."""
+maintainer-scripts = "../../packaging/debian/"
+assets = [
+    ["../../target/pkgroot/usr/bin/ulanzi-deck", "usr/bin/ulanzi-deck", "755"],
+    ["../../target/pkgroot/usr/bin/ulanzi-deckd", "usr/bin/ulanzi-deckd", "755"],
+    ["../../target/pkgroot/usr/bin/ulanzictl", "usr/bin/ulanzictl", "755"],
+    ["../../target/pkgroot/usr/share/applications/io.github.tyaaa_aa.UlanziDeck.desktop", "usr/share/applications/io.github.tyaaa_aa.UlanziDeck.desktop", "644"],
+    ["../../target/pkgroot/usr/share/metainfo/io.github.tyaaa_aa.UlanziDeck.metainfo.xml", "usr/share/metainfo/io.github.tyaaa_aa.UlanziDeck.metainfo.xml", "644"],
+    ["../../target/pkgroot/usr/share/mime/packages/io.github.tyaaa_aa.UlanziDeck.mime.xml", "usr/share/mime/packages/io.github.tyaaa_aa.UlanziDeck.mime.xml", "644"],
+    ["../../target/pkgroot/usr/share/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg", "usr/share/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg", "644"],
+    ["../../target/pkgroot/usr/share/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-symbolic.svg", "usr/share/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-symbolic.svg", "644"],
+    ["../../target/pkgroot/usr/share/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.Service.service", "usr/share/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.Service.service", "644"],
+    ["../../target/pkgroot/usr/lib/systemd/user/ulanzi-deckd.service", "usr/lib/systemd/user/ulanzi-deckd.service", "644"],
+    ["../../target/pkgroot/usr/lib/udev/rules.d/70-ulanzi-deck.rules", "usr/lib/udev/rules.d/70-ulanzi-deck.rules", "644"],
+    ["../../target/pkgroot/usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/extension.js", "usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/extension.js", "644"],
+    ["../../target/pkgroot/usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/metadata.json", "usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/metadata.json", "644"],
+    ["../../target/pkgroot/usr/share/doc/ulanzi-deck/README.md", "usr/share/doc/ulanzi-deck/README.md", "644"],
+    ["../../target/pkgroot/usr/share/licenses/ulanzi-deck/LICENSE", "usr/share/licenses/ulanzi-deck/LICENSE", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "ulanzi-deck"
+license = "MIT"
+summary = "Set up Ulanzi D200 and D200X stream decks"
+post_install_script = "udevadm control --reload-rules >/dev/null 2>&1 || :; udevadm trigger >/dev/null 2>&1 || :; update-mime-database /usr/share/mime >/dev/null 2>&1 || :"
+assets = [
+    { source = "../../target/pkgroot/usr/bin/ulanzi-deck", dest = "/usr/bin/ulanzi-deck", mode = "755" },
+    { source = "../../target/pkgroot/usr/bin/ulanzi-deckd", dest = "/usr/bin/ulanzi-deckd", mode = "755" },
+    { source = "../../target/pkgroot/usr/bin/ulanzictl", dest = "/usr/bin/ulanzictl", mode = "755" },
+    { source = "../../target/pkgroot/usr/share/applications/io.github.tyaaa_aa.UlanziDeck.desktop", dest = "/usr/share/applications/io.github.tyaaa_aa.UlanziDeck.desktop", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/metainfo/io.github.tyaaa_aa.UlanziDeck.metainfo.xml", dest = "/usr/share/metainfo/io.github.tyaaa_aa.UlanziDeck.metainfo.xml", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/mime/packages/io.github.tyaaa_aa.UlanziDeck.mime.xml", dest = "/usr/share/mime/packages/io.github.tyaaa_aa.UlanziDeck.mime.xml", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-symbolic.svg", dest = "/usr/share/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-symbolic.svg", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.Service.service", dest = "/usr/share/dbus-1/services/io.github.tyaaa_aa.UlanziDeck.Service.service", mode = "644" },
+    { source = "../../target/pkgroot/usr/lib/systemd/user/ulanzi-deckd.service", dest = "/usr/lib/systemd/user/ulanzi-deckd.service", mode = "644" },
+    { source = "../../target/pkgroot/usr/lib/udev/rules.d/70-ulanzi-deck.rules", dest = "/usr/lib/udev/rules.d/70-ulanzi-deck.rules", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/extension.js", dest = "/usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/extension.js", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/metadata.json", dest = "/usr/share/gnome-shell/extensions/ulanzi-deck-focus@tyaaa-aa.github.io/metadata.json", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/doc/ulanzi-deck/README.md", dest = "/usr/share/doc/ulanzi-deck/README.md", mode = "644" },
+    { source = "../../target/pkgroot/usr/share/licenses/ulanzi-deck/LICENSE", dest = "/usr/share/licenses/ulanzi-deck/LICENSE", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+gtk4 = ">= 4.16"
+libadwaita = ">= 1.6"
+
 [dependencies]
 chrono.workspace = true
 ulanzi-core.workspace = true

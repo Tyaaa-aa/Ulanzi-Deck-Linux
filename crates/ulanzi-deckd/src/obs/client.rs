@@ -110,10 +110,7 @@ pub fn system_probe() -> ProbeFn {
         let home = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_default();
-        let xdg = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from);
-        let paths = super::detect::config_paths(&home, xdg.as_deref());
+        let paths = super::detect::session_config_paths();
         let path = std::env::var("PATH").unwrap_or_default();
         Probe {
             installed: super::detect::obs_installed(&path, &home, &paths),

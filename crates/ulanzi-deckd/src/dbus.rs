@@ -555,16 +555,10 @@ impl DeckService {
     /// Turn on OBS's WebSocket server in its config (only while OBS is closed).
     async fn obs_enable_server(&self) -> Result<String> {
         let p = (self.obs_probe)();
-        let home = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        let xdg = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from);
         let path = p
             .config
             .map(|c| c.path)
-            .unwrap_or_else(|| crate::obs::detect::config_paths(&home, xdg.as_deref())[0].clone());
+            .unwrap_or_else(|| crate::obs::detect::session_config_paths()[0].clone());
         let c = crate::obs::detect::enable_server(&path, p.running).map_err(DeckError::Invalid)?;
         Ok(format!(
             "OBS’s WebSocket server will be on (port {}) the next time OBS starts.",
