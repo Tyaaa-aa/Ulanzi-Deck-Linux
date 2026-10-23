@@ -208,7 +208,7 @@ pub enum ObsAction {
     Screenshot,
 }
 
-/// A TOML table as JSON, for handing to a plugin. Datetimes become RFC 3339 strings.
+/// A TOML table as JSON, for handing to a plugin. Datetimes become their TOML text form (RFC 3339 when they carry an offset).
 pub fn table_to_json(t: &toml::Table) -> serde_json::Value {
     serde_json::Value::Object(t.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect())
 }

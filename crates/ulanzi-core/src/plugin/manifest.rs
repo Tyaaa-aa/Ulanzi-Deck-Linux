@@ -79,6 +79,11 @@ impl Manifest {
         if !contract_ok(&m.contract) {
             return Err(ManifestError::Incompatible { needs: m.contract });
         }
+        for entry in &m.permissions.network {
+            if let Some(why) = bad_network_entry(entry) {
+                return Err(ManifestError::Parse(format!("{entry}: {why}")));
+            }
+        }
         for (i, a) in m.actions.iter().enumerate() {
             if m.actions[..i].iter().any(|b| b.id == a.id) {
                 return Err(ManifestError::DuplicateAction(a.id.clone()));
@@ -121,4 +126,20 @@ fn contract_ok(c: &str) -> bool {
         (Ok(major), Ok(minor)) => major == CONTRACT.0 && minor <= CONTRACT.1,
         _ => false,
     }
+}
+
+/// Why a `network` entry cannot match anything useful (empty, or a wildcard that is too wide).
+fn bad_network_entry(entry: &str) -> Option<&'static str> {
+    let e = entry.strip_suffix('.').unwrap_or(entry);
+    if e.is_empty() {
+        return Some("empty host name");
+    }
+    if let Some(suffix) = e.strip_prefix("*.") {
+        if suffix.split('.').filter(|l| !l.is_empty()).count() < 2 {
+            return Some("a wildcard needs at least two labels after \"*.\"");
+        }
+    } else if e.contains('*') {
+        return Some("\"*\" is only allowed as a leading \"*.\"");
+    }
+    None
 }

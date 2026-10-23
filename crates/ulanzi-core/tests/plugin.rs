@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use ulanzi_core::model::{Action, Key, Model, Profile, Settings, table_to_json};
-use ulanzi_core::plugin::{Manifest, ManifestError, Permissions, host_allowed};
+use ulanzi_core::plugin::{Manifest, ManifestError, Permissions, host_allowed, is_lan};
 use ulanzi_core::store::parse_profile;
 
 const OBS: &str = r##"
@@ -196,11 +196,74 @@ fn settings_plugins_default() {
 }
 
 #[test]
-fn plugin_action_variant_matches() {
-    let a = Action::Plugin {
-        plugin: "p".into(),
-        action: "a".into(),
-        params: toml::Table::new(),
+fn is_lan_boundaries() {
+    let yes = [
+        "10.1.2.3",
+        "172.16.0.1",
+        "172.31.255.255",
+        "169.254.1.1",
+        "127.0.0.1",
+        "::1",
+        "fc00::1",
+        "fd00::1",
+        "fe80::1",
+        "::ffff:192.168.1.1",
+        "192.168.0.1",
+    ];
+    let no = [
+        "172.15.0.1",
+        "172.32.0.1",
+        "0.0.0.0",
+        "8.8.8.8",
+        "fec0::1",
+        "::ffff:8.8.8.8",
+    ];
+    for ip in yes {
+        assert!(is_lan(ip.parse().expect("ip")), "{ip} should be local");
+    }
+    for ip in no {
+        assert!(!is_lan(ip.parse().expect("ip")), "{ip} should not be local");
+    }
+}
+
+#[test]
+fn host_matching_ignores_case_and_trailing_dot_but_not_the_apex() {
+    let p = Permissions {
+        network: vec!["*.twitch.tv".into(), "Example.COM".into(), "obs.test.".into()],
+        ..Permissions::default()
     };
-    assert!(matches!(a, Action::Plugin { .. }));
+    assert!(host_allowed(&p, "API.Twitch.TV", &[]));
+    assert!(host_allowed(&p, "api.twitch.tv.", &[]));
+    assert!(!host_allowed(&p, "twitch.tv", &[]));
+    assert!(host_allowed(&p, "example.com", &[]));
+    assert!(host_allowed(&p, "EXAMPLE.com.", &[]));
+    assert!(host_allowed(&p, "obs.test", &[]));
+    let lan = Permissions {
+        lan: true,
+        ..Permissions::default()
+    };
+    assert!(host_allowed(&lan, "localhost.", &[]));
+}
+
+#[test]
+fn manifest_rejects_unusable_network_entries() {
+    for entry in ["", "*.", "*", "*.com", "*.com."] {
+        let text = manifest(
+            "obs",
+            "1.0.0",
+            "1.0",
+            &format!("[permissions]\nnetwork = [\"{entry}\"]\n"),
+        );
+        match Manifest::parse(&text) {
+            Err(ManifestError::Parse(m)) => assert!(m.starts_with(&format!("{entry}: ")), "{m}"),
+            other => panic!("{entry:?} accepted: {other:?}"),
+        }
+    }
+    let ok = manifest(
+        "obs",
+        "1.0.0",
+        "1.0",
+        "[permissions]\nnetwork = [\"*.example.com\", \"localhost\"]\n",
+    );
+    assert!(Manifest::parse(&ok).is_ok());
 }
