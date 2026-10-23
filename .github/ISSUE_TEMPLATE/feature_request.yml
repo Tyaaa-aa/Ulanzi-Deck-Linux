@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest an idea or an improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation or problem, not the solution yet.
+      placeholder: When I stream, I want to see chat messages on the wide screen without alt-tabbing.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you imagine it working. Mock-ups and examples from other apps are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New action
+        - New widget
+        - OBS Studio
+        - Profiles and auto-switch
+        - The app window
+        - Device support
+        - Something else

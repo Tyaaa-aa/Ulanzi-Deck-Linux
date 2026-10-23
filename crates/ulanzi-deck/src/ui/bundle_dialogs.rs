@@ -142,6 +142,33 @@ fn import_dialog(state: &State, parent: &gtk::Widget, path: &Path, preview: crat
     }
     page.add(&group);
 
+    // Files come from other people: say plainly what they would run.
+    if !preview.commands.is_empty() {
+        let n = preview.commands.len();
+        let cmds = adw::PreferencesGroup::builder()
+            .title(if n == 1 { "Runs a Command" } else { "Runs Commands" })
+            .description(
+                "Keys or widgets in this file run these on your computer. Import only if you trust them.",
+            )
+            .build();
+        for c in preview.commands.iter().take(12) {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(c).as_str())
+                .css_classes(["monospace"])
+                .build();
+            row.add_prefix(&gtk::Image::from_icon_name("utilities-terminal-symbolic"));
+            cmds.add(&row);
+        }
+        if n > 12 {
+            cmds.add(
+                &adw::ActionRow::builder()
+                    .title(format!("and {} more", n - 12))
+                    .build(),
+            );
+        }
+        page.add(&cmds);
+    }
+
     let options = adw::PreferencesGroup::new();
     let conflict = adw::ComboRow::builder()
         .title("Profiles That Already Exist")

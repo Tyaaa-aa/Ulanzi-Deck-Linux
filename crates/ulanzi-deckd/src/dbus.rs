@@ -203,6 +203,11 @@ impl DeckService {
         ))
     }
 
+    /// The firmware version the deck reported ("" until it has answered).
+    async fn firmware(&self) -> Result<String> {
+        Ok(self.snapshot().await?.firmware.unwrap_or_default())
+    }
+
     async fn list_profiles(&self) -> Result<Vec<(String, String)>> {
         Ok(self
             .snapshot()
@@ -320,6 +325,11 @@ impl DeckService {
             .collect();
         let manifest = toml::to_string_pretty(&b.manifest).map_err(|e| DeckError::Invalid(e.to_string()))?;
         Ok((manifest, conflicts))
+    }
+
+    /// The shell commands a `.ulanzideck` file's keys and widgets would run, to show before importing.
+    async fn bundle_commands(&self, path: String) -> Result<Vec<String>> {
+        Ok(ulanzi_core::bundle::commands(&Self::read_bundle(&path)?))
     }
 
     /// Import a `.ulanzideck` file. `conflict` is keep_both, replace or skip. Returns the imported

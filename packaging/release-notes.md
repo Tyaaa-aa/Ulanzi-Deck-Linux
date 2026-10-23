@@ -12,4 +12,4 @@ Version 2 is a complete rewrite in Rust with a new GTK 4 / libadwaita app.
 
 **Upgrading from version 1:** the first run offers to import your old `~/.config/ulanzi/config.yaml`.
 
-**Install:** pick the file for your distribution (see the README). Needs GTK 4.16 and libadwaita 1.6.
+**Install:** pick the file for your distribution: Arch package, .deb, .rpm, AppImage (run it, `--install` adds it to the menu) or the tarball with `install.sh`. Needs GTK 4.16 and libadwaita 1.6.

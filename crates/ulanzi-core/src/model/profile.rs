@@ -254,6 +254,43 @@ impl Profile {
         }
     }
 
+    /// Every action in the profile (keys, dials, small buttons, the screen; multi-action steps
+    /// included), in that order.
+    pub fn actions(&self) -> Vec<&Action> {
+        fn add<'a>(out: &mut Vec<&'a Action>, a: &'a Option<Action>) {
+            if let Some(a) = a {
+                push(out, a);
+            }
+        }
+        fn push<'a>(out: &mut Vec<&'a Action>, a: &'a Action) {
+            out.push(a);
+            if let Action::Multi { steps } = a {
+                for s in steps {
+                    push(out, &s.action);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for page in &self.pages {
+            for k in page.keys.values() {
+                add(&mut out, &k.tap);
+                add(&mut out, &k.hold);
+            }
+            for d in &page.dials {
+                for a in [&d.press, &d.left, &d.right, &d.hold] {
+                    add(&mut out, a);
+                }
+            }
+        }
+        add(&mut out, &self.small_buttons.left);
+        add(&mut out, &self.small_buttons.right);
+        if let ScreenConfig::Custom { tap, hold, .. } = &self.screen {
+            add(&mut out, tap);
+            add(&mut out, hold);
+        }
+        out
+    }
+
     /// Follow a name change in OBS everywhere in this profile; true if anything changed.
     pub fn rename_obs(&mut self, kind: ObsRename, old: &str, new: &str) -> bool {
         let mut hit = false;

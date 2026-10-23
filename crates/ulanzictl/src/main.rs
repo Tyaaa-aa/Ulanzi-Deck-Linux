@@ -169,6 +169,8 @@ async fn run(cli: Cli) -> Result<(), String> {
             let (api, ver, state, detail, model, profile, page): Hello =
                 p.call("Hello", &("ulanzictl",)).await.map_err(not_running)?;
             let profiles: Vec<(String, String)> = p.call("ListProfiles", &()).await.map_err(not_running)?;
+            // Older services don't have Firmware: leave it out then.
+            let firmware: String = p.call("Firmware", &()).await.unwrap_or_default();
             let name = profiles
                 .iter()
                 .find(|(id, _)| *id == profile)
@@ -177,13 +179,16 @@ async fn run(cli: Cli) -> Result<(), String> {
             if json {
                 let v = serde_json::json!({
                     "api": api, "daemon_version": ver, "device_state": state, "device_detail": detail,
-                    "model": model, "profile_id": profile, "profile": name, "page": page + 1,
+                    "model": model, "firmware": firmware, "profile_id": profile, "profile": name, "page": page + 1,
                 });
                 println!("{v}");
             } else {
                 println!("service   ulanzi-deckd {ver} (API {api})");
                 println!("device    {state}: {detail}");
                 println!("model     {model}");
+                if !firmware.is_empty() {
+                    println!("firmware  {firmware}");
+                }
                 println!("profile   {name} ({profile})");
                 println!("page      {}", page + 1);
             }
@@ -364,11 +369,22 @@ async fn diagnostics() {
             Ok((api, ver, state, detail, model, ..)) => {
                 println!("service         ulanzi-deckd {ver} (API {api})");
                 println!("device          {state}: {detail} ({model})");
+                if let Ok(fw) = p.call::<_, _, String>("Firmware", &()).await
+                    && !fw.is_empty()
+                {
+                    println!("firmware        {fw}");
+                }
             }
             Err(e) => println!("service         {}", not_running(e)),
         },
         Err(e) => println!("service         {e}"),
     }
+    println!(
+        "kernel          {}",
+        std::fs::read_to_string("/proc/sys/kernel/osrelease")
+            .unwrap_or_default()
+            .trim()
+    );
     let direct = ulanzi_deckd::transport::probe(
         Path::new("/sys/class/hidraw"),
         Path::new("/dev"),

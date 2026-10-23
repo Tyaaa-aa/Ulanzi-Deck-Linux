@@ -1,0 +1,84 @@
+name: Bug report
+description: Something doesn't work as it should
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time! A few minutes here saves a lot of back-and-forth.
+        Please check the [troubleshooting guide](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/blob/main/docs/troubleshooting.md)
+        and [existing issues](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues?q=is%3Aissue) first.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: One or two sentences. What did you expect instead?
+      placeholder: Pressing a key set to "Switch Scene" does nothing; I expected OBS to change scene.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps from a known starting point.
+      placeholder: |
+        1. Open Preferences → Integrations (it says Connected)
+        2. Drag "Switch Scene" onto key 3 and pick "Gaming"
+        3. Press key 3 on the deck
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Device connection / permissions
+        - Keys, labels or images
+        - Actions (media, audio, shortcuts, commands…)
+        - OBS Studio
+        - Wide screen / widgets
+        - Profiles, pages or auto-switch
+        - Import, export, templates or backups
+        - The app window
+        - Installation / packaging
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Arch package (pacman / PKGBUILD)
+        - .deb
+        - .rpm
+        - AppImage
+        - Tarball (install.sh)
+        - Built from source
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Paste the output of `ulanzictl diagnostics`. It contains versions, desktop, device state and the
+        last service log lines, and no personal files. Read it first and remove anything you'd rather not share.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, logs or anything else
+      description: Drag images here. For more log lines run `journalctl --user -u ulanzi-deckd -n 200`.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I'm on the latest release (or the latest `main`).
+          required: true
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true

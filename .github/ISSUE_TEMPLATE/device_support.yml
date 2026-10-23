@@ -1,0 +1,45 @@
+name: Device or firmware support
+description: A deck model or firmware version that doesn't work (or works differently)
+title: "[Device]: "
+labels: ["device support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ulanzi Deck is tested on the D200 and D200X. Other models and firmware versions may speak a
+        slightly different protocol; the output below lets us see how yours behaves.
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: D200X with dial base
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Shown by `ulanzictl status` (or in Ulanzi Studio).
+      placeholder: "5.2.3"
+    validations:
+      required: true
+  - type: textarea
+    id: lsusb
+    attributes:
+      label: "`lsusb` line"
+      render: text
+      placeholder: Bus 001 Device 007 ID 2207:0019 …
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What works and what doesn't
+      placeholder: Keys show their images, but the dials do nothing and the wide screen stays black.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: "`ulanzictl diagnostics`"
+      render: text

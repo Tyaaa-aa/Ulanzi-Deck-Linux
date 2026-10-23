@@ -447,3 +447,28 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
     }
     Ok(report)
 }
+
+/// Every shell command the bundle's profiles would run (Run Command, Launch App by command line,
+/// the Command Output widget), for the import preview: imported files come from other people.
+pub fn commands(b: &Bundle) -> Vec<String> {
+    use crate::model::{Action, ScreenConfig, Widget};
+    let mut out = Vec::new();
+    for bp in &b.profiles {
+        for a in bp.profile.actions() {
+            match a {
+                Action::Command { cmd, .. } => out.push(cmd.clone()),
+                Action::LaunchApp { exec: Some(e), .. } => out.push(e.clone()),
+                _ => {}
+            }
+        }
+        if let ScreenConfig::Custom { widgets, .. } = &bp.profile.screen {
+            for w in widgets {
+                if let Widget::Command { cmd, .. } = w {
+                    out.push(cmd.clone());
+                }
+            }
+        }
+    }
+    out.retain(|c| !c.trim().is_empty());
+    out
+}

