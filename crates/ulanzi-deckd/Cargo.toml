@@ -32,6 +32,8 @@ x11rb = "0.14.0"
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake"] }
 sha2 = "0.11.1"
 base64 = "0.23.1"
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

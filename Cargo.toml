@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ulanzi-proto", "crates/ulanzi-core", "crates/ulanzi-deckd", "crates/ulanzictl", "crates/ulanzi-deck"]
+members = ["crates/ulanzi-proto", "crates/ulanzi-core", "crates/ulanzi-plugin", "crates/ulanzi-deckd", "crates/ulanzictl", "crates/ulanzi-deck"]
 
 [workspace.package]
 version = "2.0.0"
@@ -46,6 +46,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 proptest = "1"
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "component-model", "cache", "std", "parallel-compilation"] }
+wasmtime-wasi = "50"
+wit-bindgen = "0.63"
+oo7 = { version = "0.6", default-features = false, features = ["tokio", "native_crypto"] }
 tempfile = "3"
 
 [profile.release]

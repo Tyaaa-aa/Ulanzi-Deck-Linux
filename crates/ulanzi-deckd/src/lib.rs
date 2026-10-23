@@ -5,6 +5,7 @@ pub mod dbus;
 pub mod deck;
 pub mod focus;
 pub mod obs;
+pub mod plugins;
 pub mod screen;
 pub mod sysinfo;
 pub mod transport;
