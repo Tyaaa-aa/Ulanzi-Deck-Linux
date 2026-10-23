@@ -648,21 +648,26 @@ fn add_menu(state: &State, edit: &EditScreen) -> gtk::MenuButton {
         .css_classes(["navigation-sidebar"])
         .build();
     let popover = gtk::Popover::builder().child(&list).build();
-    for w in Widget::all_kinds() {
+    let kinds = Widget::all_kinds();
+    for w in &kinds {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         row.set_margin_top(4);
         row.set_margin_bottom(4);
-        let icon = widget_icon(state, &w);
+        let icon = widget_icon(state, w);
         icon.set_size_request(24, 24);
         row.append(&icon);
         row.append(&gtk::Label::builder().label(w.title()).xalign(0.0).build());
-        let item = gtk::ListBoxRow::builder().child(&row).activatable(true).build();
-        list.append(&item);
+        list.append(&gtk::ListBoxRow::builder().child(&row).activatable(true).build());
+    }
+    {
+        // Act on the row's position. (Calling the row's activate() here would ask the list to
+        // activate it again, over and over, until the stack runs out.)
         let (edit, popover, state) = (edit.clone(), popover.clone(), state.clone());
-        item.connect_activate(move |_| {
+        list.connect_row_activated(move |_, r| {
+            let Some(w) = kinds.get(r.index().max(0) as usize).cloned() else {
+                return;
+            };
             popover.popdown();
-            let w = w.clone();
-            let state2 = state.clone();
             let n = Rc::new(Cell::new(0usize));
             let n2 = n.clone();
             edit_list(&edit, move |list| {
@@ -674,15 +679,8 @@ fn add_menu(state: &State, edit: &EditScreen) -> gtk::MenuButton {
                 n2.set(list.len() - 1);
             });
             let i = n.get();
-            state2.expanded.borrow_mut().insert(format!("screen/widget{i}"));
-            set_preview(&state2, i);
-        });
-    }
-    {
-        let popover = popover.clone();
-        list.connect_row_activated(move |_, r| {
-            r.activate();
-            popover.popdown();
+            state.expanded.borrow_mut().insert(format!("screen/widget{i}"));
+            set_preview(&state, i);
         });
     }
     gtk::MenuButton::builder()
@@ -1013,5 +1011,38 @@ mod tests {
             }),
             "CPU, Network"
         );
+    }
+
+    #[test]
+    fn adding_a_widget_from_the_menu_adds_it() {
+        if gtk::init().is_err() {
+            return;
+        }
+        let mut p = ulanzi_core::model::Profile::new_default("T", ulanzi_core::model::Model::D200X);
+        p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, None);
+        let state = crate::state::AppState::new(p);
+        let edit: EditScreen = {
+            let st = state.clone();
+            Rc::new(move |_how, f| {
+                st.edit(|e| {
+                    let mut s = e.profile().screen.clone();
+                    f(&mut s);
+                    e.set_screen(s)
+                })
+            })
+        };
+        let menu = add_menu(&state, &edit);
+        let list = menu
+            .popover()
+            .and_then(|p| p.child())
+            .and_downcast::<gtk::ListBox>()
+            .expect("menu list");
+        let row = list.row_at_index(0).expect("first kind");
+        // What a click does.
+        list.emit_by_name::<()>("row-activated", &[&row]);
+        let ScreenConfig::Custom { widgets, .. } = state.editor.borrow().profile().screen.clone() else {
+            panic!("not widgets");
+        };
+        assert_eq!(widgets.len(), 2);
     }
 }

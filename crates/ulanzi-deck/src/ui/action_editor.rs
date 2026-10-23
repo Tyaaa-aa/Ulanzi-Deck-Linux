@@ -949,9 +949,6 @@ fn obs_name_row(
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["navigation-sidebar"])
         .build();
-    list.connect_row_activated(|_, r| {
-        r.activate();
-    });
     let scroller = gtk::ScrolledWindow::builder()
         .child(&list)
         .propagate_natural_height(true)
@@ -960,6 +957,19 @@ fn obs_name_row(
         .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
     let popover = gtk::Popover::builder().child(&scroller).build();
+    {
+        // Picking a name puts it in the field (the row's label is the name).
+        let (entry, popover) = (row.downgrade(), popover.downgrade());
+        list.connect_row_activated(move |_, r| {
+            let name = r.child().and_downcast::<gtk::Label>().map(|l| l.label());
+            if let (Some(name), Some(entry)) = (name, entry.upgrade()) {
+                entry.set_text(&name);
+            }
+            if let Some(p) = popover.upgrade() {
+                p.popdown();
+            }
+        });
+    }
     let button = gtk::MenuButton::builder()
         .icon_name("view-list-symbolic")
         .tooltip_text("Choose from OBS")
@@ -968,10 +978,9 @@ fn obs_name_row(
         .popover(&popover)
         .build();
     {
-        let (state, ed, row, pop) = (state.clone(), ed.clone(), row.downgrade(), popover.downgrade());
+        let (state, ed) = (state.clone(), ed.clone());
         let arg = Rc::new(arg);
         popover.connect_show(move |_| {
-            let Some(popover) = pop.upgrade() else { return };
             while let Some(c) = list.first_child() {
                 list.remove(&c);
             }
@@ -1000,7 +1009,7 @@ fn obs_name_row(
             }
             list.append(&note("Loading…"));
             let a = arg(&ed.cur.borrow());
-            let (list, row, popover) = (list.clone(), row.clone(), popover.clone());
+            let list = list.clone();
             runtime::run(async move { c.obs_list(kind, &a).await }, move |r| {
                 while let Some(c) = list.first_child() {
                     list.remove(&c);
@@ -1013,13 +1022,6 @@ fn obs_name_row(
                             let item = gtk::ListBoxRow::builder()
                                 .child(&gtk::Label::builder().label(&n).xalign(0.0).build())
                                 .build();
-                            let (row, popover) = (row.clone(), popover.clone());
-                            item.connect_activate(move |_| {
-                                if let Some(r) = row.upgrade() {
-                                    r.set_text(&n);
-                                }
-                                popover.popdown();
-                            });
                             list.append(&item);
                         }
                     }

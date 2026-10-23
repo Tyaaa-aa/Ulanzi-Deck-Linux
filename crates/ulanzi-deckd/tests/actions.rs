@@ -281,3 +281,56 @@ fn outputs_cycle_through_the_chosen_ones() {
     );
     assert_eq!(next_output("x", &[], &[]), None);
 }
+
+#[test]
+fn browser_duplicates_are_dropped() {
+    use ulanzi_deckd::actions::media::drop_duplicates;
+    let list = vec![
+        (
+            "org.mpris.MediaPlayer2.plasma-browser-integration".to_string(),
+            Some(102117),
+        ),
+        ("org.mpris.MediaPlayer2.vivaldi.instance102117".to_string(), None),
+        ("org.mpris.MediaPlayer2.vlc".to_string(), None),
+        ("org.mpris.MediaPlayer2.chromium.instance555".to_string(), None),
+    ];
+    assert_eq!(
+        drop_duplicates(&list),
+        vec![
+            "org.mpris.MediaPlayer2.plasma-browser-integration".to_string(),
+            "org.mpris.MediaPlayer2.vlc".to_string(),
+            "org.mpris.MediaPlayer2.chromium.instance555".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn player_choice_is_sticky_while_playing() {
+    use ulanzi_deckd::actions::media::pick_sticky;
+    let p = |a: PlaybackStatus, b: PlaybackStatus| vec![("a".to_string(), a), ("b".to_string(), b)];
+    use PlaybackStatus::*;
+    // Both playing for a moment (a track change): stay on the one we showed.
+    assert_eq!(pick_sticky(&p(Playing, Playing), Some("b")).as_deref(), Some("b"));
+    // The one we showed paused while another plays: follow the playing one.
+    assert_eq!(pick_sticky(&p(Playing, Paused), Some("b")).as_deref(), Some("a"));
+    // Nothing playing: keep the one we showed.
+    assert_eq!(pick_sticky(&p(Paused, Paused), Some("b")).as_deref(), Some("b"));
+    assert_eq!(pick_sticky(&p(Paused, Paused), None).as_deref(), Some("a"));
+}
+
+#[test]
+fn a_new_track_starts_at_zero() {
+    use ulanzi_deckd::actions::media::TrackClock;
+    let mut c = TrackClock::default();
+    let s = 1_000_000u64;
+    assert_eq!(c.position("t1", 40 * s), 40 * s);
+    // The player reports the old time for the new track: count from the change.
+    assert_eq!(c.position("t2", 41 * s), 0);
+    assert_eq!(c.position("t2", 45 * s), 4 * s);
+    // Once the player resets, its own time is used again.
+    assert_eq!(c.position("t2", 2 * s), 2 * s);
+    assert_eq!(c.position("t2", 3 * s), 3 * s);
+    // A player that resets on time is untouched.
+    assert_eq!(c.position("t3", 0), 0);
+    assert_eq!(c.position("t3", s), s);
+}
