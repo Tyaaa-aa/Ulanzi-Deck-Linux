@@ -805,6 +805,34 @@ fn a_good_connection_resets_the_backoff() {
 }
 
 #[test]
+fn reconnect_and_new_settings_warn_about_a_refusal_again() {
+    let mut h = Harness::<Obs>::new();
+    h.init(settings()).expect("init");
+    let refuse = |h: &mut Harness<Obs>| {
+        let s = identified(h);
+        let (id, ty, _) = sent_requests(h, s)
+            .into_iter()
+            .find(|r| r.1 == "GetVersion")
+            .expect("GetVersion");
+        answer(h, s, &id, &ty, false, json!({"comment": "not ready"}));
+    };
+    let refused = |h: &Harness<Obs>| {
+        h.logs()
+            .iter()
+            .filter(|(l, m)| *l == Level::Warn && m == "OBS refused GetVersion")
+            .count()
+    };
+    refuse(&mut h);
+    assert_eq!(refused(&h), 1);
+    h.action("reconnect", json!({})).expect("ok");
+    refuse(&mut h);
+    assert_eq!(refused(&h), 2, "{:?}", h.logs());
+    h.init(json!({"host": "127.0.0.2", "port": 4455})).expect("init");
+    refuse(&mut h);
+    assert_eq!(refused(&h), 3, "{:?}", h.logs());
+}
+
+#[test]
 fn only_action_expiries_are_warned() {
     let mut h = Harness::<Obs>::new();
     live(&mut h);

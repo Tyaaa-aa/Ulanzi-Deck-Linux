@@ -1070,6 +1070,7 @@ impl Plugin for Obs {
         self.teardown(cx, true);
         self.config = Some(config);
         self.backoff = FIRST_BACKOFF;
+        self.load_warning.clear();
         self.connect(cx, true);
         Ok(())
     }
@@ -1079,6 +1080,7 @@ impl Plugin for Obs {
             "reconnect" => {
                 self.teardown(cx, true);
                 self.backoff = FIRST_BACKOFF;
+                self.load_warning.clear();
                 self.connect(cx, true);
                 return Ok(());
             }
