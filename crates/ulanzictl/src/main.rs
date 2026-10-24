@@ -97,8 +97,11 @@ enum ProfileCmd {
 enum PluginCmd {
     /// Show installed plugins and how they are doing.
     List,
-    /// Install (or replace) the plugin in a folder (needs Developer mode).
-    Install { dir: PathBuf },
+    /// Install (or replace) a plugin from a .ulanziplugin file or a folder (needs Developer mode).
+    Install {
+        /// A .ulanziplugin file, or a folder that holds plugin.toml.
+        dir: PathBuf,
+    },
     /// Delete a plugin and its saved secrets (its settings are kept).
     Remove { id: String },
     /// Turn a plugin on.
@@ -481,6 +484,15 @@ async fn run(cli: Cli) -> Result<(), String> {
     Ok(())
 }
 
+/// The D-Bus method that installs `path`: a regular file is a package, anything else a folder.
+fn install_method(path: &std::path::Path) -> &'static str {
+    if path.is_file() {
+        "PluginInstallFile"
+    } else {
+        "PluginInstallDir"
+    }
+}
+
 async fn plugin(cmd: PluginCmd) -> Result<(), String> {
     let p = proxy().await?;
     match cmd {
@@ -492,7 +504,7 @@ async fn plugin(cmd: PluginCmd) -> Result<(), String> {
             let dir = std::fs::canonicalize(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             let path = dir.to_string_lossy().into_owned();
             let id: String = p
-                .call("PluginInstallDir", &(path.as_str(),))
+                .call(install_method(&dir), &(path.as_str(),))
                 .await
                 .map_err(not_running)?;
             println!("installed {id}");
@@ -673,6 +685,17 @@ mod tests {
     }
 
     #[test]
+    fn install_picks_the_method_by_path_kind() {
+        let dir = std::env::temp_dir().join(format!("ulanzictl-install-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let file = dir.join("a.ulanziplugin");
+        std::fs::write(&file, b"x").expect("file");
+        assert_eq!(install_method(&file), "PluginInstallFile");
+        assert_eq!(install_method(&dir), "PluginInstallDir");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
     fn plugin_commands() {
         let plugin = |args: &[&str]| match parse(args) {
             Ok(Cmd::Plugin { cmd }) => Ok(cmd),
@@ -684,6 +707,12 @@ mod tests {
             plugin(&["plugin", "install", "./hello"]).expect("ok"),
             PluginCmd::Install {
                 dir: "./hello".into()
+            }
+        );
+        assert_eq!(
+            plugin(&["plugin", "install", "/tmp/hello-1.0.0.ulanziplugin"]).expect("ok"),
+            PluginCmd::Install {
+                dir: "/tmp/hello-1.0.0.ulanziplugin".into()
             }
         );
         assert_eq!(

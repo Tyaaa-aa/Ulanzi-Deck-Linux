@@ -276,6 +276,17 @@ fn is_placeholder(v: Option<&toml::Value>) -> bool {
 }
 
 /// A plugin error as a D-Bus error; the message is the sentence shown to the user.
+/// A plugin file path must be absolute: the daemon's working directory means nothing to callers.
+fn absolute_file(path: &str) -> Result<()> {
+    if std::path::Path::new(path).is_absolute() {
+        Ok(())
+    } else {
+        Err(DeckError::Invalid(format!(
+            "the plugin file must be an absolute path, not \"{path}\""
+        )))
+    }
+}
+
 fn plugin_err(e: PluginError) -> DeckError {
     let msg = e.to_string();
     match e {
@@ -670,6 +681,18 @@ impl DeckService {
         serde_json::to_string(&i).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
+    /// Check the `.ulanziplugin` file at `path` (absolute) like an install would, writing nothing
+    /// that stays; JSON `Inspected`. Works without Developer mode.
+    async fn plugin_inspect_file(&self, path: String) -> Result<String> {
+        absolute_file(&path)?;
+        let i = self
+            .plugins()?
+            .inspect_file(std::path::Path::new(&path))
+            .await
+            .map_err(plugin_err)?;
+        serde_json::to_string(&i).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
     /// The entries of the plugin's picker `picker` (declared in its `[[pickers]]`) matching `query`
     /// (`""`: all), only those in `group` unless it is `""`, as a JSON array of `PickItem`. Starts
     /// the plugin if needed. Errors: NotFound (not installed), Invalid (undeclared picker),
@@ -733,6 +756,21 @@ impl DeckService {
             .developer_mode;
         self.plugins()?
             .install_dir(std::path::Path::new(&path), developer_mode)
+            .await
+            .map_err(plugin_err)
+    }
+
+    /// Install (or replace) the plugin in the `.ulanziplugin` file at `path` (absolute); returns
+    /// its id. Only in Developer mode (packages are unsigned).
+    async fn plugin_install_file(&self, path: String) -> Result<String> {
+        absolute_file(&path)?;
+        let developer_mode = self
+            .store
+            .load_settings()
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?
+            .developer_mode;
+        self.plugins()?
+            .install_file(std::path::Path::new(&path), developer_mode)
             .await
             .map_err(plugin_err)
     }

@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- Plugins as one file: `<id>-<version>.ulanziplugin` (a ZIP with `plugin.toml`, `plugin.wasm` and
+  optional `assets/`). `ulanzictl plugin install` takes a file or a folder, `scripts/package-plugin.sh
+  <plugin-dir>` builds a package, and the D-Bus methods `PluginInspectFile` and `PluginInstallFile`
+  (Developer mode, since packages are unsigned) unpack it with strict limits and no links.
 - Plugin contract 1.1: `list-items` and `[[pickers]]`, so plugins offer lists to pick from (entries with
   label, subtitle, group, icon and live state; bounded by the service). Plugins built for 1.0 keep
   working. `ulanzictl plugin items <id> <picker> [query] [--group G]` and the D-Bus method

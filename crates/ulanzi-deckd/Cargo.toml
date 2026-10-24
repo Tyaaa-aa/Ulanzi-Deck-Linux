@@ -40,8 +40,8 @@ base64 = "0.23.1"
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 wasmtime-wasi-io.workspace = true
-
-[dev-dependencies]
 tempfile.workspace = true
 zip.workspace = true
+
+[dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

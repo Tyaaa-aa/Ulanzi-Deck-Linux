@@ -57,6 +57,31 @@ pub fn fixture(package: &str, manifest: &str) -> tempfile::TempDir {
     dir
 }
 
+/// A `.ulanziplugin` package of `package` and `manifest` at `<dir>/<name>`; `extra` entries are added.
+pub fn package_file(
+    dir: &Path,
+    name: &str,
+    package: &str,
+    manifest: &str,
+    extra: &[(&str, &[u8])],
+) -> PathBuf {
+    use std::io::Write;
+    let path = dir.join(name);
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).expect("create package"));
+    let opts = zip::write::SimpleFileOptions::default();
+    zip.start_file("plugin.toml", opts).expect("start");
+    zip.write_all(manifest.as_bytes()).expect("manifest");
+    zip.start_file("plugin.wasm", opts).expect("start");
+    zip.write_all(&std::fs::read(wasm(package)).expect("read wasm"))
+        .expect("wasm");
+    for (entry, data) in extra {
+        zip.start_file(*entry, opts).expect("start");
+        zip.write_all(data).expect("extra");
+    }
+    zip.finish().expect("finish");
+    path
+}
+
 /// A running instance plus everything that must outlive it.
 pub struct Running {
     pub handle: InstanceHandle,

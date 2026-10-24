@@ -5,6 +5,7 @@ mod engine;
 mod install;
 mod instance;
 mod net;
+mod package;
 mod secrets;
 mod supervisor;
 
@@ -176,6 +177,18 @@ impl PluginHost {
     /// Install (or replace) the plugin in folder `src`; returns its id. Only in developer mode.
     pub async fn install_dir(&self, src: &Path, developer_mode: bool) -> Result<String, PluginError> {
         self.inner.install_dir(src, developer_mode).await
+    }
+
+    /// Install (or replace) the plugin in the `.ulanziplugin` file `file`; returns its id. Only in
+    /// developer mode (the package is unsigned).
+    pub async fn install_file(&self, file: &Path, developer_mode: bool) -> Result<String, PluginError> {
+        self.inner.install_file(file, developer_mode).await
+    }
+
+    /// Check the `.ulanziplugin` file `file` like an install would (unpacking it to a temporary
+    /// folder and compiling it); works without Developer mode.
+    pub async fn inspect_file(&self, file: &Path) -> Result<ulanzi_core::plugin::Inspected, PluginError> {
+        self.inner.inspect_file(file).await
     }
 
     /// The manifests of the loaded plugins (folders that cannot be loaded have none).

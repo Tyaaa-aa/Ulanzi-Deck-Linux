@@ -1518,6 +1518,93 @@ async fn inspect_dir_reads_without_installing() {
     h.host.shutdown().await;
 }
 
+fn probe_package(dir: &std::path::Path) -> std::path::PathBuf {
+    common::plugins::package_file(
+        dir,
+        "probe-1.0.0.ulanziplugin",
+        PROBE_PACKAGE,
+        PROBE_MANIFEST,
+        &[("assets/icons/a.png", b"png")],
+    )
+}
+
+#[tokio::test]
+async fn install_file_needs_developer_mode() {
+    let h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let pkg = tempfile::tempdir().expect("pkg");
+    let file = probe_package(pkg.path());
+    let err = h.host.install_file(&file, false).await.expect_err("refused");
+    assert_eq!(
+        err.to_string(),
+        "Turn on Developer mode to install unverified plugins"
+    );
+    assert!(h.host.list().is_empty());
+    assert_eq!(std::fs::read_dir(h.dir.path()).expect("dir").count(), 0);
+}
+
+#[tokio::test]
+async fn install_file_installs_and_starts() {
+    let mut h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let pkg = tempfile::tempdir().expect("pkg");
+    let file = probe_package(pkg.path());
+    assert_eq!(h.host.install_file(&file, true).await, Ok("probe".to_string()));
+    assert!(h.dir.path().join("probe/plugin.wasm").is_file());
+    assert!(h.dir.path().join("probe/plugin.toml").is_file());
+    assert_eq!(
+        std::fs::read(h.dir.path().join("probe/assets/icons/a.png")).expect("asset"),
+        b"png"
+    );
+    let kv = json!({"k": "a", "v": "b"});
+    assert_eq!(h.host.action("probe", "state", kv).await, Ok(()));
+    assert!(h.saw_state("probe", "a", "b").await);
+    // Installing it again replaces it.
+    assert_eq!(h.host.install_file(&file, true).await, Ok("probe".to_string()));
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn inspect_file_works_without_developer_mode() {
+    let h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let pkg = tempfile::tempdir().expect("pkg");
+    let file = probe_package(pkg.path());
+    let inspected = h.host.inspect_file(&file).await.expect("inspects");
+    assert_eq!(inspected.manifest.id, "probe");
+    assert_eq!(inspected.installed_version, None);
+    assert!(h.host.list().is_empty());
+    assert_eq!(std::fs::read_dir(h.dir.path()).expect("dir").count(), 0);
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn install_file_leaves_no_temp_dir() {
+    let h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let pkg = tempfile::tempdir().expect("pkg");
+    let good = probe_package(pkg.path());
+    assert!(h.host.inspect_file(&good).await.is_ok());
+    assert!(h.host.install_file(&good, true).await.is_ok());
+    // Refused while unpacking, and refused while validating the unpacked plugin.
+    let junk = pkg.path().join("junk.ulanziplugin");
+    std::fs::write(&junk, b"nope").expect("junk");
+    assert!(h.host.install_file(&junk, true).await.is_err());
+    assert!(h.host.inspect_file(&junk).await.is_err());
+    let bad = common::plugins::package_file(
+        pkg.path(),
+        "bad.ulanziplugin",
+        PROBE_PACKAGE,
+        "not a manifest",
+        &[],
+    );
+    assert!(h.host.install_file(&bad, true).await.is_err());
+    assert!(h.host.inspect_file(&bad).await.is_err());
+    let left: Vec<String> = std::fs::read_dir(h.dir.path())
+        .expect("read dir")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["probe"]);
+    h.host.shutdown().await;
+}
+
 /// A host with the probe running and a handle on the secrets it uses.
 async fn probe_with_secrets(settings: &Settings, used: &[&str]) -> (Host, Arc<MemSecrets>) {
     let secrets = Arc::new(MemSecrets::default());

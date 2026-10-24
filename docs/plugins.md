@@ -374,6 +374,39 @@ copying. The source folder can have any name: the plugin is installed in a folde
 in its `plugin.toml`. The service tells you in `plugin list` if anything is wrong. A broken plugin never stops the others:
 it is listed as `incompatible` with the reason.
 
+### Packages (`.ulanziplugin`)
+
+A plugin can also be shipped as one file, `<id>-<version>.ulanziplugin`. It is a ZIP file with
+`plugin.toml` and `plugin.wasm` at the top and, if the plugin has them, an `assets/` folder:
+
+```text
+plugin.toml
+plugin.wasm
+assets/...        optional
+```
+
+Build one from a plugin folder with the script (it runs the release build for `wasm32-wasip2`,
+needs `zip` or `python3`, and prints the path of the package, written to `dist/plugins/`):
+
+```sh
+scripts/package-plugin.sh plugins/obs     # dist/plugins/obs-1.0.0.ulanziplugin
+ulanzictl plugin install dist/plugins/obs-1.0.0.ulanziplugin
+```
+
+Packages are not signed, so installing one needs Developer mode, like installing from a folder
+("Turn on Developer mode to install unverified plugins"). Inspecting one (the check an installer
+shows before it asks) works without. The service unpacks the file into a hidden temporary folder next
+to the installed plugins, checks it like a plugin folder and installs it; the temporary folder is
+removed whatever the outcome. A package is refused, with the reason, when:
+
+- the file is larger than 64 MiB, holds more than 1000 entries or unpacks to more than 64 MiB (the
+  size is counted while unpacking, not read from the file's headers);
+- an entry name is absolute, holds `..`, a backslash or a NUL, or is listed twice;
+- an entry is a link (symlink) or anything but a file or folder;
+- an entry is not `plugin.toml`, `plugin.wasm` or under `assets/` (a package made by zipping the plugin
+  folder itself, with everything one level down, is refused for that reason);
+- `plugin.toml` or `plugin.wasm` is missing, or the plugin does not pass the checks of a plugin folder.
+
 ## Example: hello
 
 [`examples/plugins/hello`](../examples/plugins/hello) is the smallest useful plugin: a counter and a
@@ -468,7 +501,7 @@ From the command line:
 
 ```text
 ulanzictl plugin list                 id, name, version, status and the reason when there is one
-ulanzictl plugin install <folder>     needs developer mode
+ulanzictl plugin install <file|folder>  a .ulanziplugin file or a plugin folder; needs developer mode
 ulanzictl plugin remove <id>          deletes the plugin and its secrets (settings are kept)
 ulanzictl plugin enable <id>          ulanzictl plugin disable <id>
 ulanzictl plugin restart <id>         stop and start again; also clears a "failed" status

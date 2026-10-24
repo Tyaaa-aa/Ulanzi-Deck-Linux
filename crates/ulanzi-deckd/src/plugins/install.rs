@@ -3,14 +3,16 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use super::package;
 use super::supervisor::{Host, read_manifest, stop_run};
 use ulanzi_core::plugin::Inspected;
 
 use super::{LoadedPlugin, PluginEngine, PluginError};
 
 const DEVELOPER_ONLY: &str = "Turn on Developer mode to install plugins from a folder";
+const DEVELOPER_ONLY_FILE: &str = "Turn on Developer mode to install unverified plugins";
 
 /// What a plugin folder may hold; everything else is left behind.
 const FILES: [&str; 2] = ["plugin.toml", "plugin.wasm"];
@@ -124,17 +126,49 @@ fn swap_in(dir: &Path, id: &str) -> Result<(), PluginError> {
     Ok(())
 }
 
+/// Unpack the package `file` into a fresh hidden folder inside `plugins` (the scan ignores it,
+/// and the later rename stays on one filesystem) and [`validate`] it. The folder is removed when
+/// the returned guard drops, whatever happens.
+fn unpack_and_validate(
+    file: &Path,
+    plugins: &Path,
+    engine: &PluginEngine,
+) -> Result<(tempfile::TempDir, LoadedPlugin), PluginError> {
+    fs::create_dir_all(plugins).map_err(io_err("cannot create", plugins))?;
+    let tmp = tempfile::Builder::new()
+        .prefix(".unpack-")
+        .tempdir_in(plugins)
+        .map_err(io_err("cannot make a temporary folder in", plugins))?;
+    package::unpack(file, tmp.path())?;
+    let loaded = validate(tmp.path(), engine)?;
+    Ok((tmp, loaded))
+}
+
 impl Host {
     /// [`validate`] a folder without installing it or checking Developer mode.
     pub(super) async fn inspect_dir(&self, src: &Path) -> Result<Inspected, PluginError> {
         let engine = self.engine.clone().map_err(PluginError::Load)?;
         let src = src.to_path_buf();
         let loaded = blocking(move || validate(&src, &engine)).await?;
+        Ok(self.inspected(loaded))
+    }
+
+    /// Unpack and [`validate`] a `.ulanziplugin` file without installing it or checking
+    /// Developer mode.
+    pub(super) async fn inspect_file(&self, file: &Path) -> Result<Inspected, PluginError> {
+        let engine = self.engine.clone().map_err(PluginError::Load)?;
+        let (file, dir) = (file.to_path_buf(), self.dir.clone());
+        let loaded =
+            blocking(move || unpack_and_validate(&file, &dir, &engine).map(|(_tmp, loaded)| loaded)).await?;
+        Ok(self.inspected(loaded))
+    }
+
+    fn inspected(&self, loaded: LoadedPlugin) -> Inspected {
         let installed_version = self.installed_version(&loaded.manifest.id);
-        Ok(Inspected {
+        Inspected {
             manifest: loaded.manifest.clone(),
             installed_version,
-        })
+        }
     }
 
     pub(super) async fn install_dir(&self, src: &Path, developer_mode: bool) -> Result<String, PluginError> {
@@ -147,6 +181,33 @@ impl Host {
             let src = src.clone();
             blocking(move || validate(&src, &engine)).await?
         };
+        self.install_checked(src, loaded).await
+    }
+
+    /// Install (or replace) the plugin in a `.ulanziplugin` file.
+    pub(super) async fn install_file(
+        &self,
+        file: &Path,
+        developer_mode: bool,
+    ) -> Result<String, PluginError> {
+        if !developer_mode {
+            return Err(PluginError::Permission(DEVELOPER_ONLY_FILE.into()));
+        }
+        let engine = self.engine.clone().map_err(PluginError::Load)?;
+        let (file, dir) = (file.to_path_buf(), self.dir.clone());
+        let (tmp, loaded) = blocking(move || unpack_and_validate(&file, &dir, &engine)).await?;
+        let installed = self.install_checked(tmp.path().to_path_buf(), loaded).await;
+        // Removing the unpacked copy may take a moment; keep it off the async runtime.
+        let _ = blocking(move || {
+            drop(tmp);
+            Ok(())
+        })
+        .await;
+        installed
+    }
+
+    /// Install the already validated plugin folder `src` (copied, so `src` stays as it is).
+    async fn install_checked(&self, src: PathBuf, loaded: LoadedPlugin) -> Result<String, PluginError> {
         let id = loaded.manifest.id.clone();
 
         let _ops = self.ops.lock().await;
@@ -170,7 +231,7 @@ impl Host {
             self.resume(&id);
             return Err(e);
         }
-        tracing::info!(plugin = %id, "installed from a folder");
+        tracing::info!(plugin = %id, "installed");
         self.installed(loaded);
         Ok(id)
     }

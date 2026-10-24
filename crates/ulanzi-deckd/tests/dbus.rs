@@ -594,6 +594,68 @@ async fn plugin_inspect_dir_json() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugin_inspect_and_install_file_round_trip() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let file = common::plugins::package_file(
+        r._dir.path(),
+        "probe-1.0.0.ulanziplugin",
+        PROBE_PACKAGE,
+        PROBE_MANIFEST,
+        &[],
+    );
+    let path = file.to_string_lossy().into_owned();
+    // Inspecting works without Developer mode.
+    let json: String = p
+        .call("PluginInspectFile", &(path.as_str(),))
+        .await
+        .expect("inspect");
+    let i: Inspected = serde_json::from_str(&json).expect("json");
+    assert_eq!(i.manifest.id, "probe");
+    assert_eq!(i.installed_version, None);
+    // Installing needs it.
+    let e = p
+        .call::<_, _, String>("PluginInstallFile", &(path.as_str(),))
+        .await
+        .expect_err("developer mode is off");
+    assert_eq!(
+        error_message(e),
+        "Turn on Developer mode to install unverified plugins"
+    );
+    p.call::<_, _, ()>("ApplySettings", &("developer_mode = true\n",))
+        .await
+        .expect("apply");
+    let id: String = p
+        .call("PluginInstallFile", &(path.as_str(),))
+        .await
+        .expect("install");
+    assert_eq!(id, "probe");
+    assert!(r._dir.path().join("plugins/probe/plugin.wasm").is_file());
+    let json: String = p
+        .call("PluginInspectFile", &(path.as_str(),))
+        .await
+        .expect("inspect again");
+    let i: Inspected = serde_json::from_str(&json).expect("json");
+    assert_eq!(i.installed_version.as_deref(), Some("1.0.0"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_file_methods_need_an_absolute_path() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    for method in ["PluginInspectFile", "PluginInstallFile"] {
+        let e = p
+            .call::<_, _, String>(method, &("probe.ulanziplugin",))
+            .await
+            .expect_err("relative path");
+        assert_eq!(
+            error_message(e),
+            "the plugin file must be an absolute path, not \"probe.ulanziplugin\""
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn get_settings_masks_plugin_secrets() {
     let Some(r) = probe_rig().await else { return };
     let p = proxy(&r.client).await;

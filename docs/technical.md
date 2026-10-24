@@ -159,7 +159,7 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). Explore it with
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
 | OBS | `ObsStatus`, `ObsList`, `ObsUseDetected`, `ObsEnableServer`, `ObsReconnect` |
 | Widgets | `NowPlaying`, `WeatherPlaces`, `WeatherNow` |
-| Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
+| Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginInstallFile` / `PluginInspectFile` (the same for a `.ulanziplugin` package: an absolute path; installing needs Developer mode, inspecting does not; the package is unpacked into a hidden `.unpack-*` folder inside the plugins folder, limits 64 MiB file, 1000 entries, 64 MiB unpacked), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
 
 Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
 `ActionFailed`, `ObsStatusChanged`, `PluginsChanged`.
@@ -186,7 +186,7 @@ ulanzictl brightness <0-100>
 ulanzictl export <file> [--profile <name>]   ulanzictl import <file> [--skip|--replace]
 ulanzictl snapshots              ulanzictl restore <name>
 ulanzictl validate [file]        check profile files
-ulanzictl plugin list|install|remove|enable|disable|restart|dev-mode on|off|items <id> <picker>
+ulanzictl plugin list|install <file|folder>|remove|enable|disable|restart|dev-mode on|off|items <id> <picker>
 ulanzictl monitor                print presses, page changes and action errors live
 ulanzictl diagnostics            versions, session, device and recent logs (for bug reports)
 ulanzictl migrate                import version 1's ~/.config/ulanzi/config.yaml
