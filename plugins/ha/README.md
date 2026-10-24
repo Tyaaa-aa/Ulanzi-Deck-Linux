@@ -27,6 +27,13 @@ ulanzictl plugin install ~/ha-plugin
 Create a long-lived access token in Home Assistant: open your profile page (your name, bottom left), scroll
 to the bottom, "Long-lived access tokens", Create token, and copy it. Home Assistant shows it only once.
 
+Or build one file and install it from the app (Settings → Integrations → Install Plugin…, Developer Mode
+on) or with `ulanzictl plugin install`:
+
+```sh
+scripts/package-plugin.sh plugins/ha     # writes dist/plugins/ha-<version>.ulanziplugin
+```
+
 ## Settings
 
 Open Settings → Integrations → Home Assistant in the app and fill in the address and access token. The token

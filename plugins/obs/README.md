@@ -24,6 +24,13 @@ ulanzictl plugin install ~/obs-plugin
 In OBS, turn on Tools → WebSocket Server Settings → Enable WebSocket server. Show Connect Info gives the
 port and password.
 
+Or build one file and install it from the app (Settings → Integrations → Install Plugin…, Developer Mode
+on) or with `ulanzictl plugin install`:
+
+```sh
+scripts/package-plugin.sh plugins/obs     # writes dist/plugins/obs-<version>.ulanziplugin
+```
+
 ## Settings
 
 Open Settings → Integrations → OBS Studio in the app and fill in the address, port and password. The password

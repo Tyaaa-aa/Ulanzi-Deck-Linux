@@ -176,6 +176,12 @@ its secrets. The contract, permissions and limits are in the
 [plugin guide](plugins.md). Each plugin has `[plugins.<id>]` in `settings.toml` (`enabled`, plus a `[plugins.<id>.settings]` subtable passed to the plugin); a plugin's state
 reaches key labels as `{<id>.<key>}`.
 
+Two paths go through the host besides actions. A `.ulanziplugin` file (a ZIP) is unpacked into a hidden
+temporary folder in the plugins folder, with its limits counted while unpacking, then checked and
+installed like a folder (`plugins/package.rs`, `PluginInspectFile`, `PluginInstallFile`). A picker
+opens with `PluginListItems`: the host starts the plugin if it is not running, sends it a `list-items`
+event with the 500 ms budget, and bounds the answer (5000 entries, cut text) before the app sees it.
+
 ## Command line
 
 ```text

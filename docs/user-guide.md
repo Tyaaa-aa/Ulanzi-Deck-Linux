@@ -101,6 +101,14 @@ Notes:
   to allow that.
 - **Type Text** types anything a US keyboard can type. For other characters (é, ü, emoji…) it pastes
   through the clipboard, which needs `wl-clipboard` (Wayland) or `xclip` (X11) installed.
+- **Plugin actions** (OBS Studio, Home Assistant and others you add) appear in the list under their
+  plugin's name. A field that picks something, such as an OBS scene or a Home Assistant light, shows
+  its current value; click it to open a list with a search field (and a group filter when the plugin
+  has one). Some lists let you tick several items, then press **Done**. If the list is empty or the
+  plugin is not connected, you can type the name by hand instead. To add a plugin, open **Preferences
+  → Integrations** and press **Install Plugin…**, then choose a `.ulanziplugin` file. Plugins are
+  unsigned, so this needs **Developer Mode** (on the same page); the dialog shows what the plugin may
+  do before you install.
 - **Multi Action** runs several actions in order, with optional pauses between them.
 - **App volume**: pick an installed app, or press the speaker button to choose from the apps
   playing sound right now.

@@ -25,7 +25,7 @@ and let your profiles follow the app you're using.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/main-dark.png">
-  <img src="docs/screenshots/main-light.png" alt="Ulanzi Deck: the deck with its keys, dials and wide screen, and the action library" width="920">
+  <img src="docs/screenshots/main-light.png" alt="Ulanzi Deck: the deck with its keys, dials and wide screen, and the action list" width="920">
 </picture>
 
 </div>

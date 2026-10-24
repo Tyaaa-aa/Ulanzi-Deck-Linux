@@ -249,8 +249,8 @@ How the checks work:
 `browser`, `dbus` and `programs` are accepted in the manifest and have no effect yet; they arrive with
 the contract versions that use them.
 
-Permissions in this version are granted by installing. The Settings page that shows them before you
-install is planned.
+Permissions are granted by installing. Before it installs a package or a folder, the app shows the
+plugin's permissions with an "Unverified plugin" warning, and you choose whether to go on.
 
 ## The SDK
 
@@ -328,7 +328,7 @@ Use `secret-set` for passwords, tokens and keys, never `set-state` or a settings
 stored for you in the system keyring (Secret Service: KWallet, GNOME Keyring), which the service
 first asks when a plugin starts. If it does not answer within 3 seconds, they go to
 `~/.config/ulanzi-deck/plugin-secrets.toml` (mode 0600) instead. They are never logged, never sent from the service over D-Bus (the app sends them in with `PluginSetSecret`) and not part of profile exports or
-backups. Removing a plugin deletes its secrets; reinstalling it from a folder keeps them.
+backups. Removing a plugin deletes its secrets; reinstalling it keeps them.
 
 To let the user type a secret in the app, declare it as a `kind = "secret"` setting. Its `key` is the
 secret's name in the store, so the plugin reads it with `secret("<key>")`. The row is write-only: the
@@ -363,7 +363,7 @@ Copy the build output (`target/wasm32-wasip2/release/<crate_name>.wasm`) to `plu
 your `plugin.toml`, then install the folder:
 
 ```sh
-ulanzictl plugin dev-mode on        # once: allow installing from a folder
+ulanzictl plugin dev-mode on        # once: allow installing unsigned plugins
 ulanzictl plugin install ./hello    # install, or replace and restart if already installed
 ulanzictl plugin list
 ```
@@ -543,5 +543,5 @@ working:
 - New exports: `widget-data` and `render` (widgets and key faces), `on-auth`, `on-discovered` and
   `on-context`.
 - State-driven key faces in the app.
-- A single-file package format, the marketplace and a `cargo generate` starter. Until then, plugins are
-  installed from a folder in developer mode.
+- Signed packages, a marketplace and a `cargo generate` starter. Until then, plugins are installed from
+  a `.ulanziplugin` file or a folder, both in Developer mode.
