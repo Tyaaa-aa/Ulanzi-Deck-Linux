@@ -376,11 +376,37 @@ pub fn value_from(f: &Field, input: Input) -> Result<Option<toml::Value>, String
     }
 }
 
-/// The action's parameters that have a default, for a newly added action.
+/// What a parameter's row shows when nothing is stored: the manifest default, else the first
+/// choice of a choice field, else the number a spin row falls back to (0 within the bounds).
+/// A newly added action stores exactly this, so what the rows show is what the key does.
+pub fn initial_value(f: &Field) -> Option<toml::Value> {
+    if let Some(d) = &f.default {
+        return Some(d.clone());
+    }
+    match &f.kind {
+        FieldKind::Choice => f
+            .choices
+            .first()
+            .map(|c| toml::Value::String(c.value().to_string())),
+        FieldKind::Number => {
+            let n = 0.0_f64
+                .max(f.min.unwrap_or(-UNBOUNDED))
+                .min(f.max.unwrap_or(UNBOUNDED));
+            Some(if f.is_integer() {
+                toml::Value::Integer(n.round() as i64)
+            } else {
+                toml::Value::Float(n)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The action's parameters as its rows show them, for a newly added action.
 pub fn defaults(a: &ManifestAction) -> toml::Table {
     a.params
         .iter()
-        .filter_map(|p| p.default.clone().map(|d| (p.key.clone(), d)))
+        .filter_map(|p| initial_value(p).map(|d| (p.key.clone(), d)))
         .collect()
 }
 
@@ -748,7 +774,7 @@ mod tests {
             .find(|i| i.title == "Change an input's volume")
             .expect("input_volume");
         assert_eq!(vol.search, "obs studio change an input's volume");
-        let want: toml::Table = toml::from_str("step = 2").expect("toml");
+        let want: toml::Table = toml::from_str("op = \"up\"\npercent = 0\nstep = 2").expect("toml");
         assert_eq!(
             vol.action,
             Action::Plugin {
@@ -798,7 +824,55 @@ mod tests {
     fn defaults_fill_params() {
         let m = obs_manifest();
         let a = m.action("input_volume").expect("input_volume");
-        let want: toml::Table = toml::from_str("step = 2").expect("toml");
+        let want: toml::Table = toml::from_str("op = \"up\"\npercent = 0\nstep = 2").expect("toml");
         assert_eq!(defaults(a), want);
+    }
+
+    /// Every shipped action, freshly added (text parameters filled in as the user would), is
+    /// accepted by its plugin's own parser.
+    #[test]
+    fn shipped_actions_work_out_of_the_box() {
+        for (name, manifest) in [
+            ("obs", obs_manifest()),
+            (
+                "ha",
+                Manifest::parse(include_str!("../../../plugins/ha/plugin.toml")).expect("ha manifest"),
+            ),
+        ] {
+            for a in &manifest.actions {
+                let mut t = defaults(a);
+                for p in &a.params {
+                    if p.kind == FieldKind::Text && !t.contains_key(&p.key) {
+                        t.insert(
+                            p.key.clone(),
+                            toml::Value::String(
+                                match (p.key.as_str(), a.id.as_str()) {
+                                    ("entity_id", "run") => "scene.test",
+                                    ("entity_id", _) => "light.test",
+                                    _ => "test",
+                                }
+                                .into(),
+                            ),
+                        );
+                    }
+                }
+                let params = serde_json::to_value(&t).expect("json");
+                let r = match name {
+                    "obs" => ulanzi_plugin_obs::actions::parse_action(&a.id, &params).map(|_| ()),
+                    _ => ulanzi_plugin_ha::actions::plan(
+                        &a.id,
+                        &params,
+                        &ulanzi_plugin_ha::protocol::Tracked::default(),
+                    )
+                    .map(|_| ()),
+                };
+                // Actions the plugin handles itself (reconnect, forget the password) are not
+                // the parser's; any other failure is a gap in what a new action stores.
+                if r.as_ref().is_err_and(|e| e.starts_with("unknown action")) && a.params.is_empty() {
+                    continue;
+                }
+                assert!(r.is_ok(), "{name}/{}: {:?} with {t:?}", a.id, r);
+            }
+        }
     }
 }

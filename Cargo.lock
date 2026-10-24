@@ -3759,6 +3759,8 @@ dependencies = [
  "tracing-subscriber",
  "ulanzi-core",
  "ulanzi-deckd",
+ "ulanzi-plugin-ha",
+ "ulanzi-plugin-obs",
  "uuid",
  "zbus",
 ]
