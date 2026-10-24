@@ -54,6 +54,11 @@ impl Mock {
             .unwrap_or_default()
     }
 
+    /// Every message received after sign-in, in order.
+    pub fn sent(&self) -> Vec<Value> {
+        self.requests.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
     /// The last `call_service` message received.
     pub fn last_service(&self) -> Option<Value> {
         self.requests

@@ -2,11 +2,11 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use common::obs_mock::{Mode, mock};
-use common::plugins::{Running, start};
+use common::plugins::{PROMPTLY, Running, start};
 use serde_json::json;
 use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::plugins::ulanzi::plugin::types::Status;
@@ -229,4 +229,168 @@ async fn obs_plugin_pickers_list_what_the_mock_holds() {
     );
     let sources = p.list("scene_sources", "", "A").await.expect("sources");
     assert_eq!(sources[0].group.as_deref(), Some("A"));
+}
+
+/// Wait until the mock has received a `ty` request after the first `from` requests; its data.
+async fn sent_since(mock: &common::obs_mock::Mock, from: usize, ty: &str) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + PROMPTLY;
+    loop {
+        if let Some((_, data)) = mock.sent().into_iter().skip(from).find(|(t, _)| t == ty) {
+            return data;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no {ty} reached the mock: {:?}",
+            &mock.requests()[from.min(mock.requests().len())..]
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Every action in plugin.toml, through the real host, and the request each one sends to OBS.
+#[tokio::test]
+async fn obs_plugin_every_action_reaches_obs() {
+    let mock = mock(Mode::Open).await;
+    let mut p = start(PACKAGE, MANIFEST, BTreeMap::new());
+    p.send(Event::Init {
+        settings: json!({"host": "127.0.0.1", "port": mock.port}),
+    });
+    let mut seen = Seen::default();
+    assert!(
+        seen.wait(&mut p, |s| s.state("connected") == "yes"
+            && s.state("visible.A/Cam") == "yes")
+            .await,
+        "connected with scene items"
+    );
+
+    // (action, params, request OBS gets, its data). Read-then-write actions list the write.
+    let cases = [
+        (
+            "set_scene",
+            json!({"scene": "B"}),
+            "SetCurrentProgramScene",
+            json!({"sceneName": "B"}),
+        ),
+        (
+            "set_scene",
+            json!({"scene": "B", "preview": true}),
+            "SetCurrentPreviewScene",
+            json!({"sceneName": "B"}),
+        ),
+        // The program scene is A: switch to B.
+        (
+            "toggle_scenes",
+            json!({"a": "A", "b": "B"}),
+            "SetCurrentProgramScene",
+            json!({"sceneName": "B"}),
+        ),
+        (
+            "toggle_source",
+            json!({"scene": "A", "source": "Cam"}),
+            "SetSceneItemEnabled",
+            json!({"sceneName": "A", "sceneItemId": 1, "sceneItemEnabled": false}),
+        ),
+        ("toggle_record", json!({}), "ToggleRecord", json!({})),
+        ("start_record", json!({}), "StartRecord", json!({})),
+        ("stop_record", json!({}), "StopRecord", json!({})),
+        ("pause_record", json!({}), "ToggleRecordPause", json!({})),
+        ("toggle_stream", json!({}), "ToggleStream", json!({})),
+        ("start_stream", json!({}), "StartStream", json!({})),
+        ("stop_stream", json!({}), "StopStream", json!({})),
+        ("toggle_replay", json!({}), "ToggleReplayBuffer", json!({})),
+        ("save_replay", json!({}), "SaveReplayBuffer", json!({})),
+        ("toggle_virtual_cam", json!({}), "ToggleVirtualCam", json!({})),
+        (
+            "toggle_mute",
+            json!({"input": "Mic"}),
+            "ToggleInputMute",
+            json!({"inputName": "Mic"}),
+        ),
+        // The mock's Mic is at -1 dB.
+        (
+            "input_volume",
+            json!({"input": "Mic", "op": "down", "step": 3}),
+            "SetInputVolume",
+            json!({"inputName": "Mic", "inputVolumeDb": -4.0}),
+        ),
+        (
+            "input_volume",
+            json!({"input": "Mic", "op": "set", "percent": 100}),
+            "SetInputVolume",
+            json!({"inputName": "Mic", "inputVolumeDb": 0.0}),
+        ),
+        (
+            "input_volume",
+            json!({"input": "Mic", "op": "mute"}),
+            "ToggleInputMute",
+            json!({"inputName": "Mic"}),
+        ),
+        // The mock answers GetSourceFilter without filterEnabled (off): turn it on.
+        (
+            "toggle_filter",
+            json!({"source": "Cam", "filter": "Color"}),
+            "SetSourceFilterEnabled",
+            json!({"sourceName": "Cam", "filterName": "Color", "filterEnabled": true}),
+        ),
+        (
+            "studio_transition",
+            json!({}),
+            "TriggerStudioModeTransition",
+            json!({}),
+        ),
+        (
+            "set_collection",
+            json!({"name": "Stream"}),
+            "SetCurrentSceneCollection",
+            json!({"sceneCollectionName": "Stream"}),
+        ),
+        (
+            "set_profile",
+            json!({"name": "Quiet"}),
+            "SetCurrentProfile",
+            json!({"profileName": "Quiet"}),
+        ),
+        (
+            "screenshot",
+            json!({}),
+            "TriggerHotkeyByName",
+            json!({"hotkeyName": "OBSBasic.Screenshot"}),
+        ),
+    ];
+    let mut ran: BTreeSet<&str> = BTreeSet::from(["reconnect", "forget_password"]);
+    for (action, params, ty, want) in cases {
+        ran.insert(action);
+        let from = mock.sent().len();
+        assert_eq!(p.act(action, params.clone()).await, Ok(()), "{action} {params}");
+        assert_eq!(sent_since(&mock, from, ty).await, want, "{action} {params}");
+    }
+    // The two reads ahead of the writes went out too.
+    assert!(mock.requests().contains(&"GetInputVolume".to_string()));
+    assert_eq!(
+        mock.last("GetSourceFilter"),
+        Some(json!({"sourceName": "Cam", "filterName": "Color"}))
+    );
+
+    // reconnect: a second connection that loads again.
+    let from = mock.sent().len();
+    assert_eq!(p.act("reconnect", json!({})).await, Ok(()));
+    sent_since(&mock, from, "GetVersion").await;
+    assert_eq!(mock.connections(), 2);
+
+    // forget_password: the saved password is deleted.
+    p.send(Event::Init {
+        settings: json!({"host": "127.0.0.1", "port": mock.port, "password": "pw"}),
+    });
+    let saved = Output::SecretsChanged(BTreeMap::from([("password".to_string(), "pw".to_string())]));
+    assert!(p.saw(&saved, SOON).await, "password saved");
+    assert_eq!(p.act("forget_password", json!({})).await, Ok(()));
+    assert!(
+        p.saw(&Output::SecretsChanged(BTreeMap::new()), SOON).await,
+        "password deleted"
+    );
+
+    // Every action of the manifest ran above.
+    let manifest = Manifest::parse(MANIFEST).expect("manifest");
+    let declared: BTreeSet<&str> = manifest.actions.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ran, declared);
 }

@@ -2,11 +2,11 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use common::ha_mock::{Mode, mock};
-use common::plugins::{Running, start};
+use common::plugins::{PROMPTLY, Running, start};
 use serde_json::json;
 use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::plugins::ulanzi::plugin::types::Status;
@@ -299,4 +299,196 @@ async fn ha_plugin_lists_entities_for_pickers() {
             .keys()
             .all(|k| !k.contains("kettle") && !k.contains("movie"))
     );
+}
+
+/// Wait until the mock has received a `call_service` after the first `from` messages; that message.
+async fn service_since(mock: &common::ha_mock::Mock, from: usize) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + PROMPTLY;
+    loop {
+        if let Some(m) = mock
+            .sent()
+            .into_iter()
+            .skip(from)
+            .find(|m| m["type"] == "call_service")
+        {
+            return m;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no call_service reached the mock: {:?}",
+            mock.requests()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Every action in plugin.toml, through the real host, and the message each one sends.
+#[tokio::test]
+async fn ha_plugin_every_action_reaches_home_assistant() {
+    let mock = mock(Mode::Token(TOKEN)).await;
+    let mut p = start(PACKAGE, MANIFEST, BTreeMap::new());
+    p.send(Event::Init {
+        settings: settings(mock.port),
+    });
+    let mut seen = Seen::default();
+    assert!(
+        seen.wait(&mut p, |s| s.state("connected") == "yes"
+            && s.state("light.desk") == "on")
+            .await,
+        "connected"
+    );
+
+    // (action, params, domain, service, target entity, service_data).
+    let cases = [
+        (
+            "toggle",
+            json!({"entity_id": "light.desk"}),
+            "homeassistant",
+            "toggle",
+            Some("light.desk"),
+            json!({}),
+        ),
+        (
+            "turn_on",
+            json!({"entity_id": "switch.kettle"}),
+            "homeassistant",
+            "turn_on",
+            Some("switch.kettle"),
+            json!({}),
+        ),
+        (
+            "turn_off",
+            json!({"entity_id": "switch.kettle"}),
+            "homeassistant",
+            "turn_off",
+            Some("switch.kettle"),
+            json!({}),
+        ),
+        (
+            "run",
+            json!({"entity_id": "scene.movie"}),
+            "scene",
+            "turn_on",
+            Some("scene.movie"),
+            json!({}),
+        ),
+        (
+            "run",
+            json!({"entity_id": "automation.night"}),
+            "automation",
+            "trigger",
+            Some("automation.night"),
+            json!({}),
+        ),
+        (
+            "run",
+            json!({"entity_id": "button.doorbell"}),
+            "button",
+            "press",
+            Some("button.doorbell"),
+            json!({}),
+        ),
+        (
+            "set_level",
+            json!({"entity_id": "light.desk", "op": "set", "percent": 40}),
+            "light",
+            "turn_on",
+            Some("light.desk"),
+            json!({"brightness_pct": 40}),
+        ),
+        (
+            "set_level",
+            json!({"entity_id": "light.desk", "op": "down", "step": 10}),
+            "light",
+            "turn_on",
+            Some("light.desk"),
+            json!({"brightness_step_pct": -10}),
+        ),
+        (
+            "set_level",
+            json!({"entity_id": "media_player.tv", "op": "set", "percent": 35}),
+            "media_player",
+            "volume_set",
+            Some("media_player.tv"),
+            json!({"volume_level": 0.35}),
+        ),
+        (
+            "set_level",
+            json!({"entity_id": "fan.desk", "op": "up", "step": 10}),
+            "fan",
+            "increase_speed",
+            Some("fan.desk"),
+            json!({"percentage_step": 10}),
+        ),
+        (
+            "set_level",
+            json!({"entity_id": "cover.blind", "op": "set", "percent": 70}),
+            "cover",
+            "set_cover_position",
+            Some("cover.blind"),
+            json!({"position": 70}),
+        ),
+        (
+            "call_service",
+            json!({"domain": "notify", "service": "mobile_app_phone", "data": "{\"message\": \"hi\"}"}),
+            "notify",
+            "mobile_app_phone",
+            None,
+            json!({"message": "hi"}),
+        ),
+        (
+            "call_service",
+            json!({"domain": "light", "service": "turn_on", "entity_id": "light.desk", "data": {"color_name": "red"}}),
+            "light",
+            "turn_on",
+            Some("light.desk"),
+            json!({"color_name": "red"}),
+        ),
+    ];
+    let mut ran: BTreeSet<&str> = BTreeSet::from(["reconnect", "forget_token"]);
+    for (action, params, domain, service, target, data) in cases {
+        ran.insert(action);
+        let from = mock.sent().len();
+        assert_eq!(p.act(action, params.clone()).await, Ok(()), "{action} {params}");
+        let m = service_since(&mock, from).await;
+        assert_eq!(
+            (m["domain"].as_str(), m["service"].as_str()),
+            (Some(domain), Some(service)),
+            "{action} {params}"
+        );
+        match target {
+            Some(e) => assert_eq!(m["target"], json!({"entity_id": e}), "{action} {params}"),
+            None => assert!(m.get("target").is_none(), "{action} {params}: {m}"),
+        }
+        assert_eq!(m["service_data"], data, "{action} {params}");
+    }
+
+    // reconnect: a second connection that signs in and subscribes again.
+    assert_eq!(p.act("reconnect", json!({})).await, Ok(()));
+    let deadline = tokio::time::Instant::now() + PROMPTLY;
+    while mock
+        .requests()
+        .iter()
+        .filter(|t| *t == "subscribe_entities")
+        .count()
+        < 2
+    {
+        assert!(tokio::time::Instant::now() < deadline, "{:?}", mock.requests());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(mock.connections(), 2);
+
+    // forget_token: the saved token is deleted and the plugin asks for one.
+    assert_eq!(p.act("forget_token", json!({})).await, Ok(()));
+    let deleted = Output::SecretsChanged(BTreeMap::new());
+    assert!(
+        seen.wait(&mut p, |s| s.others.contains(&deleted)
+            && s.has_status(Status::Problem, "Access token needed"))
+            .await,
+        "token deleted, and the plugin asks for one"
+    );
+
+    let manifest = Manifest::parse(MANIFEST).expect("manifest");
+    let declared: BTreeSet<&str> = manifest.actions.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ran, declared);
 }

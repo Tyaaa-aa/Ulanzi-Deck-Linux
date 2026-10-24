@@ -38,6 +38,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   plugin secrets stay in the sandbox and the keyring is never asked.
 
 ### Fixed
+- OBS Studio plugin: an OBS that accepts the connection but refuses its version or scene list is now
+  retried 1 s, 2 s, 4 s … up to every 10 s instead of every second, and the refusal is logged once. Volume
+  up on an input at 0 % no longer jumps to full volume. Clearer labels for studio mode and "Mute or unmute".
+- Home Assistant plugin: service calls get 30 s to answer before "didn't answer" is logged (scripts and slow
+  devices took longer than the 5 s other requests get). A key with no entity chosen says "Choose an entity
+  for this key first". "Call a service" is now "Call an action (service)", as Home Assistant names them, and
+  a new Set level key starts at 100 %.
 - The shortcut recorder captures Super (Meta) and any combination: Super alone, Super+X, Ctrl+Super
   and so on. Press and release modifiers alone to record just them; Escape still cancels. While it
   listens, the desktop's own shortcuts are paused on the window so KDE and GNOME don't swallow Super,

@@ -37,6 +37,11 @@ impl Mock {
             .unwrap_or_default()
     }
 
+    /// Every request received so far, in order: (request type, request data).
+    pub fn sent(&self) -> Vec<(String, Value)> {
+        self.requests.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+
     pub fn last(&self, ty: &str) -> Option<Value> {
         self.requests
             .lock()
