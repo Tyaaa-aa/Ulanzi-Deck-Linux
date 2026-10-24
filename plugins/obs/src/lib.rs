@@ -24,6 +24,11 @@ const HANDSHAKE: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(1000);
 /// A request unanswered after this many ticks is dropped.
 const PENDING_TICKS: u64 = 5;
+/// The host keeps at most this many distinct state keys per plugin for the instance's whole life
+/// (a key can never be removed again), and ignores keys over 256 bytes and values over 1 KiB.
+const HOST_STATE_KEYS: usize = 256;
+const HOST_KEY_BYTES: usize = 256;
+const HOST_VALUE_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Config {
@@ -130,6 +135,13 @@ pub struct Obs {
     /// Dynamic keys (`mute.*`, `visible.*`) last published with a value.
     dynamic: BTreeSet<String>,
     cap_warned: bool,
+    /// Every key ever set on the host; the host's 256-key cap counts these for the whole life
+    /// of the instance, so a new key is only published while the total stays under it.
+    ever_published: BTreeSet<String>,
+    key_cap_warned: bool,
+    key_size_warned: bool,
+    /// A scene, item or input event changed the shape; reload at the next tick, once.
+    reload_wanted: bool,
     status: Option<(Status, String)>,
 }
 
@@ -155,13 +167,34 @@ impl Default for Obs {
             sent: BTreeMap::new(),
             dynamic: BTreeSet::new(),
             cap_warned: false,
+            ever_published: BTreeSet::new(),
+            key_cap_warned: false,
+            key_size_warned: false,
+            reload_wanted: false,
             status: None,
         }
     }
 }
 
+/// Cut `s` to at most `max` bytes without splitting a character.
+fn truncate_at_boundary(mut s: String, max: usize) -> String {
+    if s.len() > max {
+        let mut end = max;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        s.truncate(end);
+    }
+    s
+}
+
 fn str_of(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or_default().to_string()
+}
+
+/// Without these two answers the plugin knows nothing useful about OBS.
+fn is_essential(ty: &str) -> bool {
+    matches!(ty, "GetVersion" | "GetSceneList")
 }
 
 fn bool_of(v: &Value, k: &str) -> bool {
@@ -248,6 +281,7 @@ impl Obs {
         self.scenes_loaded = false;
         self.preview_name.clear();
         self.cap_warned = false;
+        self.reload_wanted = false;
         self.publish(cx);
     }
 
@@ -286,7 +320,11 @@ impl Obs {
         self.dynamic.clear();
         for (key, value) in pairs {
             let dynamic = key.starts_with("mute.") || key.starts_with("visible.");
+            let value = truncate_at_boundary(value, HOST_VALUE_BYTES);
             if self.sent.get(&key) != Some(&value) {
+                if !self.may_publish(cx, &key) {
+                    continue;
+                }
                 cx.set_state(&key, value.clone());
                 self.sent.insert(key.clone(), value.clone());
             }
@@ -298,6 +336,41 @@ impl Obs {
                 }
             }
         }
+    }
+
+    /// Whether the host will accept `key`: not over its size limit, and either already known to
+    /// it or still under its lifetime key cap. Warns once for each reason otherwise.
+    fn may_publish(&mut self, cx: &mut Cx, key: &str) -> bool {
+        if key.len() > HOST_KEY_BYTES {
+            if !self.key_size_warned {
+                self.key_size_warned = true;
+                cx.log(
+                    Level::Warn,
+                    &format!(
+                        "A state key longer than {HOST_KEY_BYTES} bytes is not published (starts with “{}”)",
+                        truncate_at_boundary(key.to_string(), 40)
+                    ),
+                );
+            }
+            return false;
+        }
+        if self.ever_published.contains(key) {
+            return true;
+        }
+        if self.ever_published.len() >= HOST_STATE_KEYS {
+            if !self.key_cap_warned {
+                self.key_cap_warned = true;
+                cx.log(
+                    Level::Warn,
+                    &format!(
+                        "All {HOST_STATE_KEYS} state keys the host allows this plugin are used (renamed or removed scenes, sources and inputs keep theirs until the plugin restarts); new {{obs.…}} values are not published until you disable and enable the plugin"
+                    ),
+                );
+            }
+            return false;
+        }
+        self.ever_published.insert(key.to_string());
+        true
     }
 
     fn update_ok_status(&mut self, cx: &mut Cx) {
@@ -339,7 +412,12 @@ impl Obs {
         self.next_id += 1;
         let id = format!("o{}", self.next_id);
         let text = request(&id, ty, data).to_string();
-        cx.send(socket, Payload::Text(text))?;
+        if cx.send(socket, Payload::Text(text)).is_err() {
+            // The host lost the socket (its close notice may have been dropped): without this
+            // the plugin would stay "connected" with frozen labels.
+            self.go_down(cx, Down::Dropped, true);
+            return Err(self.offline_error());
+        }
         self.pending.insert(
             id,
             Pending {
@@ -438,7 +516,7 @@ impl Obs {
             _ => {}
         }
         if e.reload {
-            self.reload(cx);
+            self.reload_wanted = true;
         }
         if e.changed || e.reload {
             self.update_ok_status(cx);
@@ -455,8 +533,13 @@ impl Obs {
         let data = d.get("responseData").cloned().unwrap_or(json!({}));
         match p.kind.clone() {
             Kind::Load { generation } => {
-                if generation == self.generation && ok {
-                    self.apply_load(cx, &p, &data);
+                if generation == self.generation {
+                    if ok {
+                        self.apply_load(cx, &p, &data);
+                    } else if is_essential(&p.ty) {
+                        cx.log(Level::Warn, &format!("OBS refused {}", p.ty));
+                        self.go_down(cx, Down::Dropped, true);
+                    }
                 }
             }
             Kind::Action | Kind::VolumeRead { .. } | Kind::FilterRead { .. } => {
@@ -640,16 +723,38 @@ impl Obs {
         }
         self.ticks += 1;
         let ticks = self.ticks;
+        if self.reload_wanted {
+            self.reload_wanted = false;
+            self.reload(cx);
+            if !matches!(self.phase, Phase::Live(_)) {
+                return;
+            }
+        }
         let stale: Vec<String> = self
             .pending
             .iter()
             .filter(|(_, p)| ticks - p.sent_tick > PENDING_TICKS)
             .map(|(id, _)| id.clone())
             .collect();
+        let mut lost = false;
         for id in stale {
             if let Some(p) = self.pending.remove(&id) {
-                cx.log(Level::Warn, &format!("OBS didn’t answer {}", p.ty));
+                match p.kind {
+                    // Only what a key press asked for is worth a log line.
+                    Kind::Action | Kind::VolumeRead { .. } | Kind::FilterRead { .. } => {
+                        cx.log(Level::Warn, &format!("OBS didn’t answer {}", p.ty));
+                    }
+                    Kind::Load { generation } if generation == self.generation && is_essential(&p.ty) => {
+                        cx.log(Level::Warn, &format!("OBS didn’t answer {}", p.ty));
+                        lost = true;
+                    }
+                    Kind::Load { .. } | Kind::Stats => {}
+                }
             }
+        }
+        if lost {
+            self.go_down(cx, Down::Dropped, true);
+            return;
         }
         if ticks.is_multiple_of(2) {
             let _ = self.send_request(cx, "GetStats", json!({}), Kind::Stats, "");
@@ -690,6 +795,9 @@ impl Plugin for Obs {
             }
             "forget_password" => {
                 cx.delete_secret("password");
+                if let Some(c) = &mut self.config {
+                    c.password = None;
+                }
                 return Ok(());
             }
             _ => {}

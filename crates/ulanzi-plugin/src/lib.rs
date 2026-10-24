@@ -181,7 +181,7 @@ impl Cx {
         return backend::host::send(s.0, data);
         #[cfg(not(target_arch = "wasm32"))]
         return backend::with(|f| {
-            if f.opened.iter().any(|(id, _)| *id == s) {
+            if f.opened.iter().any(|(id, _)| *id == s) && !f.lost.contains(&s) {
                 f.sent.entry(s.0).or_default().push(data);
                 Ok(())
             } else {

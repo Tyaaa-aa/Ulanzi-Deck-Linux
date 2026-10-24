@@ -53,6 +53,11 @@ impl<P: Plugin> Harness<P> {
     pub fn http(&mut self, r: Request, response: Result<HttpResponse, String>) {
         self.run(|p, cx| p.http(cx, r, response));
     }
+    /// The host loses a socket and the `on-closed` notice never arrives (its event queue was full):
+    /// the plugin is not told, and every later `send` on it fails.
+    pub fn lose_socket(&mut self, s: Socket) {
+        self.fake.lost.push(s);
+    }
     /// Fire a timer; a one-shot timer is gone afterwards.
     pub fn fire(&mut self, t: Timer) {
         if let Some(i) = self.fake.timers.iter().position(|(id, ..)| *id == t) {
@@ -63,6 +68,10 @@ impl<P: Plugin> Harness<P> {
         }
     }
 
+    /// Every state key set so far, with its latest value.
+    pub fn states(&self) -> &BTreeMap<String, String> {
+        &self.fake.state
+    }
     pub fn state(&self, key: &str) -> Option<&str> {
         self.fake.state.get(key).map(String::as_str)
     }

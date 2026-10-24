@@ -71,10 +71,14 @@ fn current(h: &Harness<Obs>) -> Socket {
 
 /// Init, open, Hello, Identified, then the whole load answered.
 fn live(h: &mut Harness<Obs>) -> Socket {
-    h.init(settings()).expect("init");
+    live_with(h, settings(), false)
+}
+
+fn live_with(h: &mut Harness<Obs>, settings: Value, auth: bool) -> Socket {
+    h.init(settings).expect("init");
     let s = current(h);
     h.open(s);
-    h.message(s, hello(false));
+    h.message(s, hello(auth));
     h.message(
         s,
         Payload::Text(json!({"op": 2, "d": {"negotiatedRpcVersion": 1}}).to_string()),
@@ -171,7 +175,7 @@ fn connects_with_password_and_loads() {
 
     let mut h = Harness::<Obs>::new();
     h.secrets().insert("password".into(), PASSWORD.into());
-    let s = live(&mut h);
+    live(&mut h);
     assert_eq!(h.state("connected"), Some("yes"));
     assert_eq!(h.state("scene"), Some("A"));
     assert_eq!(h.state("scene_count"), Some("2"));
@@ -182,7 +186,6 @@ fn connects_with_password_and_loads() {
         status_msg(&h),
         (Status::Ok, "OBS 31.0.2 · WebSocket 5.5.4 · 2 scenes".to_string())
     );
-    let _ = s;
 }
 
 #[test]
@@ -196,28 +199,16 @@ fn password_moves_to_the_keyring() {
             .iter()
             .any(|(l, m)| *l == Level::Warn && m.contains("[plugins.obs.settings]"))
     );
-    let s = h.opened()[0].0;
-    h.open(s);
-    h.message(s, hello(true));
-    for key in [
-        "connected",
-        "scene",
-        "preview",
-        "studio_mode",
-        "scene_count",
-        "recording",
-        "rec_paused",
-        "streaming",
-        "replay",
-        "vcam",
-        "rec_time",
-        "stream_time",
-        "fps",
-        "cpu",
-        "dropped",
-        "last_error",
-    ] {
-        assert!(!h.state(key).unwrap_or_default().contains(PASSWORD), "{key}");
+    // Run the whole load, then look at every state key, the status and the log.
+    let mut h = Harness::<Obs>::new();
+    live_with(
+        &mut h,
+        json!({"host": "127.0.0.1", "port": 4455, "password": PASSWORD}),
+        true,
+    );
+    assert_eq!(h.state("connected"), Some("yes"));
+    for (key, value) in h.states() {
+        assert!(!key.contains(PASSWORD) && !value.contains(PASSWORD), "{key}");
     }
     assert!(!status_msg(&h).1.contains(PASSWORD));
     assert!(h.logs().iter().all(|(_, m)| !m.contains(PASSWORD)));
@@ -383,6 +374,13 @@ fn events_update_state() {
 
     let before = sent_requests(&h, s).len();
     event(&mut h, s, "SceneCreated", json!({"sceneName": "C"}));
+    assert_eq!(
+        sent_requests(&h, s).len(),
+        before,
+        "the reload waits for the tick"
+    );
+    let t = tick(&h);
+    h.fire(t);
     let new: Vec<String> = sent_requests(&h, s)[before..]
         .iter()
         .map(|r| r.1.clone())
@@ -524,4 +522,193 @@ fn handshake_timeout_retries() {
         (Status::Connecting, "Connection lost. Reconnecting…".to_string())
     );
     assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
+}
+
+#[test]
+fn state_keys_stay_under_the_host_cap_for_the_whole_life() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let rename = |h: &mut Harness<Obs>, old: &str, new: &str| {
+        event(
+            h,
+            s,
+            "InputNameChanged",
+            json!({"oldInputName": old, "inputName": new}),
+        );
+    };
+    let mut old = "Mic".to_string();
+    for i in 0..300 {
+        let new = format!("n{i}");
+        rename(&mut h, &old, &new);
+        old = new;
+    }
+    assert!(h.states().len() <= 256, "{} keys", h.states().len());
+    // Keys published earlier keep updating; ones past the cap never appear.
+    assert_eq!(h.state("mute.n10"), Some(""));
+    assert_eq!(h.state("mute.n299"), None);
+    event(&mut h, s, "CurrentProgramSceneChanged", json!({"sceneName": "B"}));
+    assert_eq!(h.state("scene"), Some("B"));
+    let warns = h
+        .logs()
+        .iter()
+        .filter(|(l, m)| *l == Level::Warn && m.contains("state keys the host allows"))
+        .count();
+    assert_eq!(warns, 1);
+    // A disconnect and reconnect does not make room.
+    h.closed(s, "connection lost");
+    assert!(h.states().len() <= 256);
+}
+
+#[test]
+fn oversize_keys_and_values_are_handled() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let long = "x".repeat(300);
+    event(
+        &mut h,
+        s,
+        "InputNameChanged",
+        json!({"oldInputName": "Mic", "inputName": long}),
+    );
+    assert!(h.states().keys().all(|k| k.len() <= 256));
+    assert!(
+        h.logs()
+            .iter()
+            .any(|(l, m)| *l == Level::Warn && m.contains("longer than 256 bytes"))
+    );
+    // A long error is cut at a character boundary, not dropped.
+    h.action("set_scene", json!({"scene": "Missing"})).expect("ok");
+    let (id, ty, _) = sent_requests(&h, s).pop().expect("request");
+    answer(&mut h, s, &id, &ty, false, json!({"comment": "é".repeat(1500)}));
+    let e = h.state("last_error").expect("last_error");
+    assert!(
+        !e.is_empty() && e.len() <= 1024 && e.chars().all(|c| c == 'é'),
+        "{}",
+        e.len()
+    );
+}
+
+#[test]
+fn a_lost_socket_takes_the_connection_down() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    h.lose_socket(s);
+    let e = h.action("toggle_record", json!({})).expect_err("send fails");
+    assert!(e.starts_with("OBS isn’t connected: "), "{e}");
+    assert_eq!(h.state("connected"), Some("no"));
+    assert_eq!(
+        status_msg(&h),
+        (Status::Connecting, "Connection lost. Reconnecting…".to_string())
+    );
+    assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
+
+    // The tick's GetStats finds a lost socket too.
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    h.lose_socket(s);
+    let t = tick(&h);
+    h.fire(t);
+    h.fire(t);
+    assert_eq!(h.state("connected"), Some("no"));
+    assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
+
+    // And the second half of a read-then-write action.
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    h.action("input_volume", json!({"input": "Mic", "op": "up", "step": 3}))
+        .expect("ok");
+    let (id, ty, _) = sent_requests(&h, s).pop().expect("request");
+    h.lose_socket(s);
+    answer(&mut h, s, &id, &ty, true, json!({"inputVolumeDb": -1.0}));
+    assert_eq!(h.state("connected"), Some("no"));
+}
+
+#[test]
+fn reloads_are_coalesced_per_tick() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let before = sent_requests(&h, s).len();
+    for i in 0..20 {
+        event(&mut h, s, "SceneCreated", json!({"sceneName": format!("S{i}")}));
+        event(&mut h, s, "InputCreated", json!({"inputName": format!("I{i}")}));
+    }
+    assert_eq!(sent_requests(&h, s).len(), before);
+    let t = tick(&h);
+    h.fire(t);
+    let new: Vec<String> = sent_requests(&h, s)[before..]
+        .iter()
+        .map(|r| r.1.clone())
+        .collect();
+    assert_eq!(new, ["GetSceneList", "GetInputList"]);
+    // Nothing further wanted: the next tick reloads nothing.
+    h.fire(t);
+    let reloads = sent_requests(&h, s)[before..]
+        .iter()
+        .filter(|r| r.1 == "GetSceneList")
+        .count();
+    assert_eq!(reloads, 1);
+}
+
+#[test]
+fn a_failed_essential_load_goes_down() {
+    for expire in [false, true] {
+        for essential in ["GetVersion", "GetSceneList"] {
+            let mut h = Harness::<Obs>::new();
+            h.init(settings()).expect("init");
+            let s = current(&h);
+            h.open(s);
+            h.message(s, hello(false));
+            h.message(
+                s,
+                Payload::Text(json!({"op": 2, "d": {"negotiatedRpcVersion": 1}}).to_string()),
+            );
+            let (id, ty, _) = sent_requests(&h, s)
+                .into_iter()
+                .find(|r| r.1 == essential)
+                .expect("request");
+            if expire {
+                let t = tick(&h);
+                for _ in 0..6 {
+                    h.fire(t);
+                }
+            } else {
+                answer(&mut h, s, &id, &ty, false, json!({"comment": "no"}));
+            }
+            assert_eq!(h.state("connected"), Some("no"), "{essential} {expire}");
+            assert_eq!(
+                status_msg(&h),
+                (Status::Connecting, "Connection lost. Reconnecting…".to_string())
+            );
+            assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
+        }
+    }
+}
+
+#[test]
+fn only_action_expiries_are_warned() {
+    let mut h = Harness::<Obs>::new();
+    live(&mut h);
+    let t = tick(&h);
+    for _ in 0..12 {
+        h.fire(t);
+    }
+    assert!(
+        h.logs().iter().all(|(_, m)| !m.contains("didn’t answer")),
+        "{:?}",
+        h.logs()
+    );
+}
+
+#[test]
+fn forget_password_clears_the_cached_one() {
+    let mut h = Harness::<Obs>::new();
+    h.init(json!({"host": "127.0.0.1", "port": 4455, "password": PASSWORD}))
+        .expect("init");
+    h.action("forget_password", json!({})).expect("ok");
+    assert!(!h.secrets().contains_key("password"));
+    h.action("reconnect", json!({})).expect("ok");
+    let s = current(&h);
+    h.open(s);
+    h.message(s, hello(true));
+    assert!(status_msg(&h).1.starts_with("Password needed"));
 }

@@ -93,6 +93,8 @@ mod fake {
         pub timers: Vec<(Timer, Duration, bool)>,
         pub status: Option<(Status, String)>,
         pub logs: Vec<(Level, String)>,
+        /// Sockets the host lost without telling the plugin: later sends fail.
+        pub lost: Vec<Socket>,
         next_socket: u32,
         next_timer: u32,
         next_request: u32,
