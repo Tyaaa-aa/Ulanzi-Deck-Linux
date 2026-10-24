@@ -63,9 +63,10 @@ else
     box=$(mktemp -d); trap "rm -rf $box" EXIT
     cargo build -q --locked --bins || exit 1
     cargo run -q -p ulanzi-core --example showcase -- "$box" >/dev/null || exit 1
-    dbus-run-session -- bash -c "
-      export XDG_CONFIG_HOME=$box/config XDG_STATE_HOME=$box/state XDG_CACHE_HOME=$box/cache XDG_DATA_HOME=$box/data ULANZI_DEMO=1
+    export XDG_CONFIG_HOME=$box/config XDG_STATE_HOME=$box/state XDG_CACHE_HOME=$box/cache XDG_DATA_HOME=$box/data ULANZI_DEMO=1
+    dbus-run-session --config-file=$PWD/scripts/private-bus.conf -- bash -c "
       target/debug/ulanzi-deckd >$box/daemon.log 2>&1 &
+      trap \"kill \$! 2>/dev/null\" EXIT
       for i in \$(seq 50); do target/debug/ulanzictl status >/dev/null 2>&1 && break; sleep 0.1; done
       target/debug/ulanzictl status | grep -q \"ready: demo\" &&
       target/debug/ulanzictl profile list | grep -q \"Media Desk\" &&

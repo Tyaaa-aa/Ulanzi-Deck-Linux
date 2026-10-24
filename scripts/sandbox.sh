@@ -50,7 +50,15 @@ if [ "$inner" = 0 ]; then
   fi
   echo "Sandbox: $dir"
   if [ "$demo" = 1 ]; then
-    exec dbus-run-session -- "$0" --inner --demo --dir "$dir" -- "${app_args[@]}"
+    # Everything the private bus could start sees only the sandbox, never your own folders, and
+    # the bus has no service directories at all, so your wallet and desktop portals cannot be
+    # started on it (they once were, and they stayed running).
+    export ULANZI_OBS_CONFIG_HOME="${ULANZI_OBS_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}"
+    export XDG_CONFIG_HOME="$dir/config" XDG_STATE_HOME="$dir/state" XDG_CACHE_HOME="$dir/cache" \
+      XDG_DATA_HOME="$dir/data"
+    mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
+    exec dbus-run-session --config-file="$here/scripts/private-bus.conf" -- \
+      "$0" --inner --demo --dir "$dir" -- "${app_args[@]}"
   fi
   if busctl --user status io.github.tyaaa_aa.UlanziDeck >/dev/null 2>&1; then
     echo "Please close the Ulanzi Deck window first (it would open your own profiles)." >&2
@@ -68,7 +76,7 @@ fi
 
 # Inside: everything below sees only the sandbox.
 # OBS keeps its own settings in your real config folder; "Find OBS Settings" should read them there.
-export ULANZI_OBS_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export ULANZI_OBS_CONFIG_HOME="${ULANZI_OBS_CONFIG_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}}"
 export XDG_CONFIG_HOME="$dir/config" XDG_STATE_HOME="$dir/state" XDG_CACHE_HOME="$dir/cache" \
   XDG_DATA_HOME="$dir/data"
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME"
@@ -80,7 +88,7 @@ fi
 if [ "$demo" = 1 ]; then
   export ULANZI_DEMO=1
   # The private bus would start fresh desktop portals with default settings; use GTK's own.
-  export GDK_DEBUG=no-portals
+  export GDK_DEBUG=no-portals GTK_A11Y=none
 fi
 
 if busctl --user status io.github.tyaaa_aa.UlanziDeck.Service >/dev/null 2>&1; then
