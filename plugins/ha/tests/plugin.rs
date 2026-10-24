@@ -276,7 +276,7 @@ fn events_update_state_and_ignore_stale_sockets() {
         &mut h,
         old,
         1,
-        json!({"light.desk": {"+": {"s": "off", "a": {"brightness": 0}}}}),
+        json!({"light.desk": {"+": {"s": "off", "a": {"brightness": null}}}}),
     );
     assert_eq!(h.state("light.desk"), Some("off"));
     assert_eq!(h.state("light.desk.pct"), Some("0"));
@@ -816,4 +816,69 @@ fn a_public_host_refused_after_dns_is_not_retried() {
         "{msg}"
     );
     no_retry(&h);
+}
+
+#[test]
+fn a_closed_socket_reason_reaches_the_log_once_and_never_the_token() {
+    let mut h = Harness::<Ha>::new();
+    h.init(settings()).expect("init");
+    for _ in 0..2 {
+        let s = current(&h);
+        h.closed(s, "tls: certificate expired");
+        let (t, _) = retry_timer(&h);
+        h.fire(t);
+    }
+    let n = h
+        .logs()
+        .iter()
+        .filter(|(l, m)| *l == Level::Warn && m.contains("tls: certificate expired"))
+        .count();
+    assert_eq!(n, 1, "{:?}", h.logs());
+    // A different reason is logged again.
+    let s = current(&h);
+    h.closed(s, "message too large");
+    assert!(h.logs().iter().any(|(_, m)| m.contains("message too large")));
+    assert_no_token(&h);
+}
+
+#[test]
+fn handshake_timeout_while_opening_is_unreachable() {
+    let mut h = Harness::<Ha>::new();
+    h.init(settings()).expect("init");
+    let (t, _) = h
+        .timers()
+        .into_iter()
+        .find(|(_, d, r)| !r && *d == Duration::from_secs(5))
+        .map(|(t, d, _)| (t, d))
+        .expect("handshake timer");
+    h.fire(t);
+    let (st, msg) = status_msg(&h);
+    assert_eq!(st, Status::Problem);
+    assert!(msg.starts_with("Cannot reach Home Assistant"), "{msg}");
+}
+
+#[test]
+fn last_error_clears_when_the_subscription_succeeds() {
+    let mut h = Harness::<Ha>::new();
+    h.init(settings()).expect("init");
+    let s = current(&h);
+    h.open(s);
+    h.message(s, auth_required());
+    h.message(s, auth_ok());
+    result(
+        &mut h,
+        s,
+        1,
+        false,
+        Some(json!({"code": "invalid_format", "message": "bad ids"})),
+    );
+    assert_eq!(h.state("last_error"), Some("bad ids"));
+    let (t, _) = retry_timer(&h);
+    h.fire(t);
+    let s = current(&h);
+    h.open(s);
+    h.message(s, auth_required());
+    h.message(s, auth_ok());
+    result(&mut h, s, 1, true, None);
+    assert_eq!(h.state("last_error"), Some(""));
 }

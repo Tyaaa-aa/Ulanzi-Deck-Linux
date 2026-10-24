@@ -118,7 +118,7 @@ async fn ha_plugin_end_to_end() {
     assert_eq!(sent["service"], "toggle");
     assert_eq!(sent["target"]["entity_id"], "light.desk");
 
-    mock.push_change("light.desk", "off", json!({"brightness": 0}));
+    mock.push_change("light.desk", "off", json!({"brightness": null}));
     assert!(
         seen.wait(&mut p, |s| s.state("light.desk") == "off").await,
         "label follows the change"

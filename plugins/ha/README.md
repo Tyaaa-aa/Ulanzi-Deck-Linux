@@ -9,7 +9,9 @@ ending in `.local`, local-range IP addresses (127/8, 10/8, 172.16/12, 192.168/16
 `fe80::/10`, `fc00::/7`) and any name that resolves only to local addresses. A name that resolves to even one
 public address is refused (`not allowed: <host>`). The permission does not limit which local host or port the
 plugin dials: it connects to whatever you type in `url`. If Home Assistant is not reachable it retries quietly
-(1 s, doubling to 10 s) and the status says what to check.
+(1 s, doubling to 10 s) and the status says what to check. After "Home Assistant 2022.4 or newer needed." or
+"Home Assistant must be on your local network …" it does not retry by itself: change a setting or run the
+`reconnect` action. The log records why a connection failed (DNS, TLS, message too large), once per reason.
 
 ## Build and install
 
@@ -42,7 +44,7 @@ attributes = ["climate.living:current_temperature"]   # optional, up to 40
 
 | Setting | Meaning |
 |---|---|
-| `url` | `192.168.1.5`, `homeassistant.local:8123`, `http://host:8123` or `https://host`. No scheme means `http`; no port means 8123 for http and 443 for https; a path is kept as a prefix (`/ha` becomes `/ha/api/websocket`). Credentials, a query or a fragment are refused. |
+| `url` | Required. `192.168.1.5`, `homeassistant.local:8123`, `http://host:8123`, `https://host` (`ws://` and `wss://` work too, and a pasted `/api/websocket` ending is removed). No scheme means `http`; no port means 8123 for http and 443 for https; a path is kept as a prefix (`/ha` becomes `/ha/api/websocket`). Credentials, a query or a fragment are refused. |
 | `token` | The long-lived access token. |
 | `entities` | The entities whose state you want on key labels. A list, or one comma-separated string. Ids are lowercase (`light.desk`); an entry that is not a valid entity id is skipped with a warning. |
 | `attributes` | Extra attribute values as `entity:attribute`. Optional. |
@@ -56,7 +58,8 @@ counts toward the 40-entity limit.
 The token is saved in the system keyring on the first start. After that, delete the `token` line and reload
 again. The plugin logs a warning on every start that still finds it. Until you delete the line, the token sits
 in plain text in `settings.toml`, can be read over D-Bus (`GetSettings`) and appears in settings exports and
-snapshots (`ulanzictl export --settings` does not strip it). The `forget_token` action deletes the saved token;
+snapshots (`ulanzictl export --settings` does not strip it). The `forget_token` action deletes the saved token
+(delete the `token` line first, otherwise the next start saves it again);
 `ulanzictl plugin remove ha` does too.
 
 With an `http://` address (the default) or `ws://` the token travels unencrypted on your local network. That is
@@ -122,7 +125,7 @@ Use these in any key label as `{ha.<key>}`.
 | `version` | Home Assistant's version; empty when offline |
 | `last_error` | Home Assistant's refusal of the last action or subscription, empty after the next success |
 | `entity_count` | how many of the listed entities Home Assistant knows |
-| `<entity_id>` | the state (`on`, `off`, `21.5`, ...); `offline` when not connected; `missing` when Home Assistant has no such entity |
+| `<entity_id>` | the state (`on`, `off`, `21.5`, ...); `offline` when not connected; `missing` when Home Assistant has no such entity; the keys of an entity you removed from `entities` stay and show `offline` until the plugin restarts |
 | `<entity_id>.name` | friendly name |
 | `<entity_id>.unit` | unit of measurement |
 | `<entity_id>.pct` | 0-100 whole number from light brightness, media_player volume, fan percentage or cover position; empty for other entities |

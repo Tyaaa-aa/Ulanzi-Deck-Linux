@@ -15,6 +15,11 @@ fn ws_url_accepts_the_forms_users_type() {
         ("https://ha.lan", "wss://ha.lan:443/api/websocket"),
         ("http://h:8123/ha", "ws://h:8123/ha/api/websocket"),
         ("  HTTP://H ", "ws://h:8123/api/websocket"),
+        ("ws://h:8123", "ws://h:8123/api/websocket"),
+        ("wss://ha.lan", "wss://ha.lan:443/api/websocket"),
+        ("ws://h:8123/api/websocket", "ws://h:8123/api/websocket"),
+        ("http://h:8123/api/websocket/", "ws://h:8123/api/websocket"),
+        ("https://h/ha/api/websocket", "wss://h:443/ha/api/websocket"),
     ];
     for (input, want) in ok {
         assert_eq!(ws_url(input).as_deref(), Ok(want), "{input:?}");
@@ -247,6 +252,7 @@ fn state_pairs_derive_values() {
         ("media_player.m", "playing", json!({"volume_level": 0.35})),
         ("fan.f", "on", json!({"percentage": 60})),
         ("cover.c", "open", json!({"current_position": 30})),
+        ("light.off", "off", json!({"brightness": null})),
         ("sensor.s", "21.5", json!({"unit_of_measurement": "°C"})),
         (
             "climate.x",
@@ -257,6 +263,7 @@ fn state_pairs_derive_values() {
     let c = cfg(
         &[
             "light.a",
+            "light.off",
             "media_player.m",
             "fan.f",
             "cover.c",
@@ -273,10 +280,11 @@ fn state_pairs_derive_values() {
     assert_eq!(p["connected"], "yes");
     assert_eq!(p["version"], "2025.1.0");
     assert_eq!(p["last_error"], "");
-    assert_eq!(p["entity_count"], "5");
+    assert_eq!(p["entity_count"], "6");
     assert_eq!(p["light.a"], "on");
     assert_eq!(p["light.a.name"], "Desk");
     assert_eq!(p["light.a.pct"], "50");
+    assert_eq!(p["light.off.pct"], "0");
     assert_eq!(p["media_player.m.pct"], "35");
     assert_eq!(p["fan.f.pct"], "60");
     assert_eq!(p["cover.c.pct"], "30");

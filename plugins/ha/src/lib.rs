@@ -141,6 +141,8 @@ pub struct Ha {
     key_cap_warned: bool,
     key_size_warned: bool,
     status: Option<(Status, String)>,
+    /// The last reason the host gave for a failed or closed socket, so each is logged once.
+    last_reason: String,
 }
 
 impl Default for Ha {
@@ -164,6 +166,7 @@ impl Default for Ha {
             key_cap_warned: false,
             key_size_warned: false,
             status: None,
+            last_reason: String::new(),
         }
     }
 }
@@ -218,6 +221,23 @@ impl Ha {
         cx.log(Level::Info, message);
     }
 
+    /// Log why the host failed or closed a socket, once per distinct reason. Host reasons are
+    /// about the transport (DNS, TLS, size limits) and never contain the token.
+    fn note_reason(&mut self, cx: &mut Cx, reason: &str) {
+        let reason = reason.trim();
+        if reason.is_empty() || self.last_reason == reason {
+            return;
+        }
+        self.last_reason = reason.to_string();
+        cx.log(
+            Level::Warn,
+            &format!(
+                "Connection to Home Assistant failed: {}",
+                truncate_at_boundary(reason.to_string(), 300)
+            ),
+        );
+    }
+
     fn connect(&mut self, cx: &mut Cx, announce: bool) {
         let Some(config) = self.config.clone() else { return };
         if let Some(t) = self.retry.take() {
@@ -236,8 +256,15 @@ impl Ha {
                 self.phase = Phase::Opening(s);
                 self.handshake = Some(cx.set_timer(HANDSHAKE, false));
             }
-            Err(e) if e.starts_with("not allowed") => self.go_down(cx, Down::NotAllowed, false),
-            Err(_) => self.go_down(cx, Down::Refused, false),
+            Err(e) => {
+                self.note_reason(cx, &e);
+                let why = if e.starts_with("not allowed") {
+                    Down::NotAllowed
+                } else {
+                    Down::Refused
+                };
+                self.go_down(cx, why, false);
+            }
         }
     }
 
@@ -515,6 +542,8 @@ impl Ha {
         self.phase = Phase::Live { socket, sub_id };
         self.tick = Some(cx.set_timer(TICK, true));
         self.live.connected = true;
+        self.last_reason.clear();
+        self.set_last_error(cx, "");
     }
 
     fn refresh(&mut self, cx: &mut Cx) {
@@ -730,15 +759,20 @@ impl Plugin for Ha {
             p if p.socket() == Some(socket) => Down::Dropped,
             _ => return,
         };
+        self.note_reason(cx, reason);
         self.go_down(cx, why, false);
     }
 
     fn timer(&mut self, cx: &mut Cx, timer: Timer) {
         if self.handshake == Some(timer) {
             self.handshake = None;
-            if !matches!(self.phase, Phase::Live { .. } | Phase::Idle) {
-                self.go_down(cx, Down::Dropped, true);
-            }
+            let why = match self.phase {
+                Phase::Live { .. } | Phase::Idle => return,
+                // Never got an answer from the address: unreachable, not a lost connection.
+                Phase::Opening(_) => Down::Refused,
+                _ => Down::Dropped,
+            };
+            self.go_down(cx, why, true);
         } else if self.retry == Some(timer) {
             self.retry = None;
             if self.phase == Phase::Idle {

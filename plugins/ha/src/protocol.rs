@@ -19,7 +19,8 @@ const ADDRESS_HELP: &str =
 
 /// Turn what a user types into the WebSocket endpoint.
 ///
-/// `192.168.1.5`, `homeassistant.local:8123`, `http://host:8123`, `https://host/ha` are accepted.
+/// `192.168.1.5`, `homeassistant.local:8123`, `http://host:8123`, `https://host/ha`, `ws://host:8123`
+/// and a pasted `…/api/websocket` are accepted.
 /// No scheme means http; no port means 8123 (http) or 443 (https). Credentials, query and
 /// fragment are refused without echoing them.
 pub fn ws_url(input: &str) -> Result<String, String> {
@@ -32,9 +33,13 @@ pub fn ws_url(input: &str) -> Result<String, String> {
         None => ("http".to_string(), text),
     };
     let (ws, default_port) = match scheme.as_str() {
-        "http" => ("ws", 8123),
-        "https" => ("wss", 443),
-        _ => return Err(format!("only http and https addresses work: {ADDRESS_HELP}")),
+        "http" | "ws" => ("ws", 8123),
+        "https" | "wss" => ("wss", 443),
+        _ => {
+            return Err(format!(
+                "only http, https, ws and wss addresses work: {ADDRESS_HELP}"
+            ));
+        }
     };
     if rest.contains(['?', '#']) {
         return Err(format!(
@@ -51,6 +56,9 @@ pub fn ws_url(input: &str) -> Result<String, String> {
         ));
     }
     let (host, port) = split_host_port(authority, default_port)?;
+    // The full endpoint pasted from elsewhere: the suffix is added below.
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix("/api/websocket").unwrap_or(path);
     let path = path.trim_end_matches('/');
     Ok(format!("{ws}://{host}:{port}{path}/api/websocket"))
 }
@@ -332,9 +340,11 @@ pub struct LiveInfo {
 }
 
 /// A 0 to 100 level for the kinds of entity that have one.
-fn pct_of(domain: &str, attrs: &Map<String, Value>) -> String {
+fn pct_of(domain: &str, state: &str, attrs: &Map<String, Value>) -> String {
     let num = |k: &str| attrs.get(k).and_then(Value::as_f64);
     let pct = match domain {
+        // Home Assistant sends brightness: null for a light that is off.
+        "light" if state == "off" => Some(0.0),
         "light" => num("brightness").map(|b| b / 255.0 * 100.0),
         "media_player" => num("volume_level").map(|v| v * 100.0),
         "fan" => num("percentage"),
@@ -398,7 +408,7 @@ pub fn state_pairs(t: &Tracked, cfg: &Config, live: &LiveInfo) -> Vec<(String, S
                     e.state.clone(),
                     text("friendly_name"),
                     text("unit_of_measurement"),
-                    pct_of(domain, &e.attrs),
+                    pct_of(domain, &e.state, &e.attrs),
                 )
             }
             None => ("missing".into(), String::new(), String::new(), String::new()),
