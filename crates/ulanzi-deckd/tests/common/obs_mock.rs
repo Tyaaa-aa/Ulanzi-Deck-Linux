@@ -118,10 +118,6 @@ pub async fn mock(mode: Mode) -> Mock {
                 }
                 let (requests, events_rx) = (requests.clone(), events_rx.clone());
                 let mut gen_rx = generation.subscribe();
-                // Events sent while no client was connected must not reach a later one.
-                if let Ok(mut rx) = events_rx.try_lock() {
-                    while rx.try_recv().is_ok() {}
-                }
                 tokio::spawn(async move {
                     let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else {
                         return;
@@ -164,6 +160,9 @@ pub async fn mock(mode: Mode) -> Mock {
                         return;
                     }
                     let mut events_rx = events_rx.lock().await;
+                    // Waiting for the guard means the previous connection is gone. Events sent
+                    // while no client was connected must not reach this one.
+                    while events_rx.try_recv().is_ok() {}
                     loop {
                         tokio::select! {
                             _ = gen_rx.changed() => return,

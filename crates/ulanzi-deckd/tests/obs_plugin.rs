@@ -131,8 +131,14 @@ async fn obs_plugin_wrong_password_and_foreign_host() {
         settings: json!({"host": "127.0.0.1", "port": mock.port, "password": "nope"}),
     });
     assert!(
-        status_where(&mut p, Status::Problem, |m| m.starts_with("Wrong password"), SOON).await,
-        "wrong password"
+        status_where(
+            &mut p,
+            Status::Problem,
+            |m| m.starts_with("OBS closed the connection during sign-in"),
+            SOON
+        )
+        .await,
+        "closed during sign-in"
     );
 
     p.send(Event::Init {

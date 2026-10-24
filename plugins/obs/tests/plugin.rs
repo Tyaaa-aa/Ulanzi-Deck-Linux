@@ -257,7 +257,10 @@ fn wrong_password_is_reported() {
     h.closed(s, "Authentication failed.");
     let (st, msg) = status_msg(&h);
     assert_eq!(st, Status::Problem);
-    assert!(msg.starts_with("Wrong password"), "{msg}");
+    assert!(
+        msg.starts_with("OBS closed the connection during sign-in"),
+        "{msg}"
+    );
     assert_eq!(h.state("connected"), Some("no"));
 }
 

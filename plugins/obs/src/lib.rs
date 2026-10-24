@@ -76,7 +76,7 @@ impl Down {
             ),
             Down::AuthFailed => (
                 Status::Problem,
-                "Wrong password. It doesn’t match OBS’s (Tools → WebSocket Server Settings → Show Connect Info).",
+                "OBS closed the connection during sign-in. Check the password (OBS: Tools → WebSocket Server Settings → Show Connect Info).",
             ),
             Down::TooOld => (
                 Status::Problem,
