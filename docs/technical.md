@@ -186,7 +186,8 @@ ulanzictl brightness <0-100>
 ulanzictl export <file> [--profile <name>]   ulanzictl import <file> [--skip|--replace]
 ulanzictl snapshots              ulanzictl restore <name>
 ulanzictl validate [file]        check profile files
-ulanzictl plugin list|install <file|folder>|remove|enable|disable|restart|dev-mode on|off|items <id> <picker>
+ulanzictl plugin list|install <file|folder>|remove|enable|disable|restart|dev-mode on|off
+ulanzictl plugin items <id> <picker> [query] [--group G]   list what a plugin offers for a picker
 ulanzictl monitor                print presses, page changes and action errors live
 ulanzictl diagnostics            versions, session, device and recent logs (for bug reports)
 ulanzictl migrate                import version 1's ~/.config/ulanzi/config.yaml
