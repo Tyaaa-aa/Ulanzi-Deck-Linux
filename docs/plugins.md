@@ -16,6 +16,7 @@ only what its manifest asks for and you allow. For how the rest of the app is bu
 [Building and installing](#building-and-installing) ·
 [Example: hello](#example-hello) ·
 [The OBS Studio plugin](#the-obs-studio-plugin) ·
+[The Home Assistant plugin](#the-home-assistant-plugin) ·
 [Managing plugins](#managing-plugins) ·
 [Later contract versions](#later-contract-versions)
 
@@ -346,6 +347,13 @@ plugin. It shows what the small hello example leaves out:
 Its tests ([`plugins/obs/tests/plugin.rs`](../plugins/obs/tests/plugin.rs)) are a model for `Harness` tests of a
 plugin with a network connection: they open and close sockets, deliver messages and fire timers by hand,
 with no real OBS and no waiting.
+
+## The Home Assistant plugin
+
+[`plugins/ha`](../plugins/ha/README.md) is the second real plugin. It talks to Home Assistant over one WebSocket
+with a filtered `subscribe_entities`, so only the entities listed in its settings are sent (never the whole
+install), and shows them as `{ha.<entity_id>}` labels. The access token goes into the secret store like the OBS
+password, and `lan = true` limits it to Home Assistant on the local network.
 
 ## Managing plugins
 

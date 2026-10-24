@@ -6,6 +6,7 @@ and the project uses [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- Home Assistant plugin (`plugins/ha`): toggle, run, set level and call any service, with live entity state on key labels (`{ha.light.desk}`, `{ha.sensor.temp.unit}`). Settings in `[plugins.ha.settings]`; the token moves to the secret store.
 - OBS Studio plugin (`plugins/obs`): the built-in OBS actions and live state (`{obs.scene}`, `{obs.rec_time}`, …) as a sandboxed plugin, for trying out next to the built-in integration. Settings in `[plugins.obs.settings]`.
 - Plugin host: plugins are sandboxed WebAssembly programs that add actions to keys. They can use
   timers, secrets (system keyring), status, WebSocket, TCP/TLS and HTTP connections limited by the
