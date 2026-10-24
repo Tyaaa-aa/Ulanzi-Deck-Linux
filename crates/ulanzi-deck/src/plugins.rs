@@ -311,7 +311,9 @@ pub fn item_ids(v: Option<&toml::Value>, multi: bool) -> Vec<String> {
         }
     };
     match v {
-        Some(toml::Value::String(s)) if multi => s.split(',').for_each(|id| add(id.trim())),
+        Some(toml::Value::String(s)) if multi => {
+            s.split([',', ';', '\n', '\r']).for_each(|id| add(id.trim()))
+        }
         Some(toml::Value::String(s)) => add(s),
         Some(toml::Value::Array(a)) => a.iter().filter_map(toml::Value::as_str).for_each(&mut add),
         _ => {}
@@ -354,6 +356,55 @@ pub fn item_summary(ids: &[String], known: &[PickItem]) -> String {
 /// The ids typed into the picker's manual entry (with `multi`, separated by commas).
 pub fn manual_ids(text: &str, multi: bool) -> Vec<String> {
     item_ids(Some(&toml::Value::String(text.trim().to_string())), multi)
+}
+
+/// How many entries a multi picker may tick: the field's `max` (at least 1); `None` for no limit
+/// or a single picker.
+pub fn max_picks(f: &Field, multi: bool) -> Option<usize> {
+    let max = f.max.filter(|m| multi && m.is_finite())?;
+    Some(max.floor().max(1.0) as usize)
+}
+
+/// Whether `id` may be ticked (or stays tickable): it is ticked already, or the limit is not
+/// reached.
+pub fn can_tick(selected: &[String], id: &str, limit: Option<usize>) -> bool {
+    selected.iter().any(|x| x == id) || limit.is_none_or(|l| selected.len() < l)
+}
+
+/// `ids` cut to `limit`.
+pub fn capped(mut ids: Vec<String>, limit: Option<usize>) -> Vec<String> {
+    if let Some(l) = limit {
+        ids.truncate(l);
+    }
+    ids
+}
+
+/// The note above a multi picker's list that has a limit.
+pub fn limit_note(limit: Option<usize>) -> Option<String> {
+    limit.map(|l| format!("Pick up to {l}."))
+}
+
+/// The entries in display order: the stored ids first (in their order; with `placeholders`, an id
+/// the list lacks as an entry labelled with itself), then the rest as listed. So the current value
+/// is always on screen and marked, whatever the cap on shown rows.
+pub fn current_first(items: Vec<PickItem>, current: &[String], placeholders: bool) -> Vec<PickItem> {
+    let mut first: Vec<PickItem> = Vec::new();
+    let mut rest = items;
+    for id in current {
+        match rest.iter().position(|i| &i.id == id) {
+            Some(at) => first.push(rest.remove(at)),
+            None if placeholders => first.extend(missing_current(&[], std::slice::from_ref(id))),
+            None => {}
+        }
+    }
+    first.extend(rest);
+    first
+}
+
+/// Whether the picker offers typing by hand (and Retry): after an error, or when the plugin's whole
+/// list is empty. A search or group that matches nothing does not.
+pub fn offer_manual(error: bool, query: &str, group: &str) -> bool {
+    error || (query.trim().is_empty() && group.is_empty())
 }
 
 /// Entries by group, groups in first-seen order; entries without a group under "".
@@ -1293,5 +1344,74 @@ mod tests {
             ids(&["light.a", "switch.b"])
         );
         assert!(manual_ids("   ", false).is_empty());
+    }
+    #[test]
+    fn legacy_lists_split_like_the_ha_plugin() {
+        let s = toml::Value::String("light.a; switch.b\nfan.c\r\n, ,light.a".into());
+        assert_eq!(item_ids(Some(&s), true), ids(&["light.a", "switch.b", "fan.c"]));
+        // A single id is still kept as stored.
+        let one = toml::Value::String("a;b".into());
+        assert_eq!(item_ids(Some(&one), false), ids(&["a;b"]));
+    }
+
+    #[test]
+    fn multi_pickers_honour_the_field_max() {
+        let f = Field {
+            max: Some(40.0),
+            picker: Some("entities".into()),
+            ..field("entities", FieldKind::Item)
+        };
+        assert_eq!(max_picks(&f, true), Some(40));
+        assert_eq!(max_picks(&f, false), None);
+        assert_eq!(max_picks(&field("e", FieldKind::Item), true), None);
+        let zero = Field {
+            max: Some(0.0),
+            ..field("e", FieldKind::Item)
+        };
+        assert_eq!(max_picks(&zero, true), Some(1));
+        let sel = ids(&["a", "b"]);
+        assert!(can_tick(&sel, "c", None));
+        assert!(can_tick(&sel, "c", Some(3)));
+        assert!(!can_tick(&sel, "c", Some(2)));
+        assert!(can_tick(&sel, "a", Some(2)), "a ticked entry can be unticked");
+        assert_eq!(capped(ids(&["a", "b", "c"]), Some(2)), ids(&["a", "b"]));
+        assert_eq!(capped(ids(&["a", "b"]), None), ids(&["a", "b"]));
+        assert_eq!(limit_note(Some(40)).as_deref(), Some("Pick up to 40."));
+        assert_eq!(limit_note(None), None);
+    }
+
+    #[test]
+    fn the_current_value_comes_first() {
+        let items: Vec<PickItem> = (0..500).map(|i| item(&format!("e{i}"), "x", None)).collect();
+        let cur = ids(&["e450", "gone"]);
+        let all = current_first(items.clone(), &cur, true);
+        assert_eq!(all.len(), 501);
+        assert_eq!(all[0].id, "e450");
+        assert_eq!(all[1].id, "gone");
+        assert_eq!(all[1].subtitle.as_deref(), Some("Not in the list now"));
+        assert_eq!(all[2].id, "e0");
+        // Within the shown cap.
+        assert!(shown_items(&all, SHOW_MAX).0.iter().any(|i| i.id == "e450"));
+        // A filtered answer adds no placeholders.
+        let filtered = current_first(items, &cur, false);
+        assert_eq!(filtered.len(), 500);
+        assert_eq!(filtered[0].id, "e450");
+    }
+
+    #[test]
+    fn manual_entry_only_after_an_error_or_an_empty_list() {
+        assert!(offer_manual(true, "kit", "Lights"));
+        assert!(offer_manual(false, "", ""));
+        assert!(offer_manual(false, "  ", ""));
+        assert!(!offer_manual(false, "kit", ""));
+        assert!(!offer_manual(false, "", "Lights"));
+    }
+    #[test]
+    fn ha_entities_are_capped_at_40() {
+        let m = Manifest::parse(include_str!("../../../plugins/ha/plugin.toml")).expect("ha manifest");
+        let f = m.settings.iter().find(|f| f.key == "entities").expect("entities");
+        let p = m.picker("entities").expect("picker");
+        assert!(p.multi);
+        assert_eq!(max_picks(f, p.multi), Some(40));
     }
 }

@@ -100,11 +100,11 @@ fn item_row(
     row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     // The ids the row shows now: what the dialog opens with next time.
     let shown: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(ids));
-    let (state, plugin, title) = (state.clone(), plugin.to_string(), f.title().to_string());
+    let (state, plugin, field) = (state.clone(), plugin.to_string(), f.clone());
     row.connect_activated(move |r| {
         let (weak, shown2, on, multi) = (r.downgrade(), shown.clone(), on.clone(), picker.multi);
         let current = shown.borrow().clone();
-        crate::ui::item_picker::open(r, &state, &plugin, &title, &picker, current, move |picks| {
+        crate::ui::item_picker::open(r, &state, &plugin, &field, &picker, current, move |picks| {
             let (ids, summary, value) = picked(&picks, multi);
             if let Some(r) = weak.upgrade() {
                 r.set_subtitle(&glib::markup_escape_text(&summary));

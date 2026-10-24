@@ -1208,34 +1208,33 @@ mod tests {
 
     #[test]
     fn adding_a_widget_from_the_menu_adds_it() {
-        if gtk::init().is_err() {
-            return;
-        }
-        let mut p = ulanzi_core::model::Profile::new_default("T", ulanzi_core::model::Model::D200X);
-        p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, None);
-        let state = crate::state::AppState::new(p);
-        let edit: EditScreen = {
-            let st = state.clone();
-            Rc::new(move |_how, f| {
-                st.edit(|e| {
-                    let mut s = e.profile().screen.clone();
-                    f(&mut s);
-                    e.set_screen(s)
+        crate::ui::with_gtk(|| {
+            let mut p = ulanzi_core::model::Profile::new_default("T", ulanzi_core::model::Model::D200X);
+            p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, None);
+            let state = crate::state::AppState::new(p);
+            let edit: EditScreen = {
+                let st = state.clone();
+                Rc::new(move |_how, f| {
+                    st.edit(|e| {
+                        let mut s = e.profile().screen.clone();
+                        f(&mut s);
+                        e.set_screen(s)
+                    })
                 })
-            })
-        };
-        let menu = add_menu(&state, &edit);
-        let list = menu
-            .popover()
-            .and_then(|p| p.child())
-            .and_downcast::<gtk::ListBox>()
-            .expect("menu list");
-        let row = list.row_at_index(0).expect("first kind");
-        // What a click does.
-        list.emit_by_name::<()>("row-activated", &[&row]);
-        let ScreenConfig::Custom { widgets, .. } = state.editor.borrow().profile().screen.clone() else {
-            panic!("not widgets");
-        };
-        assert_eq!(widgets.len(), 2);
+            };
+            let menu = add_menu(&state, &edit);
+            let list = menu
+                .popover()
+                .and_then(|p| p.child())
+                .and_downcast::<gtk::ListBox>()
+                .expect("menu list");
+            let row = list.row_at_index(0).expect("first kind");
+            // What a click does.
+            list.emit_by_name::<()>("row-activated", &[&row]);
+            let ScreenConfig::Custom { widgets, .. } = state.editor.borrow().profile().screen.clone() else {
+                panic!("not widgets");
+            };
+            assert_eq!(widgets.len(), 2);
+        });
     }
 }

@@ -129,9 +129,83 @@ pub fn toast(_state: &State, text: &str) {
     add_toast(t);
 }
 
+/// Run `f` on the one thread that owns GTK in tests, after GTK was initialised there once; `f`
+/// gets whether that worked (no display: it did not). GTK must be initialised once and used from
+/// one thread: tests that each called `gtk::init()` on their own test thread crashed the test
+/// binary ("cannot register existing type 'GtkWidget'"). Calls are serialised; a panic in `f` is
+/// re-raised in the calling test.
+#[cfg(test)]
+pub(crate) fn on_gtk_thread(f: impl FnOnce(bool) + Send + 'static) {
+    use std::sync::mpsc;
+    use std::sync::{Mutex, OnceLock};
+    type Job = Box<dyn FnOnce(bool) + Send>;
+    static JOBS: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
+    let jobs = JOBS.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        std::thread::Builder::new()
+            .name("gtk-tests".into())
+            .spawn(move || {
+                let ok = gtk::init().is_ok();
+                for job in rx {
+                    job(ok);
+                }
+            })
+            .expect("gtk test thread");
+        Mutex::new(tx)
+    });
+    let (done_tx, done_rx) = mpsc::channel();
+    let job: Job = Box::new(move |ok| {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(ok)));
+        let _ = done_tx.send(r);
+    });
+    jobs.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .send(job)
+        .expect("gtk test thread gone");
+    match done_rx.recv().expect("gtk test thread gone") {
+        Ok(()) => {}
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+/// Run a GTK test body on the GTK test thread; skipped (returns quietly) without a display.
+#[cfg(test)]
+pub(crate) fn with_gtk(f: impl FnOnce() + Send + 'static) {
+    on_gtk_thread(move |ok| {
+        if ok {
+            f()
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gtk_tests_share_one_thread() {
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let (tx, rx) = std::sync::mpsc::channel();
+            on_gtk_thread(move |_| {
+                let _ = tx.send(std::thread::current().id());
+            });
+            seen.push(rx.recv().expect("ran"));
+        }
+        assert!(seen.iter().all(|t| *t == seen[0]));
+        assert_ne!(seen[0], std::thread::current().id());
+    }
+
+    #[test]
+    fn a_panic_on_the_gtk_thread_fails_the_test_and_keeps_the_thread() {
+        let r = std::panic::catch_unwind(|| on_gtk_thread(|_| panic!("boom")));
+        assert!(r.is_err());
+        let (tx, rx) = std::sync::mpsc::channel();
+        on_gtk_thread(move |_| {
+            let _ = tx.send(());
+        });
+        assert!(rx.recv().is_ok());
+    }
 
     #[test]
     fn repeats_show_a_counter() {

@@ -7,16 +7,17 @@
 //! plugin built for contract 1.0, which has no list at all).
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use ulanzi_core::plugin::{PickItem, Picker, PickerStyle};
+use ulanzi_core::plugin::{Field, PickItem, Picker, PickerStyle};
 
 use crate::client::ClientError;
 use crate::plugins::{
-    SHOW_MAX, can_list, empty_message, group_items, group_names, icon_lookup, manual_ids, missing_current,
-    shown_items, toggle_id,
+    SHOW_MAX, can_list, can_tick, capped, current_first, empty_message, group_items, group_names,
+    icon_lookup, limit_note, manual_ids, max_picks, offer_manual, shown_items, toggle_id,
 };
 use crate::runtime;
 use crate::state::State;
@@ -31,12 +32,18 @@ struct Picking {
     state: State,
     plugin: String,
     picker: Picker,
+    /// The plugin can list (contract 1.1 or later); else only manual entry.
+    lists: bool,
+    /// How many entries a multi picker may tick (the field's `max`).
+    limit: Option<usize>,
     /// What was stored when the dialog opened; kept visible even when the list lacks it.
     current: Vec<String>,
     /// The ticked entries (multi), in the order they were picked.
     selected: RefCell<Vec<String>>,
-    /// Every entry seen, so the row can show labels after a pick.
-    known: RefCell<Vec<PickItem>>,
+    /// Every entry seen, by id, so the row can show labels after a pick.
+    known: RefCell<HashMap<String, PickItem>>,
+    /// The tick widgets on screen (multi), made insensitive once the limit is reached.
+    ticks: RefCell<Vec<(String, glib::WeakRef<gtk::Widget>)>>,
     /// Bumped by every ask; an answer for an older one is dropped.
     generation: Cell<u32>,
     /// The groups of the first unfiltered answer (the drop-down's entries after "All").
@@ -45,6 +52,8 @@ struct Picking {
     filling: Cell<bool>,
     dialog: glib::WeakRef<adw::Dialog>,
     search: glib::WeakRef<gtk::SearchEntry>,
+    bar: glib::WeakRef<gtk::Box>,
+    by_hand: glib::WeakRef<gtk::Button>,
     group: glib::WeakRef<gtk::DropDown>,
     stack: glib::WeakRef<gtk::Stack>,
     content: glib::WeakRef<gtk::Box>,
@@ -74,10 +83,49 @@ impl Picking {
             .unwrap_or_default()
     }
 
+    /// Show a page. The search bar hides on the manual page, so a stray keystroke can't replace
+    /// a half-typed entry with a new list.
     fn show(&self, page: &str) {
         if let Some(s) = self.stack.upgrade() {
             s.set_visible_child_name(page);
         }
+        if let Some(b) = self.bar.upgrade() {
+            b.set_visible(self.lists && page != "manual");
+        }
+    }
+
+    fn page(&self) -> Option<glib::GString> {
+        self.stack.upgrade().and_then(|s| s.visible_child_name())
+    }
+
+    /// Done, Save or Enter: the typed ids while the manual page shows, else the ticked entries.
+    fn commit(&self) {
+        let ids = if self.page().as_deref() == Some("manual") {
+            let text = self
+                .manual
+                .upgrade()
+                .map(|m| m.text().to_string())
+                .unwrap_or_default();
+            manual_ids(&text, self.picker.multi)
+        } else {
+            self.selected.borrow().clone()
+        };
+        self.finish(&capped(ids, self.limit));
+    }
+
+    /// Tick widgets of unticked entries go insensitive once the limit is reached.
+    fn update_ticks(&self) {
+        let selected = self.selected.borrow();
+        for (id, w) in self.ticks.borrow().iter() {
+            if let Some(w) = w.upgrade() {
+                w.set_sensitive(can_tick(&selected, id, self.limit));
+            }
+        }
+    }
+
+    fn toggled(&self, id: &str, on: bool) {
+        toggle_id(&mut self.selected.borrow_mut(), id, on);
+        self.update_ticks();
     }
 
     /// The entries for `ids`, labelled when the plugin listed them, else by the id.
@@ -85,18 +133,14 @@ impl Picking {
         let known = self.known.borrow();
         ids.iter()
             .map(|id| {
-                known
-                    .iter()
-                    .find(|i| &i.id == id)
-                    .cloned()
-                    .unwrap_or_else(|| PickItem {
-                        id: id.clone(),
-                        label: id.clone(),
-                        subtitle: None,
-                        group: None,
-                        icon: None,
-                        state: None,
-                    })
+                known.get(id).cloned().unwrap_or_else(|| PickItem {
+                    id: id.clone(),
+                    label: id.clone(),
+                    subtitle: None,
+                    group: None,
+                    icon: None,
+                    state: None,
+                })
             })
             .collect()
     }
@@ -111,14 +155,15 @@ impl Picking {
     }
 }
 
-/// Open the picker for `picker` of `plugin` over `parent`. `current` is what is stored now;
-/// `on_done` gets the picked entries (an id the list lacks comes back labelled with itself) on a
-/// pick, Done or a manual entry. Closing the dialog changes nothing.
+/// Open the picker for field `f` (picker `picker`) of `plugin` over `parent`. `current` is what is
+/// stored now; `on_done` gets the picked entries (an id the list lacks comes back labelled with
+/// itself) on a pick, Done or a manual entry. A multi picker ticks at most the field's `max`
+/// entries. Closing the dialog changes nothing.
 pub fn open(
     parent: &impl IsA<gtk::Widget>,
     state: &State,
     plugin: &str,
-    title: &str,
+    f: &Field,
     picker: &Picker,
     current: Vec<String>,
     on_done: impl Fn(Vec<PickItem>) + 'static,
@@ -130,6 +175,8 @@ pub fn open(
         .get(plugin)
         .is_none_or(|m| can_list(&m.contract));
     let multi = picker.multi;
+    let title = f.title();
+    let limit = max_picks(f, multi);
 
     let header = adw::HeaderBar::new();
     let done = gtk::Button::builder()
@@ -222,21 +269,29 @@ pub fn open(
         .css_classes(["boxed-list"])
         .build();
     manual_list.append(&manual);
+    let mut hint_text = match (lists, multi) {
+        (false, false) => "This plugin can’t list its choices. Type the one you want.",
+        (false, true) => "This plugin can’t list its choices. Type them, separated by commas.",
+        (true, false) => "Type it exactly as the plugin knows it.",
+        (true, true) => "Type them exactly as the plugin knows them, separated by commas.",
+    }
+    .to_string();
+    if let Some(n) = limit_note(limit) {
+        hint_text = format!("{hint_text} {n}");
+    }
     let hint = gtk::Label::builder()
-        .label(match (lists, multi) {
-            (false, false) => "This plugin can’t list its choices. Type the one you want.",
-            (false, true) => "This plugin can’t list its choices. Type them, separated by commas.",
-            (true, false) => "Type it exactly as the plugin knows it.",
-            (true, true) => "Type them exactly as the plugin knows them, separated by commas.",
-        })
+        .label(hint_text)
         .wrap(true)
         .xalign(0.0)
         .css_classes(["dim-label"])
         .build();
+    // A multi picker commits with the header's Done (which takes the typed ids on this page);
+    // a single one has no Done, so the page has its own Save.
     let save = gtk::Button::builder()
         .label("Save")
         .css_classes(["pill", "suggested-action"])
         .halign(gtk::Align::Center)
+        .visible(!multi)
         .build();
     let back = gtk::Button::builder()
         .label("Show the list")
@@ -282,14 +337,19 @@ pub fn open(
         state: state.clone(),
         plugin: plugin.to_string(),
         picker: picker.clone(),
+        lists,
+        limit,
         selected: RefCell::new(current.clone()),
         current,
         known: RefCell::default(),
+        ticks: RefCell::default(),
         generation: Cell::new(0),
         groups: RefCell::default(),
         filling: Cell::new(false),
         dialog: dialog.downgrade(),
         search: search.downgrade(),
+        bar: bar.downgrade(),
+        by_hand: by_hand.downgrade(),
         group: group.downgrade(),
         stack: stack.downgrade(),
         content: content.downgrade(),
@@ -301,10 +361,7 @@ pub fn open(
 
     {
         let p = p.clone();
-        done.connect_clicked(move |_| {
-            let ids = p.selected.borrow().clone();
-            p.finish(&ids);
-        });
+        done.connect_clicked(move |_| p.commit());
     }
     {
         let d = dialog.downgrade();
@@ -347,29 +404,21 @@ pub fn open(
             }
         });
     }
-    let save_manual = {
-        let p = p.clone();
-        move || {
-            let text = p
-                .manual
-                .upgrade()
-                .map(|m| m.text().to_string())
-                .unwrap_or_default();
-            p.finish(&manual_ids(&text, p.picker.multi));
-        }
-    };
-    let save_manual = Rc::new(save_manual);
     {
-        let s = save_manual.clone();
-        save.connect_clicked(move |_| s());
+        let p = p.clone();
+        save.connect_clicked(move |_| p.commit());
     }
-    manual.connect_entry_activated(move |_| save_manual());
+    {
+        let p = p.clone();
+        manual.connect_entry_activated(move |_| p.commit());
+    }
 
     dialog.present(Some(parent));
     if lists {
         ask(&p);
         search.grab_focus();
     } else {
+        p.show("manual");
         manual.grab_focus();
     }
 }
@@ -385,7 +434,7 @@ fn ask(p: &Rc<Picking>) {
     };
     let (query, group) = (p.query(), p.group_filter());
     // Keep the list on screen while a search runs; show the spinner otherwise.
-    if p.stack.upgrade().and_then(|s| s.visible_child_name()).as_deref() != Some("list") {
+    if p.page().as_deref() != Some("list") {
         p.show("loading");
     }
     let (plugin, picker) = (p.plugin.clone(), p.picker.id.clone());
@@ -411,10 +460,18 @@ fn show_error(p: &Picking, message: &str) {
         s.set_title("Couldn’t get the list");
         s.set_description(Some(&escape(message)));
     }
-    if let Some(r) = p.retry.upgrade() {
-        r.set_visible(true);
-    }
+    offer(p, true);
     p.show("status");
+}
+
+/// Retry and "Enter manually…" on the status page, only when `shown`.
+fn offer(p: &Picking, shown: bool) {
+    if let Some(r) = p.retry.upgrade() {
+        r.set_visible(shown);
+    }
+    if let Some(b) = p.by_hand.upgrade() {
+        b.set_visible(shown);
+    }
 }
 
 /// The group drop-down's entries, once, from the first unfiltered answer.
@@ -447,10 +504,7 @@ fn show_items(p: &Rc<Picking>, query: &str, group: &str, items: Vec<PickItem>) {
     {
         let mut known = p.known.borrow_mut();
         for i in &items {
-            match known.iter_mut().find(|k| k.id == i.id) {
-                Some(k) => *k = i.clone(),
-                None => known.push(i.clone()),
-            }
+            known.insert(i.id.clone(), i.clone());
         }
     }
     if items.is_empty() {
@@ -459,10 +513,9 @@ fn show_items(p: &Rc<Picking>, query: &str, group: &str, items: Vec<PickItem>) {
             s.set_title(&empty_message(query, group));
             s.set_description(None);
         }
-        // An empty search is not something to retry; an empty list may fill once connected.
-        if let Some(r) = p.retry.upgrade() {
-            r.set_visible(unfiltered);
-        }
+        // A search that matches nothing is not something to retry or type instead; an empty
+        // list may fill once the plugin is connected.
+        offer(p, offer_manual(false, query, group));
         p.show("status");
         return;
     }
@@ -472,15 +525,13 @@ fn show_items(p: &Rc<Picking>, query: &str, group: &str, items: Vec<PickItem>) {
     while let Some(c) = content.first_child() {
         content.remove(&c);
     }
-    // A stored id the plugin no longer lists stays on top, marked, instead of vanishing.
-    let mut all = if unfiltered {
-        missing_current(&items, &p.current)
-    } else {
-        Vec::new()
-    };
-    all.extend(items);
+    p.ticks.borrow_mut().clear();
+    // The stored value comes first, within the cap on shown rows; an id the plugin no longer
+    // lists stays there, marked, instead of vanishing.
+    let all = current_first(items, &p.current, unfiltered);
     let (shown, note) = shown_items(&all, SHOW_MAX);
-    if let Some(note) = note {
+    let limit = if p.picker.multi { limit_note(p.limit) } else { None };
+    if let Some(note) = limit.into_iter().chain(note).reduce(|a, b| format!("{a} {b}")) {
         content.append(
             &gtk::Label::builder()
                 .label(note)
@@ -510,6 +561,7 @@ fn show_items(p: &Rc<Picking>, query: &str, group: &str, items: Vec<PickItem>) {
             PickerStyle::Grid => grid(p, &entries).upcast(),
         });
     }
+    p.update_ticks();
     p.show("list");
 }
 
@@ -557,8 +609,11 @@ fn list(p: &Rc<Picking>, entries: &[PickItem]) -> gtk::ListBox {
                 .active(p.selected.borrow().contains(&i.id))
                 .valign(gtk::Align::Center)
                 .build();
+            p.ticks
+                .borrow_mut()
+                .push((i.id.clone(), check.upcast_ref::<gtk::Widget>().downgrade()));
             let (p, id) = (p.clone(), i.id.clone());
-            check.connect_toggled(move |c| toggle_id(&mut p.selected.borrow_mut(), &id, c.is_active()));
+            check.connect_toggled(move |c| p.toggled(&id, c.is_active()));
             row.add_prefix(&check);
             row.set_activatable_widget(Some(&check));
         } else {
@@ -617,8 +672,11 @@ fn grid(p: &Rc<Picking>, entries: &[PickItem]) -> gtk::FlowBox {
                 .child(&tile(i))
                 .active(p.selected.borrow().contains(&i.id))
                 .build();
+            p.ticks
+                .borrow_mut()
+                .push((i.id.clone(), b.upcast_ref::<gtk::Widget>().downgrade()));
             let (p, id) = (p.clone(), i.id.clone());
-            b.connect_toggled(move |b| toggle_id(&mut p.selected.borrow_mut(), &id, b.is_active()));
+            b.connect_toggled(move |b| p.toggled(&id, b.is_active()));
             b.upcast()
         } else {
             let b = gtk::Button::builder().child(&tile(i)).build();

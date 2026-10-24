@@ -28,6 +28,7 @@ help = "HA: your Profile → Security → Long-lived access tokens"
 key = "entities"
 kind = "item"
 picker = "entities"
+max = 40
 label = "Entities to show on keys (up to 40)"
 help = "Pick them from the list"
 

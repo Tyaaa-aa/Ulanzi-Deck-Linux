@@ -86,16 +86,15 @@ mod tests {
     #[test]
     fn listed_accelerators_parse() {
         // Needs a display; skipped on headless machines.
-        if gtk::init().is_err() {
-            return;
-        }
-        // Every entry that looks like an accelerator must be one.
-        for (_, rows) in GROUPS {
-            for (_, how) in *rows {
-                if how.starts_with('<') {
-                    assert!(gtk::accelerator_parse(*how).is_some(), "{how}");
+        crate::ui::with_gtk(|| {
+            // Every entry that looks like an accelerator must be one.
+            for (_, rows) in GROUPS {
+                for (_, how) in *rows {
+                    if how.starts_with('<') {
+                        assert!(gtk::accelerator_parse(*how).is_some(), "{how}");
+                    }
                 }
             }
-        }
+        });
     }
 }
