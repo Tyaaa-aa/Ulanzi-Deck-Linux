@@ -10,7 +10,8 @@ use crate::actions::ServiceCall;
 pub const HOST_STATE_KEYS: usize = 256;
 pub const MAX_ENTITIES: usize = 40;
 pub const MAX_ATTRIBUTES: usize = 40;
-/// The host ignores values over 1 KiB.
+/// The host ignores keys over 256 bytes and values over 1 KiB.
+pub const HOST_KEY_BYTES: usize = 256;
 pub const HOST_VALUE_BYTES: usize = 1024;
 
 const ADDRESS_HELP: &str =
@@ -90,10 +91,15 @@ pub fn valid_entity_id(s: &str) -> bool {
     let Some((domain, object)) = s.split_once('.') else {
         return false;
     };
+    // Like Home Assistant's own check: no `__`, no leading or trailing `_` (one bad id makes
+    // the whole filtered subscribe fail).
     let word = |p: &str| {
         !p.is_empty()
             && p.bytes()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+            && !p.contains("__")
+            && !p.starts_with('_')
+            && !p.ends_with('_')
     };
     s.len() <= 255 && word(domain) && word(object) && domain.as_bytes()[0].is_ascii_lowercase()
 }
@@ -150,6 +156,11 @@ fn valid_attribute(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
 }
 
+/// A skipped entry as typed, cut so it can be logged safely.
+fn shorten(raw: &str) -> String {
+    raw.chars().take(64).collect()
+}
+
 pub fn parse_settings(v: &Value) -> Result<Config, String> {
     let url = v.get("url").and_then(Value::as_str).unwrap_or_default();
     if url.trim().is_empty() {
@@ -168,7 +179,7 @@ pub fn parse_settings(v: &Value) -> Result<Config, String> {
     for raw in list_of(v.get("entities")) {
         let id = raw.to_lowercase();
         if !valid_entity_id(&id) {
-            skipped.push(raw);
+            skipped.push(shorten(&raw));
         } else if !entities.contains(&id) {
             entities.push(id);
         }
@@ -189,7 +200,7 @@ pub fn parse_settings(v: &Value) -> Result<Config, String> {
         match pair {
             Some(p) if !attributes.contains(&p) => attributes.push(p),
             Some(_) => {}
-            None => skipped.push(raw),
+            None => skipped.push(shorten(&raw)),
         }
     }
     if attributes.len() > MAX_ATTRIBUTES {
@@ -402,7 +413,9 @@ pub fn state_pairs(t: &Tracked, cfg: &Config, live: &LiveInfo) -> Vec<(String, S
             .unwrap_or_default();
         out.push((format!("{id}.attr.{attr}"), value));
     }
+    // The host ignores keys over 256 bytes; leave those out instead of sending them.
     out.into_iter()
+        .filter(|(k, _)| k.len() <= HOST_KEY_BYTES)
         .map(|(k, v)| (k, truncate_at_boundary(v, HOST_VALUE_BYTES)))
         .collect()
 }

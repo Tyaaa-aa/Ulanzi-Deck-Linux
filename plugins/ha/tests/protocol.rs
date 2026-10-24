@@ -96,7 +96,22 @@ fn entity_ids_are_validated() {
     for ok in ["light.desk", "sensor.temp_2", "input_boolean.a1"] {
         assert!(valid_entity_id(ok), "{ok}");
     }
+    let edge = format!("light.{}", "a".repeat(249));
+    assert_eq!(edge.len(), 255);
+    assert!(valid_entity_id(&edge));
     let long = format!("light.{}", "a".repeat(250));
+    for bad in [
+        "light.a__b",
+        "_light.a",
+        "light_.a",
+        "light._a",
+        "light.a_",
+        "li__ght.a",
+        "light.__",
+    ] {
+        assert!(!valid_entity_id(bad), "{bad}");
+    }
+    assert!(valid_entity_id("input_boolean.a_b"));
     for bad in [
         "",
         "light",
@@ -581,4 +596,40 @@ fn manifest_declares_the_actions() {
             "forget_token"
         ]
     );
+}
+
+#[test]
+fn hardening_of_inputs() {
+    let t = Tracked::default();
+    let p = json!({"entity_id": "light.a", "op": "set", "percent": "nan"});
+    assert!(plan("set_level", &p, &t).is_err());
+    let p = json!({"entity_id": "light.a", "op": "up", "step": "inf"});
+    assert_eq!(call("set_level", &p, &t).data["brightness_step_pct"], 5);
+    for data in [json!(5), json!([1]), json!(true)] {
+        let p = json!({"domain": "a", "service": "b", "data": data});
+        assert!(plan("call_service", &p, &t).is_err(), "{p}");
+    }
+    let p = json!({"domain": "a", "service": "b", "data": {"k": "x".repeat(5000)}});
+    assert!(plan("call_service", &p, &t).is_err());
+    let p = json!({"domain": "a", "service": "b", "data": {"k": 1}});
+    assert_eq!(call("call_service", &p, &t).data["k"], 1);
+
+    let long = "x".repeat(300);
+    let cfg = parse_settings(&json!({"url": "h", "entities": [long], "attributes": [long]})).expect("ok");
+    assert!(cfg.skipped.iter().all(|s| s.chars().count() <= 64));
+
+    // Derived keys over the host's 256-byte limit are left out.
+    let id = format!("light.{}", "a".repeat(248));
+    let mut c = cfg;
+    c.skipped.clear();
+    c.entities = vec![id.clone()];
+    c.attributes = vec![(id.clone(), "brightness".into())];
+    let live = LiveInfo::default();
+    let keys: Vec<String> = state_pairs(&Tracked::default(), &c, &live)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert!(keys.iter().all(|k| k.len() <= 256));
+    assert!(keys.contains(&id));
+    assert!(!keys.contains(&format!("{id}.name")));
 }

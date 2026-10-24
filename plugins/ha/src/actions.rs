@@ -59,6 +59,7 @@ fn number(params: &Value, key: &str) -> Option<f64> {
         Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
+    .filter(|f| f.is_finite())
 }
 
 fn is_word(s: &str) -> bool {
@@ -204,7 +205,12 @@ fn call_service(params: &Value) -> Result<Plan, String> {
         _ => return Err("entity_id is not valid: use the form light.living_room, or leave it empty".into()),
     };
     let data = match params.get("data") {
-        Some(Value::Object(m)) => m.clone(),
+        Some(Value::Object(m)) => {
+            if Value::Object(m.clone()).to_string().len() > MAX_DATA_BYTES {
+                return Err(format!("the JSON data is longer than {MAX_DATA_BYTES} bytes"));
+            }
+            m.clone()
+        }
         Some(Value::String(s)) if !s.trim().is_empty() => {
             if s.len() > MAX_DATA_BYTES {
                 return Err(format!("the JSON data is longer than {MAX_DATA_BYTES} bytes"));
@@ -215,7 +221,8 @@ fn call_service(params: &Value) -> Result<Plan, String> {
                 Err(_) => return Err("the JSON data is not valid JSON".into()),
             }
         }
-        _ => Map::new(),
+        None | Some(Value::Null) | Some(Value::String(_)) => Map::new(),
+        Some(_) => return Err("the JSON data must be an object like {\"message\": \"hi\"}".into()),
     };
     Ok(Plan::Call(ServiceCall {
         domain: domain.into(),
