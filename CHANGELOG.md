@@ -37,6 +37,12 @@ and the project uses [Semantic Versioning](https://semver.org).
   is asked only when a plugin first needs its secrets. With a pretend deck (`scripts/sandbox.sh --demo`)
   plugin secrets stay in the sandbox and the keyring is never asked.
 
+### Fixed
+- The shortcut recorder captures Super (Meta) and any combination: Super alone, Super+X, Ctrl+Super
+  and so on. Press and release modifiers alone to record just them; Escape still cancels. While it
+  listens, the desktop's own shortcuts are paused on the window so KDE and GNOME don't swallow Super,
+  and they come back as soon as recording ends. Caps Lock, Pause and keypad keys now work in shortcuts.
+
 ## [2.0.0] - 2026-10-23
 
 A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python) lives on the

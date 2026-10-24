@@ -711,7 +711,7 @@ fn pretty_combo(keys: &str) -> String {
                 "ctrl" | "control" => "Ctrl".into(),
                 "alt" => "Alt".into(),
                 "shift" => "Shift".into(),
-                "super" | "meta" | "win" => "Super".into(),
+                "super" | "meta" | "win" | "hyper" => "Super".into(),
                 _ if k.chars().count() == 1 => k.to_uppercase(),
                 _ => k.to_string(),
             }

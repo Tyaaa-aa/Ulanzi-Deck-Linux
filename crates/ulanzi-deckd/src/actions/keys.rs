@@ -81,8 +81,8 @@ fn key_named(name: &str) -> Option<KeyCode> {
         "alt_r" | "altgr" | "iso_level3_shift" => K::KEY_RIGHTALT,
         "shift" | "shift_l" => K::KEY_LEFTSHIFT,
         "shift_r" => K::KEY_RIGHTSHIFT,
-        "super" | "meta" | "win" | "super_l" | "meta_l" => K::KEY_LEFTMETA,
-        "super_r" | "meta_r" => K::KEY_RIGHTMETA,
+        "super" | "meta" | "win" | "hyper" | "super_l" | "meta_l" | "hyper_l" => K::KEY_LEFTMETA,
+        "super_r" | "meta_r" | "hyper_r" => K::KEY_RIGHTMETA,
         "return" | "enter" => K::KEY_ENTER,
         "space" => K::KEY_SPACE,
         "tab" => K::KEY_TAB,
@@ -111,6 +111,26 @@ fn key_named(name: &str) -> Option<KeyCode> {
         "backslash" => K::KEY_BACKSLASH,
         "grave" => K::KEY_GRAVE,
         "menu" => K::KEY_COMPOSE,
+        "caps_lock" => K::KEY_CAPSLOCK,
+        "num_lock" => K::KEY_NUMLOCK,
+        "scroll_lock" => K::KEY_SCROLLLOCK,
+        "pause" => K::KEY_PAUSE,
+        "kp_0" | "kp_insert" => K::KEY_KP0,
+        "kp_1" | "kp_end" => K::KEY_KP1,
+        "kp_2" | "kp_down" => K::KEY_KP2,
+        "kp_3" | "kp_next" | "kp_page_down" => K::KEY_KP3,
+        "kp_4" | "kp_left" => K::KEY_KP4,
+        "kp_5" | "kp_begin" => K::KEY_KP5,
+        "kp_6" | "kp_right" => K::KEY_KP6,
+        "kp_7" | "kp_home" => K::KEY_KP7,
+        "kp_8" | "kp_up" => K::KEY_KP8,
+        "kp_9" | "kp_prior" | "kp_page_up" => K::KEY_KP9,
+        "kp_decimal" | "kp_delete" | "kp_separator" => K::KEY_KPDOT,
+        "kp_enter" => K::KEY_KPENTER,
+        "kp_add" => K::KEY_KPPLUS,
+        "kp_subtract" => K::KEY_KPMINUS,
+        "kp_multiply" => K::KEY_KPASTERISK,
+        "kp_divide" => K::KEY_KPSLASH,
         "xf86audioplay" | "xf86audiopause" => K::KEY_PLAYPAUSE,
         "xf86audionext" => K::KEY_NEXTSONG,
         "xf86audioprev" => K::KEY_PREVIOUSSONG,
@@ -236,6 +256,14 @@ pub fn plan_typing(text: &str) -> Typing {
         .unwrap_or(Typing::Paste)
 }
 
+/// Key events for a combo: each key pressed in order, then released in reverse
+/// (`super+x` presses Meta, then X, releases X, then Meta). 1 = press, 0 = release.
+pub fn combo_events(keys: &[KeyCode]) -> Vec<(KeyCode, i32)> {
+    let down = keys.iter().map(|&k| (k, 1));
+    let up = keys.iter().rev().map(|&k| (k, 0));
+    down.chain(up).collect()
+}
+
 /// A virtual keyboard that can press any key.
 pub struct VirtualKeyboard {
     dev: VirtualDevice,
@@ -267,18 +295,85 @@ impl VirtualKeyboard {
     /// Press keys in order, then release them in reverse.
     pub fn press_combo(&mut self, keys: &[KeyCode]) -> Result<(), ActionError> {
         let err = |e: std::io::Error| ActionError::Failed(format!("could not send keys: {e}"));
-        for k in keys {
+        for (k, value) in combo_events(keys) {
             self.dev
-                .emit(&[InputEvent::new(EventType::KEY.0, k.0, 1)])
-                .map_err(err)?;
-            std::thread::sleep(GAP);
-        }
-        for k in keys.iter().rev() {
-            self.dev
-                .emit(&[InputEvent::new(EventType::KEY.0, k.0, 0)])
+                .emit(&[InputEvent::new(EventType::KEY.0, k.0, value)])
                 .map_err(err)?;
             std::thread::sleep(GAP);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use KeyCode as K;
+
+    #[test]
+    fn super_names_are_left_meta() {
+        for n in [
+            "super", "Super", "meta", "win", "super_l", "meta_l", "hyper", "hyper_l",
+        ] {
+            assert_eq!(parse_combo(n).expect(n), vec![K::KEY_LEFTMETA], "{n}");
+        }
+        for n in ["super_r", "meta_r", "hyper_r"] {
+            assert_eq!(parse_combo(n).expect(n), vec![K::KEY_RIGHTMETA], "{n}");
+        }
+    }
+
+    #[test]
+    fn a_lone_modifier_is_a_combo() {
+        let keys = parse_combo("super").expect("super alone");
+        assert_eq!(
+            combo_events(&keys),
+            vec![(K::KEY_LEFTMETA, 1), (K::KEY_LEFTMETA, 0)]
+        );
+        assert_eq!(parse_combo("ctrl").expect("ctrl"), vec![K::KEY_LEFTCTRL]);
+    }
+
+    #[test]
+    fn super_x_presses_meta_first_and_releases_it_last() {
+        let keys = parse_combo("super+x").expect("super+x");
+        assert_eq!(keys, vec![K::KEY_LEFTMETA, K::KEY_X]);
+        assert_eq!(
+            combo_events(&keys),
+            vec![
+                (K::KEY_LEFTMETA, 1),
+                (K::KEY_X, 1),
+                (K::KEY_X, 0),
+                (K::KEY_LEFTMETA, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_recorded_modifier_set_parses() {
+        let keys = parse_combo("ctrl+alt+shift+super+f5").expect("all modifiers");
+        assert_eq!(
+            keys,
+            vec![
+                K::KEY_LEFTCTRL,
+                K::KEY_LEFTALT,
+                K::KEY_LEFTSHIFT,
+                K::KEY_LEFTMETA,
+                K::KEY_F5
+            ]
+        );
+        assert_eq!(
+            parse_combo("ctrl+super").expect("modifiers only"),
+            vec![K::KEY_LEFTCTRL, K::KEY_LEFTMETA]
+        );
+    }
+
+    #[test]
+    fn lock_and_keypad_keys_parse() {
+        assert_eq!(parse_combo("caps_lock").expect("caps"), vec![K::KEY_CAPSLOCK]);
+        assert_eq!(parse_combo("pause").expect("pause"), vec![K::KEY_PAUSE]);
+        assert_eq!(
+            parse_combo("super+kp_add").expect("kp"),
+            vec![K::KEY_LEFTMETA, K::KEY_KPPLUS]
+        );
+        assert_eq!(parse_combo("kp_7").expect("kp7"), vec![K::KEY_KP7]);
     }
 }

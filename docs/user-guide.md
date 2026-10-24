@@ -87,7 +87,10 @@ gone, its OBS scene doesn't exist… Click it: the top of the editor says what's
 | **Timer** | Start/pause, reset, add minutes |
 
 Notes:
-- **Keyboard Shortcut**: press **Record** and type the shortcut.
+- **Keyboard Shortcut**: press **Record** and type the shortcut. Any combination works, Super
+  included; to record a modifier on its own (just Super, say), press and release it. Escape cancels.
+  While recording, the desktop's own shortcuts are paused for the window; GNOME may ask once whether
+  to allow that.
 - **Type Text** types anything a US keyboard can type. For other characters (é, ü, emoji…) it pastes
   through the clipboard, which needs `wl-clipboard` (Wayland) or `xclip` (X11) installed.
 - **Multi Action** runs several actions in order, with optional pauses between them.

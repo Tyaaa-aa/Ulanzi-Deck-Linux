@@ -176,6 +176,66 @@ fn fill_keycaps(b: &gtk::Box, keys: &str) {
     }
 }
 
+/// The recorder button's state while it listens for a shortcut.
+#[derive(Default)]
+struct Recording {
+    active: std::cell::Cell<bool>,
+    recorder: RefCell<Recorder>,
+    /// The toplevel whose system shortcuts are inhibited, restored when recording ends.
+    inhibited: RefCell<Option<glib::WeakRef<gdk::Toplevel>>>,
+}
+
+impl Recording {
+    fn start(&self, b: &gtk::Button) {
+        self.release_inhibit();
+        self.active.set(true);
+        *self.recorder.borrow_mut() = Recorder::default();
+        b.set_label("Press keys…");
+        b.add_css_class("suggested-action");
+        b.grab_focus();
+        // Let Super, Alt+Tab and friends reach the recorder instead of the desktop.
+        if let Some(top) = b
+            .native()
+            .and_then(|n| n.surface())
+            .and_downcast::<gdk::Toplevel>()
+        {
+            top.inhibit_system_shortcuts(None::<&gdk::Event>);
+            *self.inhibited.borrow_mut() = Some(top.downgrade());
+        }
+    }
+
+    /// Ends recording for any reason; always gives the desktop its shortcuts back.
+    fn stop(&self, b: &gtk::Button) {
+        self.active.set(false);
+        *self.recorder.borrow_mut() = Recorder::default();
+        b.set_label("Record");
+        b.remove_css_class("suggested-action");
+        self.release_inhibit();
+    }
+
+    fn release_inhibit(&self) {
+        if let Some(top) = self.inhibited.take().and_then(|w| w.upgrade()) {
+            top.restore_system_shortcuts();
+        }
+    }
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        self.release_inhibit();
+    }
+}
+
+/// The GDK name of the key itself, ignoring modifiers, so Shift+1 records as shift+1, not "exclam".
+fn base_key_name(w: &impl IsA<gtk::Widget>, keyval: gdk::Key, code: u32) -> String {
+    let base = w
+        .display()
+        .translate_key(code, gdk::ModifierType::empty(), 0)
+        .map(|(k, ..)| k)
+        .unwrap_or(keyval);
+    base.name().map(|n| n.to_string()).unwrap_or_default()
+}
+
 fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
     let row = adw::ActionRow::builder()
         .title("Shortcut")
@@ -189,75 +249,85 @@ fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
         .build();
     row.add_suffix(&caps);
     row.add_suffix(&record);
-    let recording = Rc::new(std::cell::Cell::new(false));
-    let stop = {
-        let (record, recording) = (record.clone(), recording.clone());
-        move || {
-            recording.set(false);
-            record.set_label("Record");
-            record.remove_css_class("suggested-action");
-        }
-    };
+    // Handlers on `record` get the button as an argument; none holds it, so nothing leaks.
+    let rec = Rc::new(Recording::default());
     {
-        let recording = recording.clone();
+        let rec = rec.clone();
         record.connect_clicked(move |b| {
-            recording.set(true);
-            b.set_label("Press keys…");
-            b.add_css_class("suggested-action");
-            b.grab_focus();
+            if rec.active.get() {
+                rec.stop(b);
+            } else {
+                rec.start(b);
+            }
         });
     }
     {
-        let stop = stop.clone();
+        let rec = rec.clone();
         record.connect_has_focus_notify(move |b| {
-            if !b.has_focus() {
-                stop();
+            // Focus moving to another widget ends recording. The window itself going inactive
+            // does not: GNOME asks once whether to allow the shortcut inhibit in its own dialog.
+            let window_active = b
+                .root()
+                .and_downcast::<gtk::Window>()
+                .is_none_or(|w| w.is_active());
+            if !b.has_focus() && window_active && rec.active.get() {
+                rec.stop(b);
             }
         });
     }
-    let keys_ctl = gtk::EventControllerKey::new();
-    keys_ctl.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
-        let (ed, caps, record) = (ed.clone(), caps.clone(), record.clone());
-        keys_ctl.connect_key_pressed(move |_, keyval, code, m| {
-            if !recording.get() {
-                return glib::Propagation::Proceed;
+        let rec = rec.clone();
+        record.connect_unmap(move |b| {
+            if rec.active.get() {
+                rec.stop(b);
             }
-            let none = !m.intersects(
-                gdk::ModifierType::CONTROL_MASK
-                    | gdk::ModifierType::ALT_MASK
-                    | gdk::ModifierType::SUPER_MASK
-                    | gdk::ModifierType::SHIFT_MASK,
-            );
-            if keyval == gdk::Key::Escape && none {
-                stop();
-                return glib::Propagation::Stop;
-            }
-            // The unshifted key, so Shift+1 records as shift+1 rather than "exclam".
-            let base = record
-                .display()
-                .translate_key(code, gdk::ModifierType::empty(), 0)
-                .map(|(k, ..)| k)
-                .unwrap_or(keyval);
-            let name = base.name().map(|n| n.to_string()).unwrap_or_default();
-            let mods = Mods {
-                ctrl: m.contains(gdk::ModifierType::CONTROL_MASK),
-                alt: m.contains(gdk::ModifierType::ALT_MASK),
-                shift: m.contains(gdk::ModifierType::SHIFT_MASK),
-                super_: m.intersects(gdk::ModifierType::SUPER_MASK | gdk::ModifierType::META_MASK),
-            };
-            if let Some(combo) = combo_from_recording(mods, &name) {
+        });
+    }
+    let finish = {
+        let (ed, caps) = (ed.clone(), caps.clone());
+        move |rec: &Recording, b: &gtk::Button, step: RecordStep| match step {
+            RecordStep::Wait => {}
+            RecordStep::Cancel => rec.stop(b),
+            RecordStep::Record(combo) => {
                 fill_keycaps(&caps, &combo);
                 ed.apply(How::Set, |a| {
                     if let Action::Shortcut { keys } = a {
                         *keys = combo;
                     }
                 });
-                stop();
+                rec.stop(b);
             }
+        }
+    };
+    let finish = Rc::new(finish);
+    let keys_ctl = gtk::EventControllerKey::new();
+    keys_ctl.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let (rec, finish) = (rec.clone(), finish.clone());
+        keys_ctl.connect_key_pressed(move |ctl, keyval, code, m| {
+            let Some(b) = ctl.widget().and_downcast::<gtk::Button>() else {
+                return glib::Propagation::Proceed;
+            };
+            if !rec.active.get() {
+                return glib::Propagation::Proceed;
+            }
+            let name = base_key_name(&b, keyval, code);
+            let step = rec.recorder.borrow_mut().press(mods_from_state(m), &name);
+            finish(&rec, &b, step);
             glib::Propagation::Stop
         });
     }
+    keys_ctl.connect_key_released(move |ctl, keyval, code, _| {
+        let Some(b) = ctl.widget().and_downcast::<gtk::Button>() else {
+            return;
+        };
+        if !rec.active.get() {
+            return;
+        }
+        let name = base_key_name(&b, keyval, code);
+        let step = rec.recorder.borrow_mut().release(&name);
+        finish(&rec, &b, step);
+    });
     record.add_controller(keys_ctl);
     row.upcast()
 }
@@ -1790,7 +1860,7 @@ pub fn shortcut_chips(keys: &str) -> Vec<String> {
             "ctrl" | "control" => "Ctrl".into(),
             "alt" => "Alt".into(),
             "shift" => "Shift".into(),
-            "super" | "meta" | "win" => "Super".into(),
+            "super" | "meta" | "win" | "hyper" => "Super".into(),
             "return" | "enter" => "Enter".into(),
             "escape" | "esc" => "Esc".into(),
             _ if k.chars().count() == 1 => k.to_uppercase(),
@@ -1821,6 +1891,112 @@ pub struct Mods {
     pub alt: bool,
     pub shift: bool,
     pub super_: bool,
+}
+
+impl Mods {
+    fn is_empty(self) -> bool {
+        !(self.ctrl || self.alt || self.shift || self.super_)
+    }
+
+    fn with(self, o: Mods) -> Mods {
+        Mods {
+            ctrl: self.ctrl || o.ctrl,
+            alt: self.alt || o.alt,
+            shift: self.shift || o.shift,
+            super_: self.super_ || o.super_,
+        }
+    }
+
+    /// The combo naming only these modifiers (`ctrl+super`), or None when there are none.
+    fn combo(self) -> Option<String> {
+        let parts: Vec<&str> = [
+            (self.ctrl, "ctrl"),
+            (self.alt, "alt"),
+            (self.shift, "shift"),
+            (self.super_, "super"),
+        ]
+        .into_iter()
+        .filter_map(|(on, n)| on.then_some(n))
+        .collect();
+        (!parts.is_empty()).then(|| parts.join("+"))
+    }
+}
+
+/// The modifiers held in a GDK event state. Super, Meta and Hyper all record as `super`
+/// (the daemon's Left Meta key). Meta together with Alt is Alt alone: some keymaps put the
+/// virtual Meta modifier on the Alt key, which would otherwise turn every Alt+X into Alt+Super+X.
+pub fn mods_from_state(m: gdk::ModifierType) -> Mods {
+    use gdk::ModifierType as M;
+    let alt = m.contains(M::ALT_MASK);
+    Mods {
+        ctrl: m.contains(M::CONTROL_MASK),
+        alt,
+        shift: m.contains(M::SHIFT_MASK),
+        super_: m.intersects(M::SUPER_MASK | M::HYPER_MASK) || (m.contains(M::META_MASK) && !alt),
+    }
+}
+
+/// For a modifier key (GDK key name), the modifier it adds; `Some(Mods::default())` for a
+/// modifier the daemon has no plain name for (AltGr). None for any other key.
+pub fn modifier_of(key: &str) -> Option<Mods> {
+    let none = Mods::default();
+    Some(match key.to_ascii_lowercase().as_str() {
+        "control_l" | "control_r" => Mods { ctrl: true, ..none },
+        "alt_l" | "alt_r" => Mods { alt: true, ..none },
+        "shift_l" | "shift_r" => Mods { shift: true, ..none },
+        "super_l" | "super_r" | "meta_l" | "meta_r" | "hyper_l" | "hyper_r" => Mods { super_: true, ..none },
+        k if MODIFIER_KEYS.contains(&k) => none,
+        _ => return None,
+    })
+}
+
+/// What the recorder does after a key event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordStep {
+    /// Keep listening.
+    Wait,
+    /// Stop without changing the shortcut (Escape with no modifiers).
+    Cancel,
+    /// Store this combo and stop.
+    Record(String),
+}
+
+/// Key-combo recorder logic. A modifier pressed and released with no other key in between
+/// records that modifier (with any others held), so Super alone is a valid shortcut.
+#[derive(Debug, Default)]
+pub struct Recorder {
+    /// The modifiers held since the last modifier press, while no other key has been pressed.
+    pending: Option<Mods>,
+}
+
+impl Recorder {
+    /// A key press; `mods` are the modifiers held before it (GDK leaves the pressed modifier out).
+    pub fn press(&mut self, mods: Mods, key: &str) -> RecordStep {
+        if key == "Escape" && mods.is_empty() {
+            self.pending = None;
+            return RecordStep::Cancel;
+        }
+        if let Some(m) = modifier_of(key) {
+            self.pending = Some(self.pending.unwrap_or_default().with(mods).with(m));
+            return RecordStep::Wait;
+        }
+        self.pending = None;
+        match combo_from_recording(mods, key) {
+            Some(combo) => RecordStep::Record(combo),
+            None => RecordStep::Wait,
+        }
+    }
+
+    /// A key release.
+    pub fn release(&mut self, key: &str) -> RecordStep {
+        if modifier_of(key).is_none() {
+            return RecordStep::Wait;
+        }
+        match self.pending.take().and_then(Mods::combo) {
+            Some(combo) => RecordStep::Record(combo),
+            None => RecordStep::Wait,
+        }
+    }
 }
 
 const MODIFIER_KEYS: &[&str] = &[
@@ -1919,6 +2095,150 @@ mod tests {
             combo_from_recording(Mods::default(), "Page_Down").as_deref(),
             Some("page_down")
         );
+    }
+
+    #[test]
+    fn state_maps_super_meta_hyper_to_super() {
+        use gdk::ModifierType as M;
+        let sup = Mods {
+            super_: true,
+            ..Mods::default()
+        };
+        assert_eq!(mods_from_state(M::SUPER_MASK), sup);
+        assert_eq!(mods_from_state(M::META_MASK), sup);
+        assert_eq!(mods_from_state(M::HYPER_MASK), sup);
+        assert_eq!(
+            mods_from_state(M::CONTROL_MASK | M::SHIFT_MASK),
+            Mods {
+                ctrl: true,
+                shift: true,
+                ..Mods::default()
+            }
+        );
+        // Meta riding on the Alt key is just Alt.
+        let alt = Mods {
+            alt: true,
+            ..Mods::default()
+        };
+        assert_eq!(mods_from_state(M::ALT_MASK | M::META_MASK), alt);
+        assert_eq!(
+            mods_from_state(M::ALT_MASK | M::META_MASK | M::SUPER_MASK),
+            alt.with(sup)
+        );
+        assert_eq!(mods_from_state(M::BUTTON1_MASK | M::LOCK_MASK), Mods::default());
+    }
+
+    #[test]
+    fn modifier_keys_are_known() {
+        let sup = Some(Mods {
+            super_: true,
+            ..Mods::default()
+        });
+        for k in ["Super_L", "Super_R", "Meta_L", "Meta_R", "Hyper_L", "Hyper_R"] {
+            assert_eq!(modifier_of(k), sup, "{k}");
+        }
+        assert_eq!(
+            modifier_of("Control_R"),
+            Some(Mods {
+                ctrl: true,
+                ..Mods::default()
+            })
+        );
+        assert_eq!(
+            modifier_of("Alt_L"),
+            Some(Mods {
+                alt: true,
+                ..Mods::default()
+            })
+        );
+        assert_eq!(
+            modifier_of("Shift_R"),
+            Some(Mods {
+                shift: true,
+                ..Mods::default()
+            })
+        );
+        assert_eq!(modifier_of("ISO_Level3_Shift"), Some(Mods::default()));
+        assert_eq!(modifier_of("a"), None);
+        assert_eq!(modifier_of("Escape"), None);
+    }
+
+    #[test]
+    fn super_alone_records_on_release() {
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Super_L"), RecordStep::Wait);
+        assert_eq!(r.release("Super_L"), RecordStep::Record("super".into()));
+        for (k, want) in [
+            ("Control_L", "ctrl"),
+            ("Alt_R", "alt"),
+            ("Shift_L", "shift"),
+            ("Meta_R", "super"),
+        ] {
+            let mut r = Recorder::default();
+            assert_eq!(r.press(Mods::default(), k), RecordStep::Wait);
+            assert_eq!(r.release(k), RecordStep::Record(want.into()), "{k}");
+        }
+    }
+
+    #[test]
+    fn super_then_key_records_the_combo() {
+        let sup = Mods {
+            super_: true,
+            ..Mods::default()
+        };
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Super_L"), RecordStep::Wait);
+        assert_eq!(r.press(sup, "x"), RecordStep::Record("super+x".into()));
+        // Releasing Super after a key was pressed records nothing more.
+        assert_eq!(r.release("Super_L"), RecordStep::Wait);
+        // Ctrl+Alt+Shift+Super+F5
+        let all = Mods {
+            ctrl: true,
+            alt: true,
+            shift: true,
+            super_: true,
+        };
+        let mut r = Recorder::default();
+        assert_eq!(
+            r.press(all, "F5"),
+            RecordStep::Record("ctrl+alt+shift+super+f5".into())
+        );
+    }
+
+    #[test]
+    fn several_modifiers_alone_record_together() {
+        let ctrl = Mods {
+            ctrl: true,
+            ..Mods::default()
+        };
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Control_L"), RecordStep::Wait);
+        assert_eq!(r.press(ctrl, "Super_L"), RecordStep::Wait);
+        assert_eq!(r.release("Super_L"), RecordStep::Record("ctrl+super".into()));
+    }
+
+    #[test]
+    fn escape_cancels_unless_modified() {
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Escape"), RecordStep::Cancel);
+        let ctrl = Mods {
+            ctrl: true,
+            ..Mods::default()
+        };
+        assert_eq!(r.press(ctrl, "Escape"), RecordStep::Record("ctrl+escape".into()));
+    }
+
+    #[test]
+    fn stray_releases_and_altgr_wait() {
+        let mut r = Recorder::default();
+        // A release with nothing pressed since recording began (the click's own keys).
+        assert_eq!(r.release("Return"), RecordStep::Wait);
+        assert_eq!(r.release("Super_L"), RecordStep::Wait);
+        // AltGr alone has no daemon name: keep listening.
+        assert_eq!(r.press(Mods::default(), "ISO_Level3_Shift"), RecordStep::Wait);
+        assert_eq!(r.release("ISO_Level3_Shift"), RecordStep::Wait);
+        // A key with no name keeps listening too.
+        assert_eq!(r.press(Mods::default(), ""), RecordStep::Wait);
     }
 
     #[test]
