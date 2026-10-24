@@ -183,6 +183,8 @@ struct Recording {
     recorder: RefCell<Recorder>,
     /// The toplevel whose system shortcuts are inhibited, restored when recording ends.
     inhibited: RefCell<Option<glib::WeakRef<gdk::Toplevel>>>,
+    /// The app's accelerators, off while recording so any combination can be recorded.
+    accels: RefCell<Option<crate::ui::key_routing::AccelGuard>>,
     inhibit: std::cell::Cell<InhibitState>,
     /// Handlers on the window and its surface while recording; disconnected when it ends.
     handlers: RefCell<Vec<(glib::WeakRef<glib::Object>, glib::SignalHandlerId)>>,
@@ -217,6 +219,14 @@ impl Recording {
             self.handlers
                 .borrow_mut()
                 .push((win.upcast_ref::<glib::Object>().downgrade(), id));
+        }
+        // Ctrl+L, Ctrl+O, Ctrl+comma and every other app shortcut: off until recording ends.
+        if let Some(app) = b
+            .root()
+            .and_downcast::<gtk::Window>()
+            .and_then(|w| w.application())
+        {
+            *self.accels.borrow_mut() = Some(crate::ui::key_routing::AccelGuard::park(&app));
         }
         // Let Super, Alt+Tab and friends reach the recorder instead of the desktop.
         if let Some(top) = b
@@ -263,6 +273,7 @@ impl Recording {
             }
         }
         self.inhibit.set(InhibitState::Off);
+        self.accels.take();
         if let Some(top) = self.inhibited.take().and_then(|w| w.upgrade()) {
             top.restore_system_shortcuts();
         }

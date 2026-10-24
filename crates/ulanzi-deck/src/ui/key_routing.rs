@@ -97,6 +97,81 @@ pub(crate) fn focus_kind(focus: Option<&gtk::Widget>) -> Focus {
     f
 }
 
+/// Whether a window-wide action (Ctrl+L and the like) may run with the focus at `f`: anywhere but
+/// behind an open dialog, inside a popover or while the shortcut recorder listens. Text fields are
+/// fine: those shortcuts edit no text.
+pub(crate) fn window_wide_acts(f: Focus) -> bool {
+    !(f.dialog || f.popover || f.recording)
+}
+
+/// Where the focus of `window` sits, an open dialog included.
+pub(crate) fn window_focus(window: &adw::ApplicationWindow) -> Focus {
+    Focus {
+        dialog: window.visible_dialog().is_some(),
+        ..focus_kind(gtk::prelude::RootExt::focus(window).as_ref())
+    }
+}
+
+/// Accelerators by detailed action name.
+type Accels = Vec<(String, Vec<String>)>;
+
+thread_local! {
+    /// The application accelerators taken away while a shortcut recorder listens, and how many
+    /// recorders hold them.
+    static PARKED: std::cell::RefCell<(usize, Accels)> =
+        const { std::cell::RefCell::new((0, Vec::new())) };
+}
+
+/// While alive, every application accelerator (Ctrl+L, Ctrl+O, Ctrl+comma, … whatever the app
+/// registered) is switched off, so the shortcut recorder can record any combination. Taken from
+/// the application itself, so a new accelerator can't be forgotten. Nested guards share one
+/// parking; the last one dropped puts them back.
+pub(crate) struct AccelGuard {
+    app: glib::WeakRef<gtk::Application>,
+}
+
+impl AccelGuard {
+    pub(crate) fn park(app: &gtk::Application) -> AccelGuard {
+        PARKED.with(|p| {
+            let mut p = p.borrow_mut();
+            if p.0 == 0 {
+                p.1 = app
+                    .list_action_descriptions()
+                    .iter()
+                    .map(|a| {
+                        let accels = app.accels_for_action(a).iter().map(|s| s.to_string()).collect();
+                        (a.to_string(), accels)
+                    })
+                    .collect();
+                for (action, _) in &p.1 {
+                    app.set_accels_for_action(action, &[]);
+                }
+            }
+            p.0 += 1;
+        });
+        AccelGuard { app: app.downgrade() }
+    }
+}
+
+impl Drop for AccelGuard {
+    fn drop(&mut self) {
+        PARKED.with(|p| {
+            let mut p = p.borrow_mut();
+            p.0 = p.0.saturating_sub(1);
+            if p.0 > 0 {
+                return;
+            }
+            let parked = std::mem::take(&mut p.1);
+            if let Some(app) = self.app.upgrade() {
+                for (action, accels) in parked {
+                    let accels: Vec<&str> = accels.iter().map(String::as_str).collect();
+                    app.set_accels_for_action(&action, &accels);
+                }
+            }
+        });
+    }
+}
+
 /// Whether the focus sits in something that edits text (any `gtk::Editable` or a `gtk::TextView`,
 /// or a widget inside one, such as the parts of an `adw::EntryRow`).
 pub(crate) fn text_has_focus(focus: Option<&gtk::Widget>) -> bool {
@@ -122,11 +197,9 @@ pub(crate) fn install(window: &adw::ApplicationWindow) {
         let name = format!("win.{action}");
         let callback = gtk::CallbackAction::new(move |w, _| {
             let focus = w.root().and_then(|r| r.focus());
-            let f = Focus {
-                dialog: w
-                    .downcast_ref::<adw::ApplicationWindow>()
-                    .is_some_and(|w| w.visible_dialog().is_some()),
-                ..focus_kind(focus.as_ref())
+            let f = match w.downcast_ref::<adw::ApplicationWindow>() {
+                Some(w) => window_focus(w),
+                None => focus_kind(focus.as_ref()),
             };
             if !window_acts(accel, f) {
                 return glib::Propagation::Proceed;
@@ -433,6 +506,71 @@ mod tests {
             dialog.force_close();
             assert_eq!(runs.get(), 1);
             window.destroy();
+        });
+    }
+
+    #[test]
+    fn window_wide_shortcuts_wait_for_dialogs_popovers_and_recording() {
+        let none = Focus::default();
+        assert!(window_wide_acts(none));
+        assert!(
+            window_wide_acts(Focus { text: true, ..none }),
+            "Ctrl+L works from a text field"
+        );
+        assert!(!window_wide_acts(Focus { dialog: true, ..none }));
+        assert!(!window_wide_acts(Focus {
+            popover: true,
+            ..none
+        }));
+        assert!(!window_wide_acts(Focus {
+            recording: true,
+            ..none
+        }));
+    }
+
+    #[test]
+    fn every_app_accelerator_is_off_while_recording() {
+        crate::ui::with_gtk(|| {
+            let app = gtk::Application::builder().build();
+            // What the app registers (window.rs and main.rs), plus one added later.
+            let registered: &[(&str, &[&str])] = &[
+                ("win.library", &["<Control>l"]),
+                ("win.shortcuts", &["<Control>question"]),
+                ("app.import", &["<Control>o"]),
+                ("app.export", &["<Control>e"]),
+                ("app.preferences", &["<Control>comma"]),
+                ("app.something-new", &["<Control>n", "F5"]),
+            ];
+            for (action, accels) in registered {
+                app.set_accels_for_action(action, accels);
+            }
+            let all = |app: &gtk::Application| -> Vec<(String, Vec<String>)> {
+                let mut v: Vec<(String, Vec<String>)> = app
+                    .list_action_descriptions()
+                    .iter()
+                    .map(|a| {
+                        let accels = app.accels_for_action(a).iter().map(|s| s.to_string()).collect();
+                        (a.to_string(), accels)
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            let before = all(&app);
+            assert_eq!(before.len(), registered.len());
+            let outer = AccelGuard::park(&app);
+            let off = |app: &gtk::Application| {
+                registered
+                    .iter()
+                    .all(|(action, _)| app.accels_for_action(action).is_empty())
+            };
+            assert!(off(&app), "an accelerator still fires while recording");
+            // A second recorder starting before the first stops shares the parking.
+            let inner = AccelGuard::park(&app);
+            drop(inner);
+            assert!(off(&app), "restored too early");
+            drop(outer);
+            assert_eq!(all(&app), before, "every accelerator comes back");
         });
     }
 

@@ -236,7 +236,14 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         // Ctrl+L: the action list, with the typing focus in its search field.
         let a = gio::SimpleAction::new("library", None);
         let (show, split) = (panel.show_library.clone(), inner_split.clone());
+        let win = window.downgrade();
         a.connect_activate(move |_, _| {
+            // Not behind an open dialog or popover (it would take the focus from it).
+            if let Some(w) = win.upgrade()
+                && !crate::ui::key_routing::window_wide_acts(crate::ui::key_routing::window_focus(&w))
+            {
+                return;
+            }
             split.set_show_sidebar(true);
             show();
         });

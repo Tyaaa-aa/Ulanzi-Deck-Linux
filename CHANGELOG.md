@@ -47,8 +47,9 @@ and the project uses [Semantic Versioning](https://semver.org).
 - The top bar's Actions button is gone. A key's editor has a × at the top of the panel, and Escape
   does the same when you are not typing: the key is deselected and the action list comes back. A
   text field, an open dialog or menu, and the shortcut recorder keep their own Escape (and the
-  deck's copy, paste and Delete shortcuts leave them alone too). Ctrl+L puts the cursor in the
-  action search.
+  deck's copy, paste and Delete shortcuts leave them alone too). While the recorder listens, the
+  app's own shortcuts (Ctrl+L, Ctrl+O, Ctrl+E, Ctrl+comma, Ctrl+?) are off, so any combination can be
+  recorded. Ctrl+L puts the cursor in the action search (not while a dialog or menu is open).
 
 ### Fixed
 - Menu items no longer end in "…" (Rename, Delete, Export, Import, Set Up Deck and the like); the guides use the same names.

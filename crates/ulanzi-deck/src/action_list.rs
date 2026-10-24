@@ -70,6 +70,18 @@ impl View {
         self.groups.first().and_then(|g| g.entries.first())
     }
 
+    /// What Enter in the search field picks: the first entry of the first open section, and only
+    /// while there is a query (`folded`: the sections folded away on screen).
+    pub fn enter_pick(&self, query: &str, folded: &HashSet<String>) -> Option<&Entry> {
+        if query.trim().is_empty() {
+            return None;
+        }
+        self.groups
+            .iter()
+            .find(|g| !self.headers || !folded.contains(&g.id))
+            .and_then(|g| g.entries.first())
+    }
+
     pub fn len(&self) -> usize {
         self.groups.iter().map(|g| g.entries.len()).sum()
     }
@@ -163,7 +175,8 @@ impl Catalog {
         for (id, name, actions) in &by_plugin {
             let plugin_icon = plugins.manifests.get(id).and_then(|m| m.icon.clone());
             // A name shared with a built-in category or another plugin gets told apart.
-            let builtin_clash = Category::ALL.iter().any(|c| c.title().eq_ignore_ascii_case(name));
+            let builtin_clash = name.eq_ignore_ascii_case("All")
+                || Category::ALL.iter().any(|c| c.title().eq_ignore_ascii_case(name));
             let plugin_clash = by_plugin
                 .iter()
                 .any(|(other, n, _)| other != id && n.eq_ignore_ascii_case(name));
@@ -261,16 +274,17 @@ pub fn expanded(collapsed: &HashSet<String>, group: &str, query: &str) -> bool {
     !query.trim().is_empty() || !collapsed.contains(group)
 }
 
-/// The words for an empty list: (title, description).
-pub fn empty_text(query: &str, category: &str) -> (String, Option<String>) {
+/// The words for an empty list: (title, description). `category` is the category's id, `label`
+/// its button's text.
+pub fn empty_text(query: &str, category: &str, label: &str) -> (String, Option<String>) {
     let query = query.trim();
     if query.is_empty() {
         return ("No actions".to_string(), None);
     }
-    let detail = if category == "All" {
+    let detail = if category == ALL {
         "Try another word".to_string()
     } else {
-        format!("Nothing in {category} matches “{query}”")
+        format!("Nothing in {label} matches “{query}”")
     };
     ("No matching actions".to_string(), Some(detail))
 }
@@ -654,23 +668,67 @@ mod tests {
     #[test]
     fn empty_and_elsewhere_words() {
         assert_eq!(
-            empty_text("lamp", "Media"),
+            empty_text("lamp", "cat:media", "Media"),
             (
                 "No matching actions".to_string(),
                 Some("Nothing in Media matches “lamp”".to_string())
             )
         );
         assert_eq!(
-            empty_text("lamp", "All"),
+            empty_text("lamp", ALL, "All"),
             (
                 "No matching actions".to_string(),
                 Some("Try another word".to_string())
             )
         );
-        assert_eq!(empty_text("", "All"), ("No actions".to_string(), None));
+        assert_eq!(empty_text("", ALL, "All"), ("No actions".to_string(), None));
         assert_eq!(elsewhere_label(0), None);
         assert_eq!(elsewhere_label(1).as_deref(), Some("Show 1 more in All"));
         assert_eq!(elsewhere_label(12).as_deref(), Some("Show 12 more in All"));
+    }
+
+    #[test]
+    fn enter_picks_only_a_shown_entry_of_a_real_query() {
+        let c = Catalog::new(&sample(), true);
+        let none = HashSet::new();
+        assert!(
+            c.view(ALL, "").enter_pick("", &none).is_none(),
+            "no query: Enter does nothing"
+        );
+        assert!(c.view(ALL, "  ").enter_pick("  ", &none).is_none());
+        let v = c.view(ALL, "toggle");
+        assert_eq!(v.enter_pick("toggle", &none), v.first());
+        // The first section folded away: the first entry of the next open one.
+        let folded: HashSet<String> = [v.groups[0].id.clone()].into();
+        assert_eq!(
+            v.enter_pick("toggle", &folded).map(|e| &e.title),
+            v.groups[1].entries.first().map(|e| &e.title)
+        );
+        let all_folded: HashSet<String> = v.groups.iter().map(|g| g.id.clone()).collect();
+        assert!(v.enter_pick("toggle", &all_folded).is_none());
+        // A single category has no sections to fold.
+        let one = c.view("plugin:zzz", "toggle");
+        let id: HashSet<String> = ["plugin:zzz".to_string()].into();
+        assert_eq!(one.enter_pick("toggle", &id), one.first());
+    }
+
+    #[test]
+    fn a_plugin_called_all_is_not_the_all_tab() {
+        let p = plugins(
+            vec![manifest("everything", "All", None, &[("a", "A", None)])],
+            vec![],
+        );
+        let c = Catalog::new(&p, true);
+        let labels: Vec<String> = c.tabs().into_iter().map(|t| t.label).collect();
+        assert_eq!(labels.iter().filter(|l| *l == "All").count(), 1);
+        assert_eq!(labels.last().map(String::as_str), Some("All (plugin)"));
+        // The empty text goes by the category id, not its label.
+        assert_eq!(
+            empty_text("lamp", "plugin:everything", "All (plugin)")
+                .1
+                .as_deref(),
+            Some("Nothing in All (plugin) matches “lamp”")
+        );
     }
 
     #[test]

@@ -5,10 +5,11 @@
 //! [`crate::action_list`].
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
-use gtk::gdk;
+use gtk::{gdk, glib};
 use ulanzi_core::catalog;
 use ulanzi_core::model::Action;
 
@@ -52,8 +53,13 @@ struct Inner {
     search: gtk::SearchEntry,
     tabs: gtk::Box,
     list: gtk::Box,
+    tab_scroller: gtk::ScrolledWindow,
     /// Set while the category buttons are rebuilt, so their toggles don't redraw the list.
     building_tabs: Cell<bool>,
+    /// The query the shown list was made for.
+    shown_query: RefCell<String>,
+    /// The sections folded away on screen now.
+    folded: RefCell<HashSet<String>>,
 }
 
 impl Inner {
@@ -124,6 +130,42 @@ impl Inner {
             self.tabs.append(&b);
         }
         self.building_tabs.set(false);
+        self.scroll_to_chosen_tab_soon();
+    }
+
+    /// Bring the chosen category's button into view once it has its size.
+    fn scroll_to_chosen_tab_soon(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            if let Some(inner) = weak.upgrade() {
+                inner.scroll_to_chosen_tab();
+            }
+        });
+    }
+
+    fn scroll_to_chosen_tab(&self) {
+        let mut c = self.tabs.first_child();
+        while let Some(w) = c {
+            c = w.next_sibling();
+            let Some(b) = w.downcast_ref::<gtk::ToggleButton>() else {
+                continue;
+            };
+            if !b.is_active() {
+                continue;
+            }
+            let Some(p) = b.compute_point(&self.tabs, &gtk::graphene::Point::new(0.0, 0.0)) else {
+                return;
+            };
+            let adj = self.tab_scroller.hadjustment();
+            let v = scroll_into_view(
+                adj.value(),
+                adj.page_size(),
+                f64::from(p.x()),
+                f64::from(b.width()),
+            );
+            adj.set_value(v);
+            return;
+        }
     }
 
     fn render_list(self: &Rc<Self>) {
@@ -152,7 +194,7 @@ impl Inner {
                 .find(|t| t.id == category)
                 .map(|t| t.label)
                 .unwrap_or_default();
-            let (title, detail) = action_list::empty_text(&query, &label);
+            let (title, detail) = action_list::empty_text(&query, &category, &label);
             self.list.append(
                 &adw::StatusPage::builder()
                     .icon_name("edit-find-symbolic")
@@ -163,6 +205,7 @@ impl Inner {
             );
         }
         let collapsed = self.memory().borrow().collapsed.clone();
+        let mut folded = HashSet::new();
         for g in &view.groups {
             let rows = self.group_list(g);
             if !view.headers {
@@ -170,6 +213,9 @@ impl Inner {
                 continue;
             }
             let open = action_list::expanded(&collapsed, &g.id, &query);
+            if !open {
+                folded.insert(g.id.clone());
+            }
             let revealer = gtk::Revealer::builder()
                 .reveal_child(open)
                 .transition_type(gtk::RevealerTransitionType::SlideDown)
@@ -193,6 +239,8 @@ impl Inner {
             self.list.append(&b);
         }
         *self.view.borrow_mut() = view;
+        *self.folded.borrow_mut() = folded;
+        *self.shown_query.borrow_mut() = query;
     }
 
     /// A section's header: the plugin's icon, the name, the count and an arrow; a click opens or
@@ -231,6 +279,11 @@ impl Inner {
             let open = !revealer.reveals_child();
             revealer.set_reveal_child(open);
             arrow.set_icon_name(Some(arrow_icon(open)));
+            if open {
+                inner.folded.borrow_mut().remove(&id);
+            } else {
+                inner.folded.borrow_mut().insert(id.clone());
+            }
             if inner.search.text().trim().is_empty() {
                 let mut m = inner.memory().borrow_mut();
                 if open {
@@ -299,6 +352,18 @@ impl Inner {
             Use::Library => assign(&self.state, action),
             Use::Picker { on_pick, .. } => on_pick(action),
         }
+    }
+}
+
+/// The scroll position that shows `[x, x + width)` in a view of `page` starting at `value`,
+/// moving as little as possible.
+fn scroll_into_view(value: f64, page: f64, x: f64, width: f64) -> f64 {
+    if x < value {
+        x
+    } else if x + width > value + page {
+        (x + width - page).min(x)
+    } else {
+        value
     }
 }
 
@@ -399,7 +464,10 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
         search: search.clone(),
         tabs,
         list,
+        tab_scroller: tab_scroller.clone(),
         building_tabs: Cell::new(false),
+        shown_query: RefCell::default(),
+        folded: RefCell::default(),
     });
     // The picker fills itself each time it opens (see `reload`); the key editor builds several
     // pickers on every rebuild, and most are never opened.
@@ -415,13 +483,22 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
         });
     }
     {
-        // Enter picks the first action shown.
+        // Enter picks the first action shown in an open section, and only for a query.
         let weak = Rc::downgrade(&inner);
-        search.connect_activate(move |_| {
+        search.connect_activate(move |s| {
             let Some(inner) = weak.upgrade() else {
                 return;
             };
-            let first = inner.view.borrow().first().map(|e| e.action.clone());
+            // Typing is redrawn after a short delay: Enter right after typing sees the new list.
+            if *inner.shown_query.borrow() != s.text().as_str() {
+                inner.render_list();
+            }
+            let query = s.text();
+            let first = inner
+                .view
+                .borrow()
+                .enter_pick(&query, &inner.folded.borrow())
+                .map(|e| e.action.clone());
             if let Some(a) = first {
                 inner.pick(a);
             }
@@ -435,6 +512,15 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
             }
         })
     };
+    {
+        // Opening the panel (or the picker): show the chosen category's button.
+        let weak = Rc::downgrade(&inner);
+        root.connect_map(move |_| {
+            if let Some(inner) = weak.upgrade() {
+                inner.scroll_to_chosen_tab_soon();
+            }
+        });
+    }
     let weak = Rc::downgrade(&inner);
     // The list lives as long as its root: the root's handler is what holds it (the list's own
     // handlers hold it weakly).
@@ -538,6 +624,9 @@ mod tests {
             assert!(tabs[0].is_active(), "All first");
             assert_eq!(tabs[0].label().as_deref(), Some("All"));
 
+            // Enter without a query picks nothing.
+            list.search.emit_activate();
+            assert!(picked.borrow().is_empty());
             // Enter in the search field picks the first match.
             list.search.set_text("volume up");
             inner.render_list();
@@ -580,6 +669,18 @@ mod tests {
             assert!(tab_buttons(&inner)[1].is_active());
             assert_eq!(state.library_memory.borrow().category, action_list::ALL);
         });
+    }
+
+    #[test]
+    fn the_chosen_tab_scrolls_into_view() {
+        // Already visible: stays.
+        assert_eq!(scroll_into_view(0.0, 300.0, 100.0, 80.0), 0.0);
+        // Off to the right: its right edge lines up with the view's.
+        assert_eq!(scroll_into_view(0.0, 300.0, 500.0, 80.0), 280.0);
+        // Off to the left: its left edge lines up.
+        assert_eq!(scroll_into_view(400.0, 300.0, 120.0, 80.0), 120.0);
+        // Wider than the view: its start shows.
+        assert_eq!(scroll_into_view(0.0, 50.0, 200.0, 80.0), 200.0);
     }
 
     #[test]
