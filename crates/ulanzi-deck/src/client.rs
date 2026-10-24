@@ -59,6 +59,8 @@ pub const DEBOUNCE: Duration = Duration::from_millis(300);
 pub enum ClientError {
     #[error("the Ulanzi Deck service is not running")]
     NotRunning,
+    #[error("the Ulanzi Deck service did not answer in time")]
+    NoReply,
     #[error("{0}")]
     Service(String),
     #[error("the service sent something this app does not understand: {0}")]
@@ -73,11 +75,13 @@ impl From<zbus::Error> for ClientError {
             zbus::Error::MethodError(name, _, _) => name.as_str().to_string(),
             _ => String::new(),
         };
-        let not_running = ["ServiceUnknown", "NameHasNoOwner", "NoReply", "Error.Spawn."]
+        let not_running = ["ServiceUnknown", "NameHasNoOwner", "Error.Spawn."]
             .iter()
             .any(|k| s.contains(k) || name.contains(k));
         if not_running {
             ClientError::NotRunning
+        } else if s.contains("NoReply") || name.contains("NoReply") {
+            ClientError::NoReply
         } else if let zbus::Error::MethodError(_, Some(msg), _) = &e {
             ClientError::Service(msg.clone())
         } else {

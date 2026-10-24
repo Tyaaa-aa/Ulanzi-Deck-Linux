@@ -59,26 +59,29 @@ pub fn combo_items(
     (items, selected as u32)
 }
 
+/// How a text row saves.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Save {
+    /// With the apply button or Enter (settings pages: one write per edit).
+    OnApply,
+    /// On every change, like the built-in text rows (the key editor).
+    Live,
+}
+
 /// The row that edits `f`, showing `current` (the stored value, else the default).
-pub fn row(f: &Field, current: Option<&toml::Value>, on: OnValue) -> gtk::Widget {
+pub fn row(f: &Field, current: Option<&toml::Value>, save: Save, on: OnValue) -> gtk::Widget {
     let title = glib::markup_escape_text(f.title()).to_string();
     match control_for(f, current) {
         Control::Entry | Control::Json => {
             let row = adw::EntryRow::builder()
                 .title(&title)
                 .text(shown_text(current))
-                .show_apply_button(true)
+                .show_apply_button(save == Save::OnApply)
                 .build();
             set_help(&row, &f.help, true);
             let help = (!f.help.is_empty()).then(|| f.help.clone());
-            row.connect_changed(move |r| {
-                if r.has_css_class("error") {
-                    r.remove_css_class("error");
-                    r.set_tooltip_text(help.as_deref());
-                }
-            });
             let field = f.clone();
-            row.connect_apply(move |r| {
+            let commit = Rc::new(move |r: &adw::EntryRow| {
                 let v = value_from(&field, Input::Text(r.text().to_string()));
                 if let Err(e) = &v {
                     r.add_css_class("error");
@@ -86,6 +89,20 @@ pub fn row(f: &Field, current: Option<&toml::Value>, on: OnValue) -> gtk::Widget
                 }
                 on(v);
             });
+            let live = save == Save::Live;
+            let c = commit.clone();
+            row.connect_changed(move |r| {
+                if r.has_css_class("error") {
+                    r.remove_css_class("error");
+                    r.set_tooltip_text(help.as_deref());
+                }
+                if live {
+                    c(r);
+                }
+            });
+            if !live {
+                row.connect_apply(move |r| commit(r));
+            }
             row.upcast()
         }
         Control::Spin {

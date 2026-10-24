@@ -178,9 +178,10 @@ the rows under the action in the key editor for `params`.
 entry. A value the row cannot edit (a table, for example) is shown read-only and left as it is; a list in
 a `text` field is shown joined by `, ` and only replaced when the user edits it.
 
-A `default` is shown in the row but written only when the user changes the value, and a new key action
-starts with the `params` that have one. `init` receives only what is in `settings.toml`, so a plugin
-must apply its own settings defaults, the same ones as in its manifest.
+A setting's `default` is shown in the row. Before every `init` the host fills each non-secret setting the
+user has not set with its manifest default, so `init` sees the default without the plugin repeating it.
+A new key action starts with every `params` entry as its row shows it: the `default`, else the first
+choice of a `choice`, else the number a spin row falls back to (0 within `min` and `max`).
 
 ## Permissions
 
@@ -282,7 +283,7 @@ installing or enabling the plugin later brings the key back.
 Use `secret-set` for passwords, tokens and keys, never `set-state` or a settings value. Secrets are
 stored for you in the system keyring (Secret Service: KWallet, GNOME Keyring), which the service
 first asks when a plugin starts. If it does not answer within 3 seconds, they go to
-`~/.config/ulanzi-deck/plugin-secrets.toml` (mode 0600) instead. They are never logged, never sent over D-Bus and not part of profile exports or
+`~/.config/ulanzi-deck/plugin-secrets.toml` (mode 0600) instead. They are never logged, never sent from the service over D-Bus (the app sends them in with `PluginSetSecret`) and not part of profile exports or
 backups. Removing a plugin deletes its secrets; reinstalling it from a folder keeps them.
 
 To let the user type a secret in the app, declare it as a `kind = "secret"` setting. Its `key` is the

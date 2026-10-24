@@ -890,6 +890,21 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
     }
 }
 
+/// The undo tag of a plugin parameter, so edits to different parameters never merge. Tags are
+/// `'static`; each distinct key is leaked once.
+fn undo_tag(key: &str) -> &'static str {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static TAGS: RefCell<HashMap<String, &'static str>> = RefCell::new(HashMap::new());
+    }
+    TAGS.with(|t| {
+        *t.borrow_mut()
+            .entry(key.to_string())
+            .or_insert_with(|| Box::leak(format!("plugin:{key}").into_boxed_str()))
+    })
+}
+
 /// One row per parameter the plugin's manifest declares for the action. Nothing when the plugin or
 /// the action is unknown (the inspector's banner says why). Parameters the manifest doesn't name
 /// are kept as they are.
@@ -904,7 +919,7 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
         .map(|f| {
             let value = current(f, params);
             let how = match control_for(f, value.as_ref()) {
-                Control::Entry | Control::Json | Control::Spin { .. } => How::Typing("plugin"),
+                Control::Entry | Control::Json | Control::Spin { .. } => How::Typing(undo_tag(&f.key)),
                 _ => How::Set,
             };
             let (ed, key) = (ed.clone(), f.key.clone());
@@ -924,7 +939,7 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
                     }
                 });
             });
-            crate::ui::plugin_fields::row(f, value.as_ref(), on)
+            crate::ui::plugin_fields::row(f, value.as_ref(), crate::ui::plugin_fields::Save::Live, on)
         })
         .collect()
 }

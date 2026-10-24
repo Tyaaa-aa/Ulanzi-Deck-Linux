@@ -156,12 +156,21 @@ pub fn plugins_group(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
     let group = adw::PreferencesGroup::builder().title("Plugins").build();
     // Weak: the listener below outlives the dialog until it reports the group gone.
     let rows: RefCell<Vec<glib::WeakRef<adw::ActionRow>>> = RefCell::default();
+    // What the rows show now. A change that shows the same (a manifest reload, say) keeps the
+    // rows, so a focused switch or a button does not lose focus while a status flips elsewhere.
+    let shown: RefCell<Option<(bool, Vec<PluginRow>)>> = RefCell::default();
     let fill = {
         let (state, group, dialog) = (state.clone(), group.downgrade(), dialog.downgrade());
         move || {
             let (Some(group), Some(dialog)) = (group.upgrade(), dialog.upgrade()) else {
                 return false;
             };
+            let plugins = state.plugins.borrow().clone();
+            let now = (plugins.loaded, plugins.list.clone());
+            if shown.borrow().as_ref() == Some(&now) {
+                return true;
+            }
+            *shown.borrow_mut() = Some(now);
             for r in rows.borrow_mut().drain(..) {
                 if let Some(r) = r.upgrade() {
                     group.remove(&r);
@@ -171,7 +180,6 @@ pub fn plugins_group(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
                 group.add(&r);
                 rows.borrow_mut().push(r.downgrade());
             };
-            let plugins = state.plugins.borrow().clone();
             if !plugins.loaded {
                 add(adw::ActionRow::builder().title("Connecting…").build());
             } else if plugins.list.is_empty() {
@@ -540,7 +548,12 @@ fn settings_group(p: &Rc<Page>, dialog: &adw::PreferencesDialog, m: &Manifest) -
                 }),
             );
         });
-        group.add(&plugin_fields::row(f, current(f, &table).as_ref(), on));
+        group.add(&plugin_fields::row(
+            f,
+            current(f, &table).as_ref(),
+            plugin_fields::Save::OnApply,
+            on,
+        ));
     }
     *p.secrets.borrow_mut() = secrets;
     group
