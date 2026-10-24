@@ -495,33 +495,65 @@ fn a_lost_socket_takes_the_connection_down() {
     assert_no_token(&h);
 }
 
+/// Fire the tick `n` times, answering every ping so the connection stays up.
+fn ticks_with_pongs(h: &mut Harness<Ha>, s: Socket, n: usize) {
+    let t = tick(h);
+    for _ in 0..n {
+        h.fire(t);
+        for (id, ty, _) in sent_msgs(h, s) {
+            if ty == "ping" {
+                h.message(s, text(json!({"id": id, "type": "pong"})));
+            }
+        }
+    }
+}
+
+fn didnt_answer(h: &Harness<Ha>) -> usize {
+    h.logs()
+        .iter()
+        .filter(|(l, m)| *l == Level::Warn && m.contains("didn’t answer"))
+        .count()
+}
+
 #[test]
-fn unanswered_service_calls_expire_quietly() {
+fn a_slow_service_call_still_counts() {
+    // A script or a slow device can take several seconds before Home Assistant answers.
+    let mut h = Harness::<Ha>::new();
+    let s = live(&mut h);
+    h.action("run", json!({"entity_id": "script.slow"})).expect("run");
+    let (id, _, _) = sent_msgs(&h, s).pop().expect("sent");
+    ticks_with_pongs(&mut h, s, 6);
+    assert_eq!(didnt_answer(&h), 0, "{:?}", h.logs());
+    result(&mut h, s, id, false, Some(json!({"message": "Script failed"})));
+    assert_eq!(h.state("last_error"), Some("Script failed"));
+}
+
+#[test]
+fn unanswered_service_calls_expire_after_30_seconds() {
     let mut h = Harness::<Ha>::new();
     let s = live(&mut h);
     h.action("toggle", json!({"entity_id": "light.desk"}))
         .expect("toggle");
     let (id, _, _) = sent_msgs(&h, s).pop().expect("sent");
-    let t = tick(&h);
-    for _ in 0..7 {
-        h.fire(t);
-    }
-    let warns = |h: &Harness<Ha>| {
+    ticks_with_pongs(&mut h, s, 30);
+    assert_eq!(didnt_answer(&h), 0, "{:?}", h.logs());
+    ticks_with_pongs(&mut h, s, 1);
+    assert_eq!(didnt_answer(&h), 1, "{:?}", h.logs());
+    assert!(
         h.logs()
             .iter()
-            .filter(|(l, m)| *l == Level::Warn && m.contains("didn’t answer"))
-            .count()
-    };
-    assert_eq!(warns(&h), 1);
+            .any(|(_, m)| m == "Home Assistant didn’t answer homeassistant.toggle")
+    );
     // The late answer is ignored.
     result(&mut h, s, id, false, Some(json!({"message": "too late"})));
     assert_eq!(h.state("last_error"), Some(""));
     assert_eq!(h.state("connected"), Some("yes"));
     // A ping expiring is not logged as a service call.
-    for _ in 0..14 {
+    let t = tick(&h);
+    for _ in 0..21 {
         h.fire(t);
     }
-    assert_eq!(warns(&h), 1);
+    assert_eq!(didnt_answer(&h), 1);
 }
 
 #[test]

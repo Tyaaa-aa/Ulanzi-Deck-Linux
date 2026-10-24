@@ -571,17 +571,23 @@ fn actions_reject_bad_input() {
         plan("explode", &json!({}), &t),
         Err("unknown action: explode".to_string())
     );
-    for bad in ["Light.A", "", "light"] {
+    for bad in ["Light.A", "light"] {
         for a in ["toggle", "turn_on", "run", "set_level"] {
             let e = err(a, json!({"entity_id": bad, "op": "up"}));
             assert!(e.contains("entity_id"), "{a} {bad:?}: {e}");
         }
-        if !bad.is_empty() {
-            let p = json!({"domain": "a", "service": "b", "entity_id": bad});
-            assert!(err("call_service", p).contains("entity_id"));
-        }
+        let p = json!({"domain": "a", "service": "b", "entity_id": bad});
+        assert!(err("call_service", p).contains("entity_id"));
     }
-    assert!(err("toggle", json!({})).contains("entity_id"));
+    // Nothing picked yet: say so plainly, like the OBS plugin.
+    for a in ["toggle", "turn_on", "turn_off", "run", "set_level"] {
+        assert_eq!(err(a, json!({})), "Choose an entity for this key first", "{a}");
+        assert_eq!(
+            err(a, json!({"entity_id": "  ", "op": "up"})),
+            "Choose an entity for this key first",
+            "{a}"
+        );
+    }
 }
 
 #[test]

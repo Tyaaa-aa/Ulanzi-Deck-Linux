@@ -43,6 +43,9 @@ fn entity_of(params: &Value) -> Result<&str, String> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
+    if id.is_empty() {
+        return Err("Choose an entity for this key first".to_string());
+    }
     if valid_entity_id(id) {
         Ok(id)
     } else {

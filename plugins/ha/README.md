@@ -76,14 +76,16 @@ type.
 
 Use them in `profile.toml` as `type = "plugin"`, `plugin = "ha"`, `action = "<id>"`, `params = { ... }`.
 An action returns at once; Home Assistant's answer arrives later, and a refusal shows up in `{ha.last_error}` and
-the log.
+the log. Home Assistant answers a service call once the service has run, so the plugin waits up to 30 s for it
+(a script or a slow device can take a while) before it logs "Home Assistant didn’t answer <domain>.<service>";
+other requests get 5 s. An action whose entity is not chosen yet fails with "Choose an entity for this key first".
 
 | Action | Params | Home Assistant service |
 |---|---|---|
 | `toggle`, `turn_on`, `turn_off` | `entity_id` | `homeassistant.toggle` / `turn_on` / `turn_off` |
 | `run` | `entity_id` (a scene, script, automation, button or input_button) | `scene.turn_on`, `script.turn_on`, `automation.trigger`, `button.press`, `input_button.press` |
-| `set_level` | `entity_id`; `op` = `set` (default) / `up` / `down`; `percent` (0-100, for `set`); `step` (1-50, default 5) | see below |
-| `call_service` | `domain`, `service`, optional `entity_id`, optional `data` (a JSON object, as a table or a JSON string, up to 4096 bytes) | `<domain>.<service>` with the entity as target |
+| `set_level` | `entity_id`; `op` = `set` (default) / `up` / `down`; `percent` (0-100, for `set`; 100 for a key added in the app); `step` (1-50, default 5) | see below |
+| `call_service` ("Call an action (service)" in the app; Home Assistant now calls services actions) | `domain`, `service`, optional `entity_id`, optional `data` (a JSON object, as a table or a JSON string, up to 4096 bytes) | `<domain>.<service>` with the entity as target |
 | `reconnect` | none | |
 | `forget_token` | none | |
 

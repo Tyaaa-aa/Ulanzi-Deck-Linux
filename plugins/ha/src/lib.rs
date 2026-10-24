@@ -29,6 +29,9 @@ const HANDSHAKE: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(1000);
 /// A command unanswered after this many ticks is dropped.
 const PENDING_TICKS: u64 = 5;
+/// Service calls get longer (30 s): Home Assistant answers once the service has run, and a
+/// script or a slow device can take a while.
+const SERVICE_TICKS: u64 = 30;
 /// A ping is sent every this many ticks; two unanswered ones mean the socket is dead.
 const PING_EVERY_TICKS: u64 = 15;
 const MAX_MISSED_PINGS: u32 = 2;
@@ -125,6 +128,16 @@ enum Kind {
 struct Pending {
     kind: Kind,
     sent_tick: u64,
+}
+
+impl Pending {
+    /// Ticks to wait for the answer.
+    fn patience(&self) -> u64 {
+        match self.kind {
+            Kind::Service { .. } => SERVICE_TICKS,
+            Kind::Subscribe | Kind::List | Kind::Ping => PENDING_TICKS,
+        }
+    }
 }
 
 /// The entity list of the current connection, for the pickers.
@@ -728,7 +741,7 @@ impl Ha {
         let stale: Vec<u64> = self
             .pending
             .iter()
-            .filter(|(_, p)| ticks - p.sent_tick > PENDING_TICKS)
+            .filter(|(_, p)| ticks - p.sent_tick > p.patience())
             .map(|(id, _)| *id)
             .collect();
         for id in stale {

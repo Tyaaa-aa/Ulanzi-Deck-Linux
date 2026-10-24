@@ -17,6 +17,7 @@ key = "url"
 kind = "text"
 label = "Home Assistant address"
 default = "homeassistant.local:8123"
+help = "For example homeassistant.local:8123 or 192.168.1.5"
 
 [[settings]]
 key = "token"
@@ -103,18 +104,18 @@ name = "Set or change a level (light, volume, fan, cover)"
 params = [
   { key = "entity_id", kind = "item", picker = "levels", label = "Entity" },
   { key = "op", kind = "choice", label = "Change", choices = ["set", "up", "down"] },
-  { key = "percent", kind = "number", label = "Level (percent, for Set)", min = 0, max = 100 },
+  { key = "percent", kind = "number", label = "Level (percent, for Set)", min = 0, max = 100, default = 100 },
   { key = "step", kind = "number", label = "Step (percent)", min = 1, max = 50, default = 5 },
 ]
 
 [[actions]]
 id = "call_service"
-name = "Call a service"
+name = "Call an action (service)"
 params = [
-  { key = "domain", kind = "text", label = "Domain (for example notify)" },
-  { key = "service", kind = "text", label = "Service" },
+  { key = "domain", kind = "text", label = "Domain (for example light)" },
+  { key = "service", kind = "text", label = "Action (for example turn_on)", help = "Home Assistant calls services actions: light.turn_on is domain light, action turn_on" },
   { key = "entity_id", kind = "item", picker = "any", label = "Entity (optional)" },
-  { key = "data", kind = "json", label = "JSON data" },
+  { key = "data", kind = "json", label = "JSON data (optional)", help = "For example {\"brightness_pct\": 50}" },
 ]
 
 [[actions]]
