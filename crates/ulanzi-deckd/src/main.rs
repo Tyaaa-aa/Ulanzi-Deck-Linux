@@ -13,7 +13,7 @@ use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals, reload};
 use ulanzi_deckd::deck::{DeckEvent, DeckMsg, start_deck};
-use ulanzi_deckd::plugins::{LazySecrets, PluginHost, PluginSlot};
+use ulanzi_deckd::plugins::{FileSecrets, LazySecrets, PluginHost, PluginSlot, SecretStore};
 use ulanzi_deckd::screen::Sampler;
 use ulanzi_deckd::transport::{DeviceState, Hidraw, probe, watch_dev};
 
@@ -257,6 +257,18 @@ fn plugins_dir(store: &Store) -> PathBuf {
     }
 }
 
+/// Where plugins keep their secrets: the system keyring, asked only when a plugin first needs its
+/// secrets. A pretend deck (`ULANZI_DEMO`) runs in a throwaway sandbox whose private D-Bus session
+/// could still start a keyring daemon that opens your own keyring, so it uses a file in the
+/// sandbox's config folder instead.
+fn plugin_secrets(store: &Store) -> Arc<dyn SecretStore> {
+    if std::env::var_os("ULANZI_DEMO").is_some() {
+        Arc::new(FileSecrets::new(store.root().join("plugin-secrets.toml")))
+    } else {
+        Arc::new(LazySecrets::system(store.root()))
+    }
+}
+
 /// Load the installed plugins and start the ones that run in the background or that a profile
 /// uses (the others start on their first action).
 async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<DeckMsg>) -> PluginHost {
@@ -273,8 +285,7 @@ async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<De
     PluginHost::start(
         dir,
         store.cache_dir().join("plugins"),
-        // The keyring is asked only when a plugin first needs its secrets.
-        Arc::new(LazySecrets::system(store.root())),
+        plugin_secrets(store),
         settings,
         &used,
         deck,

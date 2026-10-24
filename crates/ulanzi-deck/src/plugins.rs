@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use ulanzi_core::model::Action;
 use ulanzi_core::plugin::{Field, FieldKind, Manifest, ManifestAction};
 
 /// One installed plugin (or plugin folder that could not be loaded), as `PluginList` reports it.
@@ -75,6 +76,44 @@ impl Plugins {
             .unwrap_or_else(|| format!("{action} ({plugin})"))
     }
 
+    /// Whether going from `self` to `now` changes anything the key editor shows: the manifests, a
+    /// plugin's name or a key badge. A status flip between running, ready, starting and problem
+    /// does not: a plugin that retries its connection flips like that every few seconds, and a
+    /// rebuild would close an open action picker and drop the typing focus.
+    pub fn editor_differs(&self, now: &Plugins) -> bool {
+        fn view(p: &Plugins) -> Vec<(&str, &str, &str, &str)> {
+            p.list
+                .iter()
+                .map(|r| {
+                    let (badge, detail) = match r.status.as_str() {
+                        s @ ("off" | "failed") => (s, ""),
+                        "incompatible" => ("incompatible", r.detail.as_str()),
+                        _ => ("", ""),
+                    };
+                    (r.id.as_str(), r.display_name(), badge, detail)
+                })
+                .collect()
+        }
+        self.loaded != now.loaded || self.manifests != now.manifests || view(self) != view(now)
+    }
+
+    /// The plugin's name: from the list, else its manifest, else its id.
+    pub fn plugin_name(&self, plugin: &str) -> String {
+        self.row(plugin)
+            .map(|r| r.display_name().to_string())
+            .or_else(|| self.manifests.get(plugin).map(|m| m.name.clone()))
+            .unwrap_or_else(|| plugin.to_string())
+    }
+
+    /// One-line summary of an action for tooltips and collapsed rows: a plugin action's name, else
+    /// [`ulanzi_core::catalog::describe`].
+    pub fn describe(&self, a: &Action) -> String {
+        match a {
+            Action::Plugin { plugin, action, .. } => self.action_title(plugin, action),
+            _ => ulanzi_core::catalog::describe(a),
+        }
+    }
+
     /// Plugins with actions, by name: (id, name, actions). Plugins that can't be loaded are left
     /// out.
     pub fn actions_by_plugin(&self) -> Vec<(String, String, Vec<ManifestAction>)> {
@@ -92,6 +131,48 @@ impl Plugins {
                 .then_with(|| a.0.cmp(&b.0))
         });
         out
+    }
+}
+
+/// One plugin's section in the action picker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PickerGroup {
+    /// The plugin's name, the section heading.
+    pub name: String,
+    pub items: Vec<PickerItem>,
+}
+
+/// One plugin action in the action picker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PickerItem {
+    pub title: String,
+    /// What the search box matches: `<plugin name> <action name>`, lower case.
+    pub search: String,
+    /// The action a pick adds, with the parameters' defaults.
+    pub action: Action,
+}
+
+impl Plugins {
+    /// The action picker's plugin sections, in [`Plugins::actions_by_plugin`] order.
+    pub fn picker_groups(&self) -> Vec<PickerGroup> {
+        self.actions_by_plugin()
+            .into_iter()
+            .map(|(id, name, actions)| PickerGroup {
+                items: actions
+                    .iter()
+                    .map(|a| PickerItem {
+                        title: a.name.clone(),
+                        search: format!("{name} {}", a.name).to_lowercase(),
+                        action: Action::Plugin {
+                            plugin: id.clone(),
+                            action: a.id.clone(),
+                            params: defaults(a),
+                        },
+                    })
+                    .collect(),
+                name,
+            })
+            .collect()
     }
 }
 
@@ -579,6 +660,138 @@ mod tests {
             banner(&row("incompatible", "  ")),
             Some(("OBS Studio can’t be loaded".to_string(), None))
         );
+    }
+
+    fn manifest(id: &str, name: &str, actions: &[(&str, &str)]) -> Manifest {
+        let mut text = format!("id = \"{id}\"\nname = \"{name}\"\nversion = \"1.0.0\"\ncontract = \"1.0\"\n");
+        for (aid, aname) in actions {
+            text.push_str(&format!("[[actions]]\nid = \"{aid}\"\nname = \"{aname}\"\n"));
+        }
+        Manifest::parse(&text).expect("manifest")
+    }
+
+    fn picker_plugins() -> Plugins {
+        let plain = |id: &str, name: &str, status: &str| PluginRow {
+            id: id.into(),
+            name: name.into(),
+            version: "1.0.0".into(),
+            status: status.into(),
+            detail: String::new(),
+        };
+        Plugins {
+            loaded: true,
+            list: vec![
+                plain("obs", "OBS Studio", "running"),
+                plain("ha", "Home Assistant", "problem"),
+                plain("bad", "Bad", "incompatible"),
+            ],
+            manifests: [
+                manifest("obs", "OBS Studio", &[("toggle_record", "Toggle recording")]),
+                manifest(
+                    "ha",
+                    "Home Assistant",
+                    &[("toggle", "Toggle"), ("scene", "Run a scene")],
+                ),
+                manifest("bad", "Bad", &[("x", "X")]),
+            ]
+            .into_iter()
+            .map(|m| (m.id.clone(), m))
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn actions_by_plugin_groups_and_sorts() {
+        let groups = picker_plugins().actions_by_plugin();
+        let shape: Vec<(&str, &str, Vec<&str>)> = groups
+            .iter()
+            .map(|(id, name, acts)| {
+                (
+                    id.as_str(),
+                    name.as_str(),
+                    acts.iter().map(|a| a.id.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("ha", "Home Assistant", vec!["toggle", "scene"]),
+                ("obs", "OBS Studio", vec!["toggle_record"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn picker_groups_name_rows_for_search_and_fill_defaults() {
+        let mut p = picker_plugins();
+        p.manifests.insert("obs".into(), obs_manifest());
+        let groups = p.picker_groups();
+        assert_eq!(
+            groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
+            vec!["Home Assistant", "OBS Studio"]
+        );
+        let ha = &groups[0].items;
+        assert_eq!(ha[1].title, "Run a scene");
+        assert_eq!(ha[1].search, "home assistant run a scene");
+        assert_eq!(
+            ha[1].action,
+            Action::Plugin {
+                plugin: "ha".into(),
+                action: "scene".into(),
+                params: toml::Table::new(),
+            }
+        );
+        let vol = groups[1]
+            .items
+            .iter()
+            .find(|i| i.title == "Change an input's volume")
+            .expect("input_volume");
+        assert_eq!(vol.search, "obs studio change an input's volume");
+        let want: toml::Table = toml::from_str("step = 2").expect("toml");
+        assert_eq!(
+            vol.action,
+            Action::Plugin {
+                plugin: "obs".into(),
+                action: "input_volume".into(),
+                params: want,
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_actions_are_named_from_the_manifest() {
+        let p = picker_plugins();
+        let a = |plugin: &str, action: &str| Action::Plugin {
+            plugin: plugin.into(),
+            action: action.into(),
+            params: toml::Table::new(),
+        };
+        assert_eq!(p.describe(&a("ha", "scene")), "Run a scene");
+        assert_eq!(p.describe(&a("zz", "go")), "go (zz)");
+        assert_eq!(
+            p.describe(&Action::NextPage),
+            ulanzi_core::catalog::describe(&Action::NextPage)
+        );
+        assert_eq!(p.plugin_name("ha"), "Home Assistant");
+        assert_eq!(p.plugin_name("zz"), "zz");
+    }
+
+    #[test]
+    fn retry_flips_do_not_touch_the_editor() {
+        let before = loaded("problem", "OBS is not running");
+        assert!(!before.editor_differs(&loaded("starting", "")));
+        assert!(!before.editor_differs(&loaded("running", "")));
+        assert!(before.editor_differs(&loaded("off", "")));
+        assert!(before.editor_differs(&loaded("failed", "boom")));
+        assert!(loaded("incompatible", "a").editor_differs(&loaded("incompatible", "b")));
+        assert!(before.editor_differs(&Plugins::default()));
+        let mut renamed = before.clone();
+        renamed.list[0].name = "OBS".into();
+        assert!(before.editor_differs(&renamed));
+        let mut no_manifest = before.clone();
+        no_manifest.manifests.clear();
+        assert!(before.editor_differs(&no_manifest));
     }
 
     #[test]

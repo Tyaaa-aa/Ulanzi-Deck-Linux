@@ -256,11 +256,11 @@ pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Textu
 }
 
 /// "Turn left: …" lines for a dial's tooltip.
-fn dial_tooltip(n: usize, d: &ulanzi_core::model::Dial) -> String {
+fn dial_tooltip(plugins: &crate::plugins::Plugins, n: usize, d: &ulanzi_core::model::Dial) -> String {
     let line = |what: &str, a: &Option<ulanzi_core::model::Action>| {
         let text = a
             .as_ref()
-            .map(ulanzi_core::catalog::describe)
+            .map(|a| plugins.describe(a))
             .unwrap_or_else(|| "Nothing".into());
         format!("{what}: {}", glib::markup_escape_text(&text))
     };
@@ -395,7 +395,7 @@ pub fn key_problem(state: &State, key: &ulanzi_core::model::Key) -> Option<Strin
         pages: &pages,
         profiles: &profiles,
         obs_scenes: scenes,
-        plugin: &|_, _| None,
+        plugin: &|p, a| state.plugins.borrow().action_problem(p, a),
     };
     [&key.tap, &key.hold]
         .into_iter()
@@ -959,7 +959,7 @@ pub fn build(state: &State) -> Canvas {
                             let what = key
                                 .tap
                                 .as_ref()
-                                .map(ulanzi_core::catalog::describe)
+                                .map(|a| state.plugins.borrow().describe(a))
                                 .unwrap_or_else(|| "No action".into());
                             match key_problem(&state, key) {
                                 Some(p) => {
@@ -989,7 +989,7 @@ pub fn build(state: &State) -> Canvas {
                 for (n, (face, button)) in faces.iter().zip(dials.iter()).enumerate() {
                     let d = &e.dials()[n];
                     face.show(d);
-                    button.set_tooltip_markup(Some(&dial_tooltip(n, d)));
+                    button.set_tooltip_markup(Some(&dial_tooltip(&state.plugins.borrow(), n, d)));
                 }
                 drop(e);
                 screen

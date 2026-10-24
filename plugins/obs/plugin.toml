@@ -13,7 +13,7 @@ network = ["127.0.0.1", "localhost"]
 programs = ["obs"]
 desktop_ids = ["com.obsproject.Studio"]
 
-[auth]                              # read from milestone 2 on; until then: settings `password`
+[auth]                              # not read yet (sign-in flows come later); the password is the secret setting below
 kind = "password"
 
 [[settings]]

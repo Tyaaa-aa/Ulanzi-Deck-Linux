@@ -627,12 +627,18 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
     let mut rows: Vec<gtk::Widget> = Vec::new();
     let n = steps.len();
     for (i, step) in steps.iter().enumerate() {
-        let title = catalog::spec_for(&step.action)
-            .map(|s| s.title)
-            .unwrap_or("Action");
+        let title = match &step.action {
+            Action::Plugin { plugin, action, .. } => {
+                glib::markup_escape_text(&state.plugins.borrow().action_title(plugin, action)).to_string()
+            }
+            a => catalog::spec_for(a)
+                .map(|s| s.title)
+                .unwrap_or("Action")
+                .to_string(),
+        };
         let exp = adw::ExpanderRow::builder()
             .title(format!("{}. {title}", i + 1))
-            .subtitle(step_subtitle(step))
+            .subtitle(step_subtitle(state, step))
             .build();
         exp.add_prefix(&action_chip(state, Some(&step.action), 28));
         let step_path = format!("{path}/step{i}");
@@ -686,7 +692,7 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
         }
         // The step's own parameters, written back into the list.
         let inner: OnChange = {
-            let ed = ed.clone();
+            let (ed, state) = (ed.clone(), state.clone());
             let exp = exp.clone();
             Rc::new(move |new: Action, how: How| {
                 ed.apply(how, |a| {
@@ -694,7 +700,7 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
                         && let Some(s) = steps.get_mut(i)
                     {
                         s.action = new;
-                        exp.set_subtitle(&step_subtitle(s));
+                        exp.set_subtitle(&step_subtitle(&state, s));
                     }
                 })
             })
@@ -703,7 +709,7 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
             exp.add_row(&r);
         }
         let delay = {
-            let exp = exp.clone();
+            let (exp, state) = (exp.clone(), state.clone());
             spin_row(
                 ed,
                 "Then Wait",
@@ -716,7 +722,7 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
                         && let Some(s) = steps.get_mut(i)
                     {
                         s.delay_ms = v as u32;
-                        exp.set_subtitle(&step_subtitle(s));
+                        exp.set_subtitle(&step_subtitle(&state, s));
                     }
                 },
             )
@@ -740,8 +746,14 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
     rows
 }
 
-fn step_subtitle(s: &Step) -> String {
-    let d = catalog::describe(&s.action);
+fn step_subtitle(state: &State, s: &Step) -> String {
+    let d = match &s.action {
+        // The title is the action's name; say which plugin it comes from.
+        Action::Plugin { plugin, .. } => {
+            glib::markup_escape_text(&state.plugins.borrow().plugin_name(plugin)).to_string()
+        }
+        a => catalog::describe(a),
+    };
     if s.delay_ms > 0 {
         format!("{d} · then wait {} ms", s.delay_ms)
     } else {
@@ -869,9 +881,52 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         | Action::Back
         | Action::AutoProfile
         | Action::SleepNow
-        | Action::ScreenNext
-        | Action::Plugin { .. } => Vec::new(),
+        | Action::ScreenNext => Vec::new(),
+        Action::Plugin {
+            plugin,
+            action,
+            params,
+        } => plugin_rows(state, &ed, plugin, action, params),
     }
+}
+
+/// One row per parameter the plugin's manifest declares for the action. Nothing when the plugin or
+/// the action is unknown (the inspector's banner says why). Parameters the manifest doesn't name
+/// are kept as they are.
+fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml::Table) -> Vec<gtk::Widget> {
+    use crate::plugins::{Control, control_for, current};
+    let plugins = state.plugins.borrow();
+    let Some(a) = plugins.manifests.get(plugin).and_then(|m| m.action(action)) else {
+        return Vec::new();
+    };
+    a.params
+        .iter()
+        .map(|f| {
+            let value = current(f, params);
+            let how = match control_for(f, value.as_ref()) {
+                Control::Entry | Control::Json | Control::Spin { .. } => How::Typing("plugin"),
+                _ => How::Set,
+            };
+            let (ed, key) = (ed.clone(), f.key.clone());
+            let on: crate::ui::plugin_fields::OnValue = Rc::new(move |v| {
+                // An error is shown on the row itself; nothing is written.
+                let Ok(v) = v else { return };
+                ed.apply(how, |a| {
+                    if let Action::Plugin { params, .. } = a {
+                        match v {
+                            Some(v) => {
+                                params.insert(key.clone(), v);
+                            }
+                            None => {
+                                params.remove(&key);
+                            }
+                        }
+                    }
+                });
+            });
+            crate::ui::plugin_fields::row(f, value.as_ref(), on)
+        })
+        .collect()
 }
 
 fn timer_rows(ed: &Ed, op: TimerOp) -> Vec<gtk::Widget> {
@@ -1500,6 +1555,14 @@ fn output_rows(ed: &Ed, devices: &[String]) -> Vec<gtk::Widget> {
 
 /// A small rendered key showing the action's default look (or an empty slot).
 pub fn action_chip(state: &State, action: Option<&Action>, size: i32) -> gtk::Widget {
+    // Plugin actions have no look of their own yet: every plugin uses the add-on icon.
+    if let Some(Action::Plugin { .. }) = action {
+        let i = gtk::Image::from_icon_name("application-x-addon-symbolic");
+        i.set_pixel_size(size);
+        i.set_size_request(size, size);
+        i.set_valign(gtk::Align::Center);
+        return i.upcast();
+    }
     let texture = action.and_then(|a| {
         crate::ui::canvas::key_texture(&catalog::default_look(a), &crate::ui::canvas::profile_dir(state))
     });
@@ -1560,7 +1623,7 @@ pub fn picker_button(
         .iter()
         .filter(|s| allow_multi || s.id != "multi")
         .collect();
-    let mut index: Vec<Option<usize>> = Vec::new();
+    let mut index: Vec<Pick> = Vec::new();
     for cat in Category::ALL {
         let in_cat: Vec<usize> = specs
             .iter()
@@ -1571,31 +1634,23 @@ pub fn picker_button(
         if in_cat.is_empty() {
             continue;
         }
-        let head = gtk::ListBoxRow::builder()
-            .activatable(false)
-            .selectable(false)
-            .child(
-                &gtk::Label::builder()
-                    .label(cat.title())
-                    .xalign(0.0)
-                    .css_classes(["heading", "dim-label"])
-                    .margin_top(8)
-                    .build(),
-            )
-            .build();
-        list.append(&head);
-        index.push(None);
+        list.append(&picker_heading(cat.title()));
+        index.push(Pick::Heading);
         for i in in_cat {
             let spec = specs[i];
-            let b = gtk::Box::builder().spacing(10).build();
-            b.append(&action_chip(state, Some(&(spec.make)()), 24));
-            b.append(&gtk::Label::builder().label(spec.title).xalign(0.0).build());
-            let row = gtk::ListBoxRow::builder().child(&b).build();
-            row.set_widget_name(&spec.title.to_lowercase());
-            list.append(&row);
-            index.push(Some(i));
+            list.append(&picker_row(
+                state,
+                &(spec.make)(),
+                spec.title,
+                &spec.title.to_lowercase(),
+            ));
+            index.push(Pick::Builtin(i));
         }
     }
+    // Plugin sections come after the built-in ones and follow `state.plugins`: they are rebuilt
+    // each time the popover opens.
+    let builtin_rows = index.len();
+    let index = Rc::new(RefCell::new(index));
     {
         let search = search.clone();
         list.set_filter_func(move |row| {
@@ -1613,12 +1668,14 @@ pub fn picker_button(
     }
     {
         let (popover, state, button) = (popover.clone(), state.clone(), button.downgrade());
+        let index = index.clone();
         list.connect_row_activated(move |_, row| {
-            let Some(Some(i)) = index.get(row.index().max(0) as usize).copied() else {
-                return;
+            let a = match index.borrow().get(row.index().max(0) as usize) {
+                Some(Pick::Builtin(i)) => (specs[*i].make)(),
+                Some(Pick::Plugin(a)) => a.clone(),
+                Some(Pick::Heading) | None => return,
             };
             popover.popdown();
-            let a = (specs[i].make)();
             let is_obs = matches!(a, Action::Obs(_));
             on_pick(a);
             // The first OBS action while OBS is away: show how to connect.
@@ -1642,13 +1699,61 @@ pub fn picker_button(
         });
     }
     {
-        let search = search.clone();
+        let (search, list, state) = (search.clone(), list.clone(), state.clone());
         popover.connect_show(move |_| {
+            let mut index = index.borrow_mut();
+            while let Some(row) = list.row_at_index(builtin_rows as i32) {
+                list.remove(&row);
+            }
+            index.truncate(builtin_rows);
+            let groups = state.plugins.borrow().picker_groups();
+            for g in groups {
+                list.append(&picker_heading(&g.name));
+                index.push(Pick::Heading);
+                for item in g.items {
+                    list.append(&picker_row(&state, &item.action, &item.title, &item.search));
+                    index.push(Pick::Plugin(item.action));
+                }
+            }
             search.set_text("");
             search.grab_focus();
         });
     }
     button
+}
+
+/// What a row of the action picker stands for.
+enum Pick {
+    Heading,
+    /// Index into the picker's built-in specs.
+    Builtin(usize),
+    Plugin(Action),
+}
+
+fn picker_heading(title: &str) -> gtk::ListBoxRow {
+    gtk::ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(
+            &gtk::Label::builder()
+                .label(title)
+                .xalign(0.0)
+                .css_classes(["heading", "dim-label"])
+                .margin_top(8)
+                .build(),
+        )
+        .build()
+}
+
+/// A pickable row: the action's chip and title; `search` (lower case) is what the search box
+/// matches.
+fn picker_row(state: &State, action: &Action, title: &str, search: &str) -> gtk::ListBoxRow {
+    let b = gtk::Box::builder().spacing(10).build();
+    b.append(&action_chip(state, Some(action), 24));
+    b.append(&gtk::Label::builder().label(title).xalign(0.0).build());
+    let row = gtk::ListBoxRow::builder().child(&b).build();
+    row.set_widget_name(search);
+    row
 }
 
 /// One chip per key of an xdotool-style combo, for display: `ctrl+super+m` → Ctrl, Super, M.

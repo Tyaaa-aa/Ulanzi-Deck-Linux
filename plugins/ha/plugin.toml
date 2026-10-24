@@ -9,7 +9,7 @@ background = true
 [permissions]
 lan = true
 
-[auth]                              # read from milestone 2 on; until then: settings `token`
+[auth]                              # not read yet (sign-in flows come later); the token is the secret setting below
 kind = "token"
 
 [[settings]]

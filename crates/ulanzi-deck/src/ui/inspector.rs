@@ -132,12 +132,12 @@ impl Panel {
             // The daemon announces the profile list after every save; only a real change to it
             // (the Switch Profile choices) is worth a rebuild that would drop the typing focus.
             let known_profiles = RefCell::new(state.profiles.borrow().clone());
-            // A PluginsChanged that changed nothing (a status flipping back) is not worth a rebuild.
+            // Only a plugin change the editor shows is worth a rebuild (not a plugin retrying).
             let known_plugins = RefCell::new(state.plugins.borrow().clone());
             state.on(move |c| match c {
                 Change::Plugins => {
                     let now = ctx.state.plugins.borrow().clone();
-                    if *known_plugins.borrow() != now {
+                    if known_plugins.borrow().editor_differs(&now) {
                         *known_plugins.borrow_mut() = now;
                         ctx.schedule_rebuild();
                     }
@@ -258,7 +258,7 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) {
         .and_then(|key| crate::ui::canvas::key_problem(state, key));
     if let Some(p) = problem {
         let banner = adw::Banner::builder()
-            .title(format!("⚠ {p}"))
+            .title(format!("⚠ {}", glib::markup_escape_text(&p)))
             .revealed(true)
             .build();
         banner.add_css_class("key-problem");
@@ -764,12 +764,19 @@ fn slot_rows(
     empty_hint: &str,
 ) -> Vec<gtk::Widget> {
     let state = &ctx.state;
-    let spec = action.and_then(catalog::spec_for);
+    let title = match action {
+        Some(Action::Plugin { plugin, action, .. }) => state.plugins.borrow().action_title(plugin, action),
+        Some(a) => catalog::spec_for(a)
+            .map(|s| s.title)
+            .unwrap_or("No Action")
+            .to_string(),
+        None => "No Action".to_string(),
+    };
     let card = adw::ActionRow::builder()
-        .title(spec.map(|s| s.title).unwrap_or("No Action"))
+        .title(glib::markup_escape_text(&title).as_str())
         .subtitle(
             action
-                .map(catalog::describe)
+                .map(|a| card_subtitle(state, a))
                 .unwrap_or_else(|| empty_hint.to_string()),
         )
         .css_classes(["action-card"])
@@ -799,15 +806,25 @@ fn slot_rows(
     let mut rows: Vec<gtk::Widget> = vec![card.clone().upcast()];
     if let Some(a) = action {
         let on: OnChange = {
-            let card = card.clone();
+            let (card, state) = (card.clone(), state.clone());
             Rc::new(move |a: Action, how: How| {
-                card.set_subtitle(&catalog::describe(&a));
+                card.set_subtitle(&card_subtitle(&state, &a));
                 write(Some(a), how, false);
             })
         };
         rows.extend(action_editor::rows_for(state, path, a, on));
     }
     rows
+}
+
+/// The action card's subtitle: the plugin's name for a plugin action (the title is the action's
+/// name), else the action's summary.
+fn card_subtitle(state: &State, a: &Action) -> String {
+    let text = match a {
+        Action::Plugin { plugin, .. } => state.plugins.borrow().plugin_name(plugin),
+        _ => catalog::describe(a),
+    };
+    glib::markup_escape_text(&text).to_string()
 }
 
 /// A collapsible slot (dial zones, screen tap/hold): title, summary, picker; parameters inside.
@@ -821,7 +838,11 @@ fn slot_expander(
     let state = &ctx.state;
     let exp = adw::ExpanderRow::builder()
         .title(title)
-        .subtitle(action.map(catalog::describe).unwrap_or_else(|| "Nothing".into()))
+        .subtitle(
+            action
+                .map(|a| glib::markup_escape_text(&state.plugins.borrow().describe(a)).to_string())
+                .unwrap_or_else(|| "Nothing".into()),
+        )
         .build();
     exp.add_prefix(&action_editor::action_chip(state, action, 32));
     state.remember_expanded(&exp, path);
@@ -846,9 +867,9 @@ fn slot_expander(
                 .start_icon_name("edit-clear-symbolic")
                 .build();
             let on: OnChange = {
-                let (exp, write) = (exp.clone(), write.clone());
+                let (exp, write, state) = (exp.clone(), write.clone(), state.clone());
                 Rc::new(move |a: Action, how: How| {
-                    exp.set_subtitle(&catalog::describe(&a));
+                    exp.set_subtitle(&glib::markup_escape_text(&state.plugins.borrow().describe(&a)));
                     write(Some(a), how, false);
                 })
             };

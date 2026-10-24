@@ -551,8 +551,9 @@ fn remove_group(p: &Rc<Page>, dialog: &adw::PreferencesDialog) -> adw::Preferenc
     let remove = adw::ButtonRow::builder()
         .title("Remove…")
         .start_icon_name("user-trash-symbolic")
-        .css_classes(["destructive-action"])
         .build();
+    // Added, not set: setting the classes would drop the row's own `button` style.
+    remove.add_css_class("destructive-action");
     let (p, d) = (p.clone(), dialog.downgrade());
     remove.connect_activated(move |_| {
         if let Some(d) = d.upgrade() {

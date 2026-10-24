@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- Settings → Integrations: manage plugins, their settings and secrets; plugin actions in the key editor.
+  Each plugin has a page built from its manifest's `[[settings]]` (passwords and tokens go straight into
+  its secret store), with its status, on/off, Restart and Remove…; Developer Mode adds Install from
+  Folder… with an "Unverified plugin" warning and the plugin's permissions. The action picker lists
+  plugin actions by plugin, with rows for their parameters, and keys show a warning when their plugin
+  is missing, turned off, stopped working or can't be loaded.
 - Home Assistant plugin (`plugins/ha`): toggle, run, set level and call any service, with live entity state on key labels (`{ha.light.desk}`, `{ha.sensor.temp.unit}`). Settings in `[plugins.ha.settings]`; the token moves to the secret store.
 - OBS Studio plugin (`plugins/obs`): the built-in OBS actions and live state (`{obs.scene}`, `{obs.rec_time}`, …) as a sandboxed plugin, for trying out next to the built-in integration. Settings in `[plugins.obs.settings]`.
 - Plugin host: plugins are sandboxed WebAssembly programs that add actions to keys. They can use
@@ -16,7 +22,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   needs Developer mode. Includes the plugin SDK (`ulanzi-plugin`), a hello example and the
   [plugin guide](docs/plugins.md).
   The deck starts without waiting for plugins: they come up in the background, and the keyring
-  is asked only when a plugin first needs its secrets.
+  is asked only when a plugin first needs its secrets. With a pretend deck (`scripts/sandbox.sh --demo`)
+  plugin secrets stay in the sandbox and the keyring is never asked.
 
 ## [2.0.0] - 2026-10-23
 

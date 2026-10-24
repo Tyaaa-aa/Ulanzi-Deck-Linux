@@ -24,10 +24,12 @@ struct Shot {
     size: (i32, i32),
     dark: Option<bool>,
     select: Option<String>,
-    /// `library`, `picker:<tab>`, `integrations` or `integrations:<plugin id>`, ….
+    /// `library`, `picker:<tab>`, `integrations`, `integrations:<plugin id>`, `action-picker`, ….
     open: Option<String>,
     /// 1-based page to show.
     page: Option<usize>,
+    /// Milliseconds between reaching the service and taking the shot (`--wait`, default 1200).
+    wait: u64,
 }
 
 /// The app's own icons when they are not in the system theme: next to the binary (tarball,
@@ -72,6 +74,7 @@ fn parse_args() -> Option<Shot> {
         select: get("--select"),
         open: get("--open"),
         page: get("--page").and_then(|p| p.parse().ok()),
+        wait: get("--wait").and_then(|w| w.parse().ok()).unwrap_or(1200),
     })
 }
 
@@ -88,6 +91,20 @@ fn find_widget(root: &gtk::Widget, pred: &dyn Fn(&gtk::Widget) -> bool) -> Optio
         child = c.next_sibling();
     }
     None
+}
+
+/// Popovers that are showing, anywhere under `root` (screenshot mode only).
+fn collect_open_popovers(root: &gtk::Widget, out: &mut Vec<gtk::Popover>) {
+    let mut child = root.first_child();
+    while let Some(c) = child {
+        if let Some(p) = c.downcast_ref::<gtk::Popover>()
+            && p.is_visible()
+        {
+            out.push(p.clone());
+        }
+        collect_open_popovers(&c, out);
+        child = c.next_sibling();
+    }
 }
 
 fn load_css() {
@@ -107,6 +124,23 @@ fn save_screenshot(window: &adw::ApplicationWindow, path: &std::path::Path) -> R
     let (w, h) = (window.width() as f64, window.height() as f64);
     let snapshot = gtk::Snapshot::new();
     paintable.snapshot(&snapshot, w, h);
+    // Open popovers are surfaces of their own: draw them on top where the compositor put them.
+    let mut popovers = Vec::new();
+    collect_open_popovers(window.upcast_ref(), &mut popovers);
+    let (wx, wy) = window.surface_transform();
+    for p in popovers {
+        let (Some(popup), (px, py)) = (p.surface().and_downcast::<gdk::Popup>(), p.surface_transform())
+        else {
+            continue;
+        };
+        snapshot.save();
+        snapshot.translate(&gtk::graphene::Point::new(
+            (popup.position_x() as f64 + px - wx) as f32,
+            (popup.position_y() as f64 + py - wy) as f32,
+        ));
+        gtk::WidgetPaintable::new(Some(&p)).snapshot(&snapshot, p.width() as f64, p.height() as f64);
+        snapshot.restore();
+    }
     let node = snapshot.to_node().ok_or("nothing drawn")?;
     let renderer = window.renderer().ok_or("no renderer")?;
     let texture = renderer.render_texture(&node, None);
@@ -320,6 +354,55 @@ fn main() -> glib::ExitCode {
                     let name = state2.editor.borrow().profile().name.clone();
                     ui::autoswitch::open(&state2, &window, state2.profile_id(), &name)
                 }
+                Some("action-picker") => {
+                    // Open the first Choose/Change picker shortly before the shot: its plugin
+                    // sections are built when it opens, and the inspector (with the popover) is
+                    // rebuilt while the plugins are still starting.
+                    let (window, state) = (window.clone(), state2.clone());
+                    let at = shot.wait.saturating_sub(500).max(300);
+                    glib::timeout_add_local_once(Duration::from_millis(at), move || {
+                        if let Some(b) = find_widget(window.upcast_ref(), &|w| {
+                            w.downcast_ref::<gtk::MenuButton>()
+                                .and_then(|b| b.label())
+                                .is_some_and(|l| l == "Choose" || l == "Change")
+                        }) && let Ok(b) = b.downcast::<gtk::MenuButton>()
+                        {
+                            b.popup();
+                            // The plugin sections are last: scroll to the first one's heading.
+                            let first = state
+                                .plugins
+                                .borrow()
+                                .picker_groups()
+                                .first()
+                                .map(|g| g.name.clone());
+                            glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                                let Some(pop) = b.popover() else { return };
+                                let find =
+                                    |pred: &dyn Fn(&gtk::Widget) -> bool| find_widget(pop.upcast_ref(), pred);
+                                let (Some(sw), Some(list)) = (
+                                    find(&|w| w.is::<gtk::ScrolledWindow>())
+                                        .and_downcast::<gtk::ScrolledWindow>(),
+                                    find(&|w| w.is::<gtk::ListBox>()),
+                                ) else {
+                                    return;
+                                };
+                                let heading = first.and_then(|name| {
+                                    find(&|w| {
+                                        w.downcast_ref::<gtk::Label>().is_some_and(|l| l.label() == name)
+                                    })
+                                });
+                                let adj = sw.vadjustment();
+                                let y = heading
+                                    .and_then(|h| {
+                                        h.compute_point(&list, &gtk::graphene::Point::new(0.0, 0.0))
+                                    })
+                                    .map(|p| p.y() as f64 - 8.0)
+                                    .unwrap_or(adj.upper());
+                                adj.set_value(y.min(adj.upper() - adj.page_size()));
+                            });
+                        }
+                    });
+                }
                 Some(o) if o.starts_with("color") => {
                     // Open the first colour button's popover (after the inspector is built).
                     let (window, custom) = (window.clone(), o.ends_with(":custom"));
@@ -348,7 +431,7 @@ fn main() -> glib::ExitCode {
                 }
                 _ => {}
             }
-            glib::timeout_add_local_once(Duration::from_millis(1200), move || {
+            glib::timeout_add_local_once(Duration::from_millis(shot.wait), move || {
                 let (min, nat, _, _) = window.measure(gtk::Orientation::Horizontal, -1);
                 eprintln!(
                     "window {}x{} (min width {min}, natural {nat})",
