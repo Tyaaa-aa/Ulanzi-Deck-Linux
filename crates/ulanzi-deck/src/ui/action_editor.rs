@@ -183,23 +183,62 @@ struct Recording {
     recorder: RefCell<Recorder>,
     /// The toplevel whose system shortcuts are inhibited, restored when recording ends.
     inhibited: RefCell<Option<glib::WeakRef<gdk::Toplevel>>>,
+    inhibit: std::cell::Cell<InhibitState>,
+    /// Handlers on the window and its surface while recording; disconnected when it ends.
+    handlers: RefCell<Vec<(glib::WeakRef<glib::Object>, glib::SignalHandlerId)>>,
 }
 
 impl Recording {
-    fn start(&self, b: &gtk::Button) {
-        self.release_inhibit();
+    fn start(self: &Rc<Self>, b: &gtk::Button) {
+        self.release();
         self.active.set(true);
         *self.recorder.borrow_mut() = Recorder::default();
         b.set_label("Press keys…");
         b.add_css_class("suggested-action");
         b.grab_focus();
+        // Another application taking focus ends recording (unless it is the inhibit prompt).
+        if let Some(win) = b.root().and_downcast::<gtk::Window>() {
+            let (rec, weak_b) = (Rc::downgrade(self), b.downgrade());
+            let id = win.connect_is_active_notify(move |w| {
+                let (Some(rec), Some(b)) = (rec.upgrade(), weak_b.upgrade()) else {
+                    return;
+                };
+                if !rec.active.get() {
+                    return;
+                }
+                let (state, stop) = on_window_active(rec.inhibit.get(), w.is_active());
+                rec.inhibit.set(state);
+                if stop {
+                    rec.stop(&b);
+                }
+            });
+            self.handlers
+                .borrow_mut()
+                .push((win.upcast_ref::<glib::Object>().downgrade(), id));
+        }
         // Let Super, Alt+Tab and friends reach the recorder instead of the desktop.
         if let Some(top) = b
             .native()
             .and_then(|n| n.surface())
             .and_downcast::<gdk::Toplevel>()
         {
+            let rec = Rc::downgrade(self);
+            let id = top.connect_shortcuts_inhibited_notify(move |_| {
+                if let Some(rec) = rec.upgrade()
+                    && rec.inhibit.get() == InhibitState::Waiting
+                {
+                    rec.inhibit.set(InhibitState::Answered);
+                }
+            });
+            self.handlers
+                .borrow_mut()
+                .push((top.upcast_ref::<glib::Object>().downgrade(), id));
+            self.inhibit.set(InhibitState::Waiting);
             top.inhibit_system_shortcuts(None::<&gdk::Event>);
+            // X11 grabs the keyboard at once.
+            if top.is_shortcuts_inhibited() {
+                self.inhibit.set(InhibitState::Answered);
+            }
             *self.inhibited.borrow_mut() = Some(top.downgrade());
         }
     }
@@ -210,10 +249,17 @@ impl Recording {
         *self.recorder.borrow_mut() = Recorder::default();
         b.set_label("Record");
         b.remove_css_class("suggested-action");
-        self.release_inhibit();
+        self.release();
     }
 
-    fn release_inhibit(&self) {
+    /// Disconnects the recording-time handlers and restores the desktop's shortcuts.
+    fn release(&self) {
+        for (obj, id) in self.handlers.take() {
+            if let Some(obj) = obj.upgrade() {
+                obj.disconnect(id);
+            }
+        }
+        self.inhibit.set(InhibitState::Off);
         if let Some(top) = self.inhibited.take().and_then(|w| w.upgrade()) {
             top.restore_system_shortcuts();
         }
@@ -222,7 +268,7 @@ impl Recording {
 
 impl Drop for Recording {
     fn drop(&mut self) {
-        self.release_inhibit();
+        self.release();
     }
 }
 
@@ -264,8 +310,8 @@ fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
     {
         let rec = rec.clone();
         record.connect_has_focus_notify(move |b| {
-            // Focus moving to another widget ends recording. The window itself going inactive
-            // does not: GNOME asks once whether to allow the shortcut inhibit in its own dialog.
+            // Focus moving to another widget ends recording. The window going inactive is
+            // handled by `Recording::start`'s is-active handler (GNOME's inhibit prompt).
             let window_active = b
                 .root()
                 .and_downcast::<gtk::Window>()
@@ -1961,22 +2007,53 @@ pub enum RecordStep {
     Record(String),
 }
 
+/// Where the request to pause the desktop's shortcuts stands while recording.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InhibitState {
+    /// Not requested (no toplevel surface).
+    #[default]
+    Off,
+    /// Requested, no answer yet: the compositor may be asking the user (GNOME's prompt).
+    Waiting,
+    /// Granted or denied.
+    Answered,
+}
+
+/// What the window's activation changing means for recording: the new inhibit state, and
+/// whether to stop. Losing activation stops recording unless the inhibit request is still
+/// waiting (its prompt takes focus); coming back while waiting means the prompt was answered.
+pub fn on_window_active(state: InhibitState, active: bool) -> (InhibitState, bool) {
+    match (state, active) {
+        (InhibitState::Waiting, true) => (InhibitState::Answered, false),
+        (InhibitState::Waiting, false) => (state, false),
+        (_, active) => (state, !active),
+    }
+}
+
 /// Key-combo recorder logic. A modifier pressed and released with no other key in between
 /// records that modifier (with any others held), so Super alone is a valid shortcut.
 #[derive(Debug, Default)]
 pub struct Recorder {
     /// The modifiers held since the last modifier press, while no other key has been pressed.
     pending: Option<Mods>,
+    /// Modifier keys physically held (lowercase GDK names), seen pressed since recording began.
+    held: Vec<String>,
 }
 
 impl Recorder {
     /// A key press; `mods` are the modifiers held before it (GDK leaves the pressed modifier out).
     pub fn press(&mut self, mods: Mods, key: &str) -> RecordStep {
+        // Trust the keys held as well as the event state: some keymaps report Meta as Alt.
+        let mods = self.held_mods().with(mods);
         if key == "Escape" && mods.is_empty() {
             self.pending = None;
             return RecordStep::Cancel;
         }
         if let Some(m) = modifier_of(key) {
+            let k = key.to_ascii_lowercase();
+            if !self.held.contains(&k) {
+                self.held.push(k);
+            }
             self.pending = Some(self.pending.unwrap_or_default().with(mods).with(m));
             return RecordStep::Wait;
         }
@@ -1992,10 +2069,19 @@ impl Recorder {
         if modifier_of(key).is_none() {
             return RecordStep::Wait;
         }
+        let k = key.to_ascii_lowercase();
+        self.held.retain(|h| *h != k);
         match self.pending.take().and_then(Mods::combo) {
             Some(combo) => RecordStep::Record(combo),
             None => RecordStep::Wait,
         }
+    }
+
+    fn held_mods(&self) -> Mods {
+        self.held
+            .iter()
+            .filter_map(|k| modifier_of(k))
+            .fold(Mods::default(), Mods::with)
     }
 }
 
@@ -2022,21 +2108,10 @@ pub fn combo_from_recording(mods: Mods, key: &str) -> Option<String> {
     if key.is_empty() || MODIFIER_KEYS.contains(&key.as_str()) {
         return None;
     }
-    let mut parts: Vec<&str> = Vec::new();
-    if mods.ctrl {
-        parts.push("ctrl");
-    }
-    if mods.alt {
-        parts.push("alt");
-    }
-    if mods.shift {
-        parts.push("shift");
-    }
-    if mods.super_ {
-        parts.push("super");
-    }
-    parts.push(&key);
-    Some(parts.join("+"))
+    Some(match mods.combo() {
+        Some(m) => format!("{m}+{key}"),
+        None => key,
+    })
 }
 
 /// Output devices from `pactl -f json list sinks`: (name, description).
@@ -2239,6 +2314,61 @@ mod tests {
         assert_eq!(r.release("ISO_Level3_Shift"), RecordStep::Wait);
         // A key with no name keeps listening too.
         assert_eq!(r.press(Mods::default(), ""), RecordStep::Wait);
+    }
+
+    #[test]
+    fn deactivation_stops_unless_inhibit_prompt_is_open() {
+        use InhibitState::*;
+        assert_eq!(on_window_active(Answered, false), (Answered, true));
+        assert_eq!(on_window_active(Off, false), (Off, true));
+        assert_eq!(on_window_active(Waiting, false), (Waiting, false));
+        // Back from the prompt: answered, and the next deactivation stops.
+        assert_eq!(on_window_active(Waiting, true), (Answered, false));
+        assert_eq!(on_window_active(Answered, true), (Answered, false));
+        assert_eq!(on_window_active(Off, true), (Off, false));
+    }
+
+    #[test]
+    fn held_super_key_adds_super() {
+        let alt = Mods {
+            alt: true,
+            ..Mods::default()
+        };
+        // Meta sharing Mod1 with Alt: the event state says only Alt, the key held says Super.
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Meta_L"), RecordStep::Wait);
+        assert_eq!(r.press(alt, "x"), RecordStep::Record("alt+super+x".into()));
+        // A state that lost Super entirely.
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Super_R"), RecordStep::Wait);
+        assert_eq!(
+            r.press(Mods::default(), "x"),
+            RecordStep::Record("super+x".into())
+        );
+        // A held modifier also keeps Escape from cancelling.
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Super_L"), RecordStep::Wait);
+        assert_eq!(
+            r.press(Mods::default(), "Escape"),
+            RecordStep::Record("super+escape".into())
+        );
+    }
+
+    #[test]
+    fn released_modifiers_are_no_longer_held() {
+        let mut r = Recorder::default();
+        assert_eq!(r.press(Mods::default(), "Control_L"), RecordStep::Wait);
+        assert_eq!(r.release("Control_L"), RecordStep::Record("ctrl".into()));
+        assert_eq!(r.press(Mods::default(), "x"), RecordStep::Record("x".into()));
+        // Left and right are tracked apart.
+        let mut r = Recorder::default();
+        r.press(Mods::default(), "Super_L");
+        r.press(Mods::default(), "Super_R");
+        r.release("Super_L");
+        assert_eq!(
+            r.press(Mods::default(), "x"),
+            RecordStep::Record("super+x".into())
+        );
     }
 
     #[test]
