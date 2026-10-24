@@ -134,48 +134,6 @@ impl Plugins {
     }
 }
 
-/// One plugin's section in the action picker.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PickerGroup {
-    /// The plugin's name, the section heading.
-    pub name: String,
-    pub items: Vec<PickerItem>,
-}
-
-/// One plugin action in the action picker.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PickerItem {
-    pub title: String,
-    /// What the search box matches: `<plugin name> <action name>`, lower case.
-    pub search: String,
-    /// The action a pick adds, with the parameters' defaults.
-    pub action: Action,
-}
-
-impl Plugins {
-    /// The action picker's plugin sections, in [`Plugins::actions_by_plugin`] order.
-    pub fn picker_groups(&self) -> Vec<PickerGroup> {
-        self.actions_by_plugin()
-            .into_iter()
-            .map(|(id, name, actions)| PickerGroup {
-                items: actions
-                    .iter()
-                    .map(|a| PickerItem {
-                        title: a.name.clone(),
-                        search: format!("{name} {}", a.name).to_lowercase(),
-                        action: Action::Plugin {
-                            plugin: id.clone(),
-                            action: a.id.clone(),
-                            params: defaults(a),
-                        },
-                    })
-                    .collect(),
-                name,
-            })
-            .collect()
-    }
-}
-
 /// A plugin's status in words, with the icon and style class shown next to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusWords {
@@ -974,43 +932,6 @@ mod tests {
                 ("ha", "Home Assistant", vec!["toggle", "scene"]),
                 ("obs", "OBS Studio", vec!["toggle_record"]),
             ]
-        );
-    }
-
-    #[test]
-    fn picker_groups_name_rows_for_search_and_fill_defaults() {
-        let mut p = picker_plugins();
-        p.manifests.insert("obs".into(), obs_manifest());
-        let groups = p.picker_groups();
-        assert_eq!(
-            groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(),
-            vec!["Home Assistant", "OBS Studio"]
-        );
-        let ha = &groups[0].items;
-        assert_eq!(ha[1].title, "Run a scene");
-        assert_eq!(ha[1].search, "home assistant run a scene");
-        assert_eq!(
-            ha[1].action,
-            Action::Plugin {
-                plugin: "ha".into(),
-                action: "scene".into(),
-                params: toml::Table::new(),
-            }
-        );
-        let vol = groups[1]
-            .items
-            .iter()
-            .find(|i| i.title == "Change an input's volume")
-            .expect("input_volume");
-        assert_eq!(vol.search, "obs studio change an input's volume");
-        let want: toml::Table = toml::from_str("op = \"up\"\npercent = 0\nstep = 2").expect("toml");
-        assert_eq!(
-            vol.action,
-            Action::Plugin {
-                plugin: "obs".into(),
-                action: "input_volume".into(),
-                params: want,
-            }
         );
     }
 

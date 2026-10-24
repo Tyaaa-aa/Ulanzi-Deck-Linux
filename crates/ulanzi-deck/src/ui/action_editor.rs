@@ -7,7 +7,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use ulanzi_core::apps::{self, AppEntry};
-use ulanzi_core::catalog::{self, Category};
+use ulanzi_core::catalog;
 use ulanzi_core::model::*;
 use uuid::Uuid;
 
@@ -195,6 +195,8 @@ impl Recording {
         *self.recorder.borrow_mut() = Recorder::default();
         b.set_label("Press keys…");
         b.add_css_class("suggested-action");
+        // The window's own keys (Escape closes the editor) step aside while recording.
+        b.add_css_class(crate::ui::key_routing::RECORDING);
         b.grab_focus();
         // Another application taking focus ends recording (unless it is the inhibit prompt).
         if let Some(win) = b.root().and_downcast::<gtk::Window>() {
@@ -249,6 +251,7 @@ impl Recording {
         *self.recorder.borrow_mut() = Recorder::default();
         b.set_label("Record");
         b.remove_css_class("suggested-action");
+        b.remove_css_class(crate::ui::key_routing::RECORDING);
         self.release();
     }
 
@@ -1726,7 +1729,8 @@ pub fn action_chip(state: &State, action: Option<&Action>, size: i32) -> gtk::Wi
     }
 }
 
-/// A button that opens a searchable list of every action; `on_pick` gets a fresh action.
+/// A button that opens the action list (search, categories, sections); `on_pick` gets a fresh
+/// action.
 pub fn picker_button(
     state: &State,
     label: &str,
@@ -1739,162 +1743,48 @@ pub fn picker_button(
         .build();
     let popover = gtk::Popover::new();
     popover.add_css_class("action-picker");
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search actions")
-        .build();
-    let list = gtk::ListBox::builder()
-        .selection_mode(gtk::SelectionMode::None)
-        .css_classes(["navigation-sidebar"])
-        .build();
-    let scroller = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .min_content_height(320)
-        .max_content_height(420)
-        .min_content_width(260)
-        .propagate_natural_height(true)
-        .child(&list)
-        .build();
-    column.append(&search);
-    column.append(&scroller);
-    popover.set_child(Some(&column));
-    button.set_popover(Some(&popover));
-
-    let specs: Vec<&'static catalog::ActionSpec> = catalog::catalog()
-        .iter()
-        .filter(|s| allow_multi || s.id != "multi")
-        .collect();
-    let mut index: Vec<Pick> = Vec::new();
-    for cat in Category::ALL {
-        let in_cat: Vec<usize> = specs
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.category == cat)
-            .map(|(i, _)| i)
-            .collect();
-        if in_cat.is_empty() {
-            continue;
-        }
-        list.append(&picker_heading(cat.title()));
-        index.push(Pick::Heading);
-        for i in in_cat {
-            let spec = specs[i];
-            list.append(&picker_row(
-                state,
-                &(spec.make)(),
-                spec.title,
-                &spec.title.to_lowercase(),
-            ));
-            index.push(Pick::Builtin(i));
-        }
-    }
-    // Plugin sections come after the built-in ones and follow `state.plugins`: they are rebuilt
-    // each time the popover opens.
-    let builtin_rows = index.len();
-    let index = Rc::new(RefCell::new(index));
-    {
-        let search = search.clone();
-        list.set_filter_func(move |row| {
-            let q = search.text().to_lowercase();
-            if q.is_empty() {
-                return true;
+    // The list is owned by the popover; its pick handler holds the popover and button weakly.
+    let pick = {
+        let (popover, state, button) = (popover.downgrade(), state.clone(), button.downgrade());
+        move |a: Action| {
+            if let Some(p) = popover.upgrade() {
+                p.popdown();
             }
-            let name = row.widget_name();
-            !name.is_empty() && !name.starts_with("Gtk") && name.contains(q.trim())
-        });
-    }
-    {
-        let list = list.clone();
-        search.connect_search_changed(move |_| list.invalidate_filter());
-    }
-    {
-        let (popover, state, button) = (popover.clone(), state.clone(), button.downgrade());
-        let index = index.clone();
-        list.connect_row_activated(move |_, row| {
-            let a = match index.borrow().get(row.index().max(0) as usize) {
-                Some(Pick::Builtin(i)) => (specs[*i].make)(),
-                Some(Pick::Plugin(a)) => a.clone(),
-                Some(Pick::Heading) | None => return,
-            };
-            popover.popdown();
             let is_obs = matches!(a, Action::Obs(_));
             on_pick(a);
             // The first OBS action while OBS is away: show how to connect.
             if is_obs && let Some(b) = button.upgrade() {
                 crate::ui::obs_setup::offer_once(&state, &b);
             }
-        });
-    }
+        }
+    };
+    let list = crate::ui::library::action_list(
+        state,
+        crate::ui::library::Use::Picker {
+            include_multi: allow_multi,
+            on_pick: Box::new(pick),
+        },
+    );
+    list.scroller.set_vexpand(false);
+    list.scroller.set_min_content_height(320);
+    list.scroller.set_max_content_height(420);
+    list.scroller.set_min_content_width(300);
+    list.scroller.set_propagate_natural_height(true);
+    list.root.set_width_request(320);
+    popover.set_child(Some(&list.root));
+    button.set_popover(Some(&popover));
     {
-        let list = list.clone();
-        search.connect_activate(move |_| {
-            // Enter picks the first match.
-            let mut i = 0;
-            while let Some(row) = list.row_at_index(i) {
-                if row.is_child_visible() && row.is_activatable() {
-                    row.emit_activate();
-                    break;
-                }
-                i += 1;
-            }
-        });
-    }
-    {
-        let (search, list, state) = (search.clone(), list.clone(), state.clone());
+        // Plugins come and go: the list is read again each time the popover opens.
+        let (search, reload) = (list.search.clone(), list.reload.clone());
         popover.connect_show(move |_| {
-            let mut index = index.borrow_mut();
-            while let Some(row) = list.row_at_index(builtin_rows as i32) {
-                list.remove(&row);
+            if !search.text().is_empty() {
+                search.set_text("");
             }
-            index.truncate(builtin_rows);
-            let groups = state.plugins.borrow().picker_groups();
-            for g in groups {
-                list.append(&picker_heading(&g.name));
-                index.push(Pick::Heading);
-                for item in g.items {
-                    list.append(&picker_row(&state, &item.action, &item.title, &item.search));
-                    index.push(Pick::Plugin(item.action));
-                }
-            }
-            search.set_text("");
+            reload();
             search.grab_focus();
         });
     }
     button
-}
-
-/// What a row of the action picker stands for.
-enum Pick {
-    Heading,
-    /// Index into the picker's built-in specs.
-    Builtin(usize),
-    Plugin(Action),
-}
-
-fn picker_heading(title: &str) -> gtk::ListBoxRow {
-    gtk::ListBoxRow::builder()
-        .activatable(false)
-        .selectable(false)
-        .child(
-            &gtk::Label::builder()
-                .label(title)
-                .xalign(0.0)
-                .css_classes(["heading", "dim-label"])
-                .margin_top(8)
-                .build(),
-        )
-        .build()
-}
-
-/// A pickable row: the action's chip and title; `search` (lower case) is what the search box
-/// matches.
-fn picker_row(state: &State, action: &Action, title: &str, search: &str) -> gtk::ListBoxRow {
-    let b = gtk::Box::builder().spacing(10).build();
-    b.append(&action_chip(state, Some(action), 24));
-    b.append(&gtk::Label::builder().label(title).xalign(0.0).build());
-    let row = gtk::ListBoxRow::builder().child(&b).build();
-    row.set_widget_name(search);
-    row
 }
 
 /// One chip per key of an xdotool-style combo, for display: `ctrl+super+m` → Ctrl, Super, M.

@@ -13,7 +13,6 @@ use crate::ui::{canvas, inspector, sidebar};
 pub struct Window {
     pub window: adw::ApplicationWindow,
     pub inner_split: adw::OverlaySplitView,
-    pub library_toggle: gtk::ToggleButton,
 }
 
 fn status_pill(state: &State) -> gtk::MenuButton {
@@ -195,18 +194,6 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .tooltip_text("Main Menu")
         .build();
     header.pack_end(&menu);
-    let library_toggle = gtk::ToggleButton::builder()
-        .icon_name("view-app-grid-symbolic")
-        .tooltip_text("Actions (Ctrl+L)")
-        .build();
-    header.pack_end(&library_toggle);
-    {
-        let a = gio::SimpleAction::new("library", None);
-        let t = library_toggle.clone();
-        a.connect_activate(move |_, _| t.set_active(!t.is_active()));
-        window.add_action(&a);
-        app.set_accels_for_action("win.library", &["<Ctrl>l"]);
-    }
     let redo = gtk::Button::builder()
         .icon_name("edit-redo-symbolic")
         .tooltip_text("Redo (Ctrl+Shift+Z)")
@@ -243,8 +230,19 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     content_view.set_content(Some(&canvas.widget));
     // The right panel runs the full height of the window, beside the canvas and its header.
     inner_split.set_content(Some(&content_view));
-    let panel = inspector::Panel::build(state, &library_toggle);
+    let panel = inspector::Panel::build(state);
     inner_split.set_sidebar(Some(&panel.root));
+    {
+        // Ctrl+L: the action list, with the typing focus in its search field.
+        let a = gio::SimpleAction::new("library", None);
+        let (show, split) = (panel.show_library.clone(), inner_split.clone());
+        a.connect_activate(move |_, _| {
+            split.set_show_sidebar(true);
+            show();
+        });
+        window.add_action(&a);
+        app.set_accels_for_action("win.library", &["<Ctrl>l"]);
+    }
     // Window buttons belong to the rightmost header: the inspector's while it is shown beside the
     // canvas, the content header's otherwise.
     let sync_buttons = {
@@ -317,11 +315,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     }
 
     install_actions(&window, state);
-    Window {
-        window,
-        inner_split,
-        library_toggle,
-    }
+    Window { window, inner_split }
 }
 
 fn install_actions(window: &adw::ApplicationWindow, state: &State) {
@@ -404,13 +398,24 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
         let w = window.clone();
         action("shortcuts", Box::new(move || crate::ui::shortcuts::open(&w)));
     }
-    let s = state.clone();
-    action(
-        "deselect",
-        Box::new(move || {
-            s.select(|sel| sel.clear());
-        }),
-    );
+    {
+        // Escape (see key_routing) and the panel's close button: back to the action list. Off
+        // while nothing is selected, so Escape then goes on to whoever else wants it.
+        let deselect = gio::SimpleAction::new("deselect", None);
+        let s = state.clone();
+        deselect.connect_activate(move |_, _| s.select(|sel| sel.clear()));
+        let update = {
+            let (s, deselect) = (state.clone(), deselect.clone());
+            move || deselect.set_enabled(!s.selection.borrow().is_empty())
+        };
+        update();
+        state.on(move |c| {
+            if c == Change::Selection {
+                update();
+            }
+        });
+        window.add_action(&deselect);
+    }
     if let Some(app) = window.application() {
         for (action, accels) in APP_ACCELS {
             app.set_accels_for_action(action, accels);
@@ -422,10 +427,7 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
 }
 
 /// Window shortcuts that fire everywhere, text fields included.
-const APP_ACCELS: &[(&str, &[&str])] = &[
-    ("win.shortcuts", &["<Control>question"]),
-    ("win.deselect", &["Escape"]),
-];
+const APP_ACCELS: &[(&str, &[&str])] = &[("win.shortcuts", &["<Control>question"])];
 
 /// Show profile `id` in the editor, and make it the deck's active profile when `activate` is set.
 pub fn open_profile(state: &State, id: Uuid, activate: bool) {

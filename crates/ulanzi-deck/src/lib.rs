@@ -3,6 +3,7 @@
 /// The app's ID (GApplication, desktop file, icons). Not the service's bus name.
 pub const APP_ID: &str = "io.github.tyaaa_aa.UlanziDeck";
 
+pub mod action_list;
 pub mod client;
 pub mod plugins;
 pub mod runtime;

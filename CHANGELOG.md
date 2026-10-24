@@ -37,6 +37,19 @@ and the project uses [Semantic Versioning](https://semver.org).
   is asked only when a plugin first needs its secrets. With a pretend deck (`scripts/sandbox.sh --demo`)
   plugin secrets stay in the sandbox and the keyring is never asked.
 
+### Changed
+- The action list (the side panel with nothing selected, and the key editor's Choose / Change list) is
+  easier to use with many plugins: one search field finds actions by name, category or plugin name; a
+  row of category buttons (All, the built-in categories, then one per plugin) shows one category at a
+  time and is remembered while the app runs; sections fold away and list their actions A–Z; plugin
+  actions show their plugin's icon and name, and plugin actions can now be dragged from the side panel
+  too. Searching inside a category offers "Show N more in All" when other categories match.
+- The top bar's Actions button is gone. A key's editor has a × at the top of the panel, and Escape
+  does the same when you are not typing: the key is deselected and the action list comes back. A
+  text field, an open dialog or menu, and the shortcut recorder keep their own Escape (and the
+  deck's copy, paste and Delete shortcuts leave them alone too). Ctrl+L puts the cursor in the
+  action search.
+
 ### Fixed
 - Menu items no longer end in "…" (Rename, Delete, Export, Import, Set Up Deck and the like); the guides use the same names.
 - The sandbox script keeps the app's own icons visible: your real data folder is added to `XDG_DATA_DIRS`, so they no longer show as broken images.

@@ -21,6 +21,19 @@ use crate::ui::canvas;
 pub struct Panel {
     pub root: gtk::Widget,
     pub header: adw::HeaderBar,
+    /// Show the action list (keeping the selection, so a click there assigns to it) and put the
+    /// typing focus in its search field (Ctrl+L).
+    pub show_library: Rc<dyn Fn()>,
+}
+
+/// The panel's page: the key editor for a selection, else the action list. `library_asked`
+/// (Ctrl+L) shows the list over a selection.
+pub fn panel_page(has_selection: bool, library_asked: bool) -> &'static str {
+    if has_selection && !library_asked {
+        "inspector"
+    } else {
+        "library"
+    }
 }
 
 /// Shared by every row of one build of the inspector.
@@ -64,7 +77,7 @@ impl Ctx {
 }
 
 impl Panel {
-    pub fn build(state: &State, library_toggle: &gtk::ToggleButton) -> Panel {
+    pub fn build(state: &State) -> Panel {
         let stack = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
             .build();
@@ -81,7 +94,17 @@ impl Panel {
             .build();
         stack.add_named(&scroller, Some("inspector"));
 
-        stack.add_named(&crate::ui::library::build(state), Some("library"));
+        let library = crate::ui::library::build(state);
+        stack.add_named(&library.root, Some("library"));
+
+        // Top of the panel: close the key editor (select nothing) and go back to the action list.
+        let close = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .tooltip_text("Close")
+            .action_name("win.deselect")
+            .visible(false)
+            .build();
+        let library_asked = Rc::new(std::cell::Cell::new(false));
 
         let ctx: C = Rc::new(Ctx {
             state: state.clone(),
@@ -89,11 +112,12 @@ impl Panel {
             rebuild: RefCell::new(None),
         });
         let rebuild: Rc<dyn Fn()> = {
-            let (ctx_weak, content, stack, toggle) = (
+            let (ctx_weak, content, stack, asked, close) = (
                 Rc::downgrade(&ctx),
                 content.clone(),
                 stack.clone(),
-                library_toggle.clone(),
+                library_asked.clone(),
+                close.clone(),
             );
             Rc::new(move || {
                 let Some(ctx) = ctx_weak.upgrade() else {
@@ -107,28 +131,24 @@ impl Panel {
                 }
                 let has = fill(&ctx, &content);
                 // With nothing selected the panel shows the actions to drag onto the deck.
-                stack.set_visible_child_name(if has && !toggle.is_active() {
-                    "inspector"
-                } else {
-                    "library"
-                });
+                stack.set_visible_child_name(panel_page(has, asked.get()));
+                close.set_visible(has);
             })
         };
         *ctx.rebuild.borrow_mut() = Some(rebuild.clone());
         rebuild();
 
+        let show_library: Rc<dyn Fn()> = {
+            let (stack, asked, search) = (stack.clone(), library_asked.clone(), library.search.clone());
+            let state = state.clone();
+            Rc::new(move || {
+                asked.set(!state.selection.borrow().is_empty());
+                stack.set_visible_child_name("library");
+                search.grab_focus();
+            })
+        };
         {
-            let (stack, ctx) = (stack.clone(), ctx.clone());
-            library_toggle.connect_toggled(move |t| {
-                if t.is_active() {
-                    stack.set_visible_child_name("library");
-                } else {
-                    ctx.schedule_rebuild();
-                }
-            });
-        }
-        {
-            let (ctx, toggle) = (ctx.clone(), library_toggle.clone());
+            let (ctx, asked) = (ctx.clone(), library_asked.clone());
             // The daemon announces the profile list after every save; only a real change to it
             // (the Switch Profile choices) is worth a rebuild that would drop the typing focus.
             let known_profiles = RefCell::new(state.profiles.borrow().clone());
@@ -150,10 +170,8 @@ impl Panel {
                     }
                 }
                 Change::Selection => {
-                    // Picking something on the deck shows its inspector.
-                    if toggle.is_active() && !ctx.state.selection.borrow().is_empty() {
-                        toggle.set_active(false);
-                    }
+                    // Picking something on the deck shows its editor.
+                    asked.set(false);
                     ctx.schedule_rebuild();
                 }
                 Change::Page => ctx.schedule_rebuild(),
@@ -167,11 +185,13 @@ impl Panel {
             .show_title(false)
             .show_start_title_buttons(false)
             .build();
+        header.pack_start(&close);
         view.add_top_bar(&header);
         view.set_content(Some(&stack));
         Panel {
             root: view.upcast(),
             header,
+            show_library,
         }
     }
 }
@@ -1092,6 +1112,14 @@ fn screen_view(ctx: &C, content: &gtk::Box) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_panel_shows_the_editor_for_a_selection_unless_the_list_was_asked_for() {
+        assert_eq!(panel_page(true, false), "inspector");
+        assert_eq!(panel_page(true, true), "library");
+        assert_eq!(panel_page(false, false), "library");
+        assert_eq!(panel_page(false, true), "library");
+    }
 
     #[test]
     fn screen_modes_round_trip() {

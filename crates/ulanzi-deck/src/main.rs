@@ -237,7 +237,6 @@ fn main() -> glib::ExitCode {
         }
         win.window.present();
         let window = win.window.clone();
-        let library_toggle = win.library_toggle.clone();
         let app = app.clone();
         let state2 = state.clone();
         let shot = shot.clone();
@@ -317,7 +316,9 @@ fn main() -> glib::ExitCode {
                 });
             }
             match shot.open.as_deref() {
-                Some("library") => library_toggle.set_active(true),
+                Some("library") => {
+                    WidgetExt::activate_action(&window, "win.library", None).ok();
+                }
                 Some(o) if o.starts_with("onboarding") => {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
@@ -356,7 +357,7 @@ fn main() -> glib::ExitCode {
                 }
                 Some("action-picker") => {
                     // Open the first Choose/Change picker shortly before the shot: its plugin
-                    // sections are built when it opens, and the inspector (with the popover) is
+                    // categories are read when it opens, and the inspector (with the popover) is
                     // rebuilt while the plugins are still starting.
                     let (window, state) = (window.clone(), state2.clone());
                     let at = shot.wait.saturating_sub(500).max(300);
@@ -368,37 +369,25 @@ fn main() -> glib::ExitCode {
                         }) && let Ok(b) = b.downcast::<gtk::MenuButton>()
                         {
                             b.popup();
-                            // The plugin sections are last: scroll to the first one's heading.
-                            let first = state
-                                .plugins
-                                .borrow()
-                                .picker_groups()
-                                .first()
-                                .map(|g| g.name.clone());
+                            // Show the first plugin's category.
+                            let first = ulanzi_deck::action_list::Catalog::new(&state.plugins.borrow(), true)
+                                .tabs()
+                                .into_iter()
+                                .find(|t| t.id.starts_with("plugin:"))
+                                .map(|t| t.label);
                             glib::timeout_add_local_once(Duration::from_millis(200), move || {
-                                let Some(pop) = b.popover() else { return };
-                                let find =
-                                    |pred: &dyn Fn(&gtk::Widget) -> bool| find_widget(pop.upcast_ref(), pred);
-                                let (Some(sw), Some(list)) = (
-                                    find(&|w| w.is::<gtk::ScrolledWindow>())
-                                        .and_downcast::<gtk::ScrolledWindow>(),
-                                    find(&|w| w.is::<gtk::ListBox>()),
-                                ) else {
+                                let (Some(pop), Some(label)) = (b.popover(), first) else {
                                     return;
                                 };
-                                let heading = first.and_then(|name| {
-                                    find(&|w| {
-                                        w.downcast_ref::<gtk::Label>().is_some_and(|l| l.label() == name)
-                                    })
-                                });
-                                let adj = sw.vadjustment();
-                                let y = heading
-                                    .and_then(|h| {
-                                        h.compute_point(&list, &gtk::graphene::Point::new(0.0, 0.0))
-                                    })
-                                    .map(|p| p.y() as f64 - 8.0)
-                                    .unwrap_or(adj.upper());
-                                adj.set_value(y.min(adj.upper() - adj.page_size()));
+                                if let Some(t) = find_widget(pop.upcast_ref(), &|w| {
+                                    w.downcast_ref::<gtk::ToggleButton>()
+                                        .and_then(|t| t.label())
+                                        .is_some_and(|l| l == label)
+                                })
+                                .and_downcast::<gtk::ToggleButton>()
+                                {
+                                    t.set_active(true);
+                                }
                             });
                         }
                     });

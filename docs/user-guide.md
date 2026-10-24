@@ -42,8 +42,8 @@ No technical knowledge needed. If something doesn't work, see [Troubleshooting](
 |---|---|
 | **Left: sidebar** | The **Auto-Switch** toggle, your **profiles** and the current profile's **pages**. Brightness at the bottom. |
 | **Middle: the deck** | A drawing of your deck. Click a key, dial, small button or the wide screen to edit it. |
-| **Right: inspector / library** | Settings for what you clicked, or the **action library** (the grid button at the top). |
-| **Header** | Connection status, undo/redo, the library button and the main menu (☰). |
+| **Right: action list / key editor** | With nothing selected, the **action list** to drag from. Click a key to edit it; **×** at the top of the panel (or **Escape**) closes the editor and brings the list back. |
+| **Header** | Connection status, undo/redo and the main menu (☰). |
 
 Narrow window? The sidebar folds away; the button at the top left brings it back.
 
@@ -66,7 +66,11 @@ Click a key to edit it. Every key has:
   (adjustable in Preferences).
 
 **Working faster**
-- Drag an action from the library onto a key: the key gets a matching icon and colour.
+- Drag an action from the action list onto a key: the key gets a matching icon and colour. Type in
+  **Search actions** (Ctrl+L) to find one by name, category or plugin; the buttons under it (All,
+  Navigation, System, …, then one per plugin) show one category at a time, and clicking a section's
+  name folds it away. Searching inside a category offers **Show … more in All** when other
+  categories have matches too. The key editor's **Choose** / **Change** list works the same way.
 - **Ctrl+click** several keys to change them all at once.
 - Right-click a key to copy, paste or clear it, or to copy just its style. Drag a key onto another to swap them.
 - **Ctrl+Z** / **Ctrl+Shift+Z** undo and redo anything.
@@ -208,12 +212,13 @@ off, open the window, or quit the background service. With auto-switch on, the i
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+C / Ctrl+V | Copy / paste keys |
 | Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste only the style (colours, image, label) |
-| Ctrl+A / Escape | Select all keys / select nothing |
+| Ctrl+A / Escape | Select all keys / select nothing (closes the key editor) |
 | Delete | Clear the selected keys |
-| Ctrl+L | Show the action library |
+| Ctrl+L | Search the actions |
 | Ctrl+O / Ctrl+E | Import / export `.ulanzideck` files |
 | Ctrl+, | Preferences |
 | Ctrl+? | All shortcuts |
 
-While you type in a text field, the deck leaves Ctrl+A, copy, paste, undo, redo, the style shortcuts
-and Delete to the text field, so they never change the keys.
+While you type in a text field, the deck leaves Ctrl+A, copy, paste, undo, redo, the style shortcuts,
+Delete and Escape to the text field, so they never change the keys. Escape also closes an open
+dialog or menu first, and cancels shortcut recording, before it closes the key editor.

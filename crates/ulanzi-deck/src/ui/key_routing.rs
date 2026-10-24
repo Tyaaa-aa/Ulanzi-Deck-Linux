@@ -2,7 +2,9 @@
 //!
 //! Application accelerators fire before the focused widget, so a text field never saw Ctrl+A,
 //! copy, paste, undo or Delete. The canvas shortcuts live on a capture-phase shortcut controller
-//! on the window instead, and step aside whenever a text field has the focus.
+//! on the window instead, and step aside whenever a text field has the focus. Escape (close the
+//! key editor) lives there too, so a text field, a dialog, a popover and the shortcut recorder keep
+//! their own Escape.
 
 use adw::prelude::*;
 use gtk::glib;
@@ -18,6 +20,8 @@ pub(crate) const CANVAS_SHORTCUTS: &[(&str, &str)] = &[
     ("<Control><Shift>c", "copy-style"),
     ("<Control><Shift>v", "paste-style"),
     ("Delete", "clear"),
+    // Close the key editor: select nothing, so the panel shows the action list again.
+    ("Escape", "deselect"),
 ];
 
 /// Keys a focused text field owns: editing, clipboard, undo, deleting and moving the cursor.
@@ -41,7 +45,24 @@ const TEXT_KEYS: &[&str] = &[
     "Down",
     "Home",
     "End",
+    "Escape",
 ];
+
+/// The style class the shortcut recorder carries while it listens: it gets every key.
+pub(crate) const RECORDING: &str = "recording";
+
+/// Where the focus sits, for deciding whether the window acts on a key.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Focus {
+    /// In a text field.
+    pub text: bool,
+    /// A dialog is open over the window.
+    pub dialog: bool,
+    /// In a popover (menus, the action picker): it handles its own keys.
+    pub popover: bool,
+    /// In the shortcut recorder while it listens.
+    pub recording: bool,
+}
 
 /// The accelerator shown for `win.<action>` in menus.
 pub(crate) fn accel_for(action: &str) -> Option<&'static str> {
@@ -54,6 +75,26 @@ pub(crate) fn accel_for(action: &str) -> Option<&'static str> {
 /// Whether the window may act on `accel` when `text_focused` says a text field has the focus.
 pub(crate) fn window_takes(accel: &str, text_focused: bool) -> bool {
     !(text_focused && TEXT_KEYS.contains(&accel))
+}
+
+/// Whether the window may act on `accel` with the focus at `f`.
+pub(crate) fn window_acts(accel: &str, f: Focus) -> bool {
+    !(f.dialog || f.popover || f.recording) && window_takes(accel, f.text)
+}
+
+/// What the focus widget is in (all but `dialog`, which the window knows).
+pub(crate) fn focus_kind(focus: Option<&gtk::Widget>) -> Focus {
+    let mut f = Focus {
+        text: text_has_focus(focus),
+        ..Focus::default()
+    };
+    let mut w = focus.cloned();
+    while let Some(widget) = w {
+        f.popover |= widget.is::<gtk::Popover>();
+        f.recording |= widget.has_css_class(RECORDING);
+        w = widget.parent();
+    }
+    f
 }
 
 /// Whether the focus sits in something that edits text (any `gtk::Editable` or a `gtk::TextView`,
@@ -81,7 +122,21 @@ pub(crate) fn install(window: &adw::ApplicationWindow) {
         let name = format!("win.{action}");
         let callback = gtk::CallbackAction::new(move |w, _| {
             let focus = w.root().and_then(|r| r.focus());
-            if !window_takes(accel, text_has_focus(focus.as_ref())) {
+            let f = Focus {
+                dialog: w
+                    .downcast_ref::<adw::ApplicationWindow>()
+                    .is_some_and(|w| w.visible_dialog().is_some()),
+                ..focus_kind(focus.as_ref())
+            };
+            if !window_acts(accel, f) {
+                return glib::Propagation::Proceed;
+            }
+            // A disabled action (Escape with nothing selected) leaves the key to others.
+            let enabled = w
+                .dynamic_cast_ref::<gtk::gio::ActionMap>()
+                .and_then(|m| m.lookup_action(action))
+                .is_none_or(|a| a.is_enabled());
+            if !enabled {
                 return glib::Propagation::Proceed;
             }
             match w.activate_action(&name, None) {
@@ -97,6 +152,84 @@ pub(crate) fn install(window: &adw::ApplicationWindow) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_closes_the_key_editor_unless_something_else_owns_it() {
+        let none = Focus::default();
+        assert!(
+            window_acts("Escape", none),
+            "Esc on the canvas or a button closes the editor"
+        );
+        assert!(
+            !window_acts("Escape", Focus { text: true, ..none }),
+            "a text field keeps Esc"
+        );
+        assert!(
+            !window_acts("Escape", Focus { dialog: true, ..none }),
+            "a dialog closes itself"
+        );
+        assert!(
+            !window_acts(
+                "Escape",
+                Focus {
+                    popover: true,
+                    ..none
+                }
+            ),
+            "a popover closes itself"
+        );
+        assert!(
+            !window_acts(
+                "Escape",
+                Focus {
+                    recording: true,
+                    ..none
+                }
+            ),
+            "Esc cancels recording"
+        );
+        assert_eq!(accel_for("deselect"), Some("Escape"));
+    }
+
+    #[test]
+    fn dialogs_popovers_and_recording_get_every_canvas_key() {
+        for (accel, _) in CANVAS_SHORTCUTS {
+            for f in [
+                Focus {
+                    dialog: true,
+                    ..Focus::default()
+                },
+                Focus {
+                    popover: true,
+                    ..Focus::default()
+                },
+                Focus {
+                    recording: true,
+                    ..Focus::default()
+                },
+            ] {
+                assert!(!window_acts(accel, f), "{accel} with {f:?}");
+            }
+            assert_eq!(window_acts(accel, Focus::default()), window_takes(accel, false));
+        }
+    }
+
+    #[test]
+    fn focus_in_popovers_and_recorders_is_seen() {
+        crate::ui::with_gtk(|| {
+            let button = gtk::Button::with_label("x");
+            assert_eq!(focus_kind(Some(button.upcast_ref())), Focus::default());
+            let popover = gtk::Popover::new();
+            let inner = gtk::Button::with_label("in");
+            popover.set_child(Some(&inner));
+            assert!(focus_kind(Some(inner.upcast_ref())).popover);
+            let rec = gtk::Button::with_label("Record");
+            rec.add_css_class(RECORDING);
+            assert!(focus_kind(Some(rec.upcast_ref())).recording);
+            let entry = gtk::SearchEntry::new();
+            assert!(focus_kind(Some(entry.upcast_ref())).text);
+        });
+    }
 
     const TEXT_EDITING: &[&str] = &[
         "<Control>a",
@@ -242,6 +375,63 @@ mod tests {
             assert!(entry.grab_focus());
             assert!(!run(window.upcast_ref()), "Ctrl+C must go on to the text field");
             assert_eq!(copies.get(), 1);
+            window.destroy();
+        });
+    }
+
+    #[test]
+    fn escape_deselects_only_when_nothing_else_wants_it() {
+        crate::ui::with_gtk(|| {
+            use std::cell::Cell;
+            use std::rc::Rc;
+            let window = adw::ApplicationWindow::builder().build();
+            let runs = Rc::new(Cell::new(0));
+            let a = gtk::gio::SimpleAction::new("deselect", None);
+            let r = runs.clone();
+            a.connect_activate(move |_, _| r.set(r.get() + 1));
+            window.add_action(&a);
+            let entry = gtk::Entry::new();
+            let button = gtk::Button::with_label("key");
+            let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            b.append(&entry);
+            b.append(&button);
+            window.set_content(Some(&b));
+            install(&window);
+            window.present();
+            let ctl = window
+                .observe_controllers()
+                .into_iter()
+                .filter_map(|o| o.ok().and_downcast::<gtk::ShortcutController>())
+                .find(|c| c.propagation_phase() == gtk::PropagationPhase::Capture)
+                .expect("capture-phase shortcut controller");
+            let want = gtk::ShortcutTrigger::parse_string("Escape").map(|p| p.to_str());
+            let esc = (0..ctl.n_items())
+                .filter_map(|i| ctl.item(i).and_downcast::<gtk::Shortcut>())
+                .find(|s| s.trigger().is_some_and(|t| Some(t.to_str()) == want))
+                .expect("Escape shortcut");
+            let run = || {
+                esc.action()
+                    .expect("action")
+                    .activate(gtk::ShortcutActionFlags::empty(), &window, None)
+            };
+
+            assert!(button.grab_focus());
+            assert!(run(), "Esc on a button closes the editor");
+            assert_eq!(runs.get(), 1);
+
+            assert!(entry.grab_focus());
+            assert!(!run(), "Esc goes on to the text field");
+
+            assert!(button.grab_focus());
+            a.set_enabled(false);
+            assert!(!run(), "nothing selected: Esc goes on");
+            a.set_enabled(true);
+
+            let dialog = adw::Dialog::new();
+            dialog.present(Some(&window));
+            assert!(!run(), "an open dialog keeps its Esc");
+            dialog.force_close();
+            assert_eq!(runs.get(), 1);
             window.destroy();
         });
     }

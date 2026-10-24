@@ -198,16 +198,31 @@ row:selected .page-number {
   border-radius: 10px;
 }
 
-/* Action library */
+/* The key editor's action row */
 .action-card {
   padding: 8px 10px;
   border-radius: 10px;
 }
 
-.action-card .chip {
-  min-width: 26px;
-  min-height: 26px;
-  border-radius: 7px;
+/* Action list: category pills, section headers */
+.category-tabs > viewport > box {
+  padding-bottom: 4px;
+}
+
+.category-tab {
+  border-radius: 999px;
+  min-height: 24px;
+  padding: 2px 12px;
+}
+
+.category-tab:checked {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+}
+
+.group-header {
+  margin-top: 6px;
+  padding: 4px 8px;
 }
 
 .action-chip-img {

@@ -496,8 +496,10 @@ secrets; keys that use it keep their settings and show "Needs the “<id>” plu
 `.ulanziplugin` file and shows what the plugin is and what it may do, with an "Unverified plugin" warning;
 packages are unsigned, so its Install button works only with Developer Mode on (the dialog says so). With
 Developer Mode on, Install from Folder (developers)… does the same for a folder that contains
-`plugin.toml`. Plugin actions appear in the key editor's action picker, one section per plugin, with rows
-for their `params` (an `item` param opens the plugin's list; see [Pickers](#pickers)); keys whose plugin
+`plugin.toml`. Plugin actions appear in the action list (the side panel and the key editor's action
+picker) as a category and a section per plugin, A–Z, with the plugin's name and its `icon` (an action's
+own `icon` wins; a themed icon name such as `mdi:lightbulb` is shown when the icon theme has it). The key
+editor shows rows for their `params` (an `item` param opens the plugin's list; see [Pickers](#pickers)); keys whose plugin
 is missing, turned off, stopped working or cannot be loaded show a warning badge.
 
 From the command line:

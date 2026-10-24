@@ -18,7 +18,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         "Selecting",
         &[
             ("Select all keys", "<Ctrl>a"),
-            ("Select nothing", "Escape"),
+            ("Select nothing (close the key editor)", "Escape"),
             ("Add or remove a key", "Ctrl + click"),
             ("Select a range of keys", "Shift + click"),
         ],
@@ -28,7 +28,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("Copy, paste or clear a key", "Right-click"),
             ("Swap two keys", "Drag a key onto another"),
-            ("Give a key an action", "Drag from the library"),
+            ("Give a key an action", "Drag from the action list"),
             ("Use a picture", "Drop an image file on a key"),
             ("Rename, move or delete a page or profile", "Right-click it"),
             ("Reorder pages or profiles", "Drag them in the sidebar"),
@@ -39,7 +39,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("Undo", "<Ctrl>z"),
             ("Redo", "<Ctrl><Shift>z"),
-            ("Show the action library", "<Ctrl>l"),
+            ("Search the actions", "<Ctrl>l"),
             ("Preferences", "<Ctrl>comma"),
             ("Keyboard shortcuts", "<Ctrl>question"),
         ],

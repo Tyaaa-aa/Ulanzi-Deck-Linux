@@ -104,6 +104,10 @@ pub struct AppState {
     pub now_playing: RefCell<Option<ulanzi_core::render::screen::MediaData>>,
     /// Weather for the preview, by (place, fahrenheit): the reading and when it was asked for.
     pub weather: RefCell<WeatherCache>,
+    /// The side panel's action list: chosen category and closed sections, while the app runs.
+    pub library_memory: RefCell<crate::action_list::Memory>,
+    /// The same for the key editor's action picker.
+    pub picker_memory: RefCell<crate::action_list::Memory>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -145,6 +149,8 @@ impl AppState {
             plugins_gen: Cell::new(0),
             now_playing: RefCell::default(),
             weather: RefCell::default(),
+            library_memory: RefCell::default(),
+            picker_memory: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
         })
     }
