@@ -75,6 +75,8 @@ Every key has:
   Navigation, System, …, then one per plugin) show one category at a time, and clicking a section's
   name folds it away. Searching inside a category offers **Show … more in All** when other
   categories have matches too. The key editor's **Choose** / **Change** list works the same way.
+  With a key selected, Ctrl+L shows the list in place of its editor: click an action to give it to
+  the key, or press the × (**Back to the key**) or Escape to return to the editor.
 - **Ctrl+click** several keys to change them all at once.
 - Right-click a key to copy, paste or clear it, or to copy just its style. Drag a key onto another to swap them.
 - **Ctrl+Z** / **Ctrl+Shift+Z** undo and redo anything.

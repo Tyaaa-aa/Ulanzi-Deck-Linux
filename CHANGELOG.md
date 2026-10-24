@@ -46,7 +46,9 @@ and the project uses [Semantic Versioning](https://semver.org).
   category offers "Show N more in All" when other categories match.
 - The top bar's Actions button is gone. A key's editor has a × at the top of the panel, and Escape does
   the same when you are not typing: the key is deselected and the action list comes back. Ctrl+L puts
-  the cursor in the action search (not while a dialog or menu is open).
+  the cursor in the action search (not while a dialog or menu is open). With a key selected, the list
+  then gives way to the key's editor again when you click an action (it goes to the key), pick another
+  key, or press the × ("Back to the key") or Escape.
 - The key editor no longer scrolls as one long column. The key preview stays at the top, with a row of
   buttons under it: Look, Label, Press and Hold for a key; Left, Right, Press and Hold for a dial;
   Display and Press for the wide screen; Look, Label and Keys for several keys. Each section fits the

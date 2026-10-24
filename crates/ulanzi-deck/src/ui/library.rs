@@ -60,6 +60,8 @@ struct Inner {
     shown_query: RefCell<String>,
     /// The sections folded away on screen now.
     folded: RefCell<HashSet<String>>,
+    /// Called after a click in the side panel's list gave the action to the selection.
+    on_assign: RefCell<Option<Box<dyn Fn()>>>,
 }
 
 impl Inner {
@@ -349,7 +351,13 @@ impl Inner {
 
     fn pick(&self, action: Action) {
         match &self.purpose {
-            Use::Library => assign(&self.state, action),
+            Use::Library => {
+                if assign(&self.state, action)
+                    && let Some(f) = self.on_assign.borrow().as_ref()
+                {
+                    f();
+                }
+            }
             Use::Picker { on_pick, .. } => on_pick(action),
         }
     }
@@ -416,12 +424,12 @@ fn drag_source(state: &State, action: Action) -> gtk::DragSource {
     drag
 }
 
-/// Give the action to every selected control (one undo step).
-fn assign(state: &State, action: Action) {
+/// Give the action to every selected control (one undo step); false when nothing is selected.
+fn assign(state: &State, action: Action) -> bool {
     let slots = state.selection.borrow().slots();
     if slots.is_empty() {
         crate::ui::toast(state, "Select a key first, or drag the action onto the deck");
-        return;
+        return false;
     }
     state.edit(|e| {
         e.set_merge(Some("assign"));
@@ -430,6 +438,7 @@ fn assign(state: &State, action: Action) {
         }
         e.set_merge(None);
     });
+    true
 }
 
 /// Build an action list for `purpose`.
@@ -468,6 +477,7 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
         building_tabs: Cell::new(false),
         shown_query: RefCell::default(),
         folded: RefCell::default(),
+        on_assign: RefCell::default(),
     });
     // The picker fills itself each time it opens (see `reload`); the key editor builds several
     // pickers on every rebuild, and most are never opened.
@@ -549,9 +559,12 @@ fn plugins_changed(inner: &Weak<Inner>) -> Option<bool> {
     Some(*inner.catalog.borrow() != now)
 }
 
-/// The library panel.
-pub fn build(state: &State) -> Library {
+/// The library panel. `on_assign` runs after a click in it gave an action to the selection.
+pub fn build(state: &State, on_assign: impl Fn() + 'static) -> Library {
     let list = action_list(state, Use::Library);
+    if let Some(inner) = list.inner.upgrade() {
+        *inner.on_assign.borrow_mut() = Some(Box::new(on_assign));
+    }
     list.root.set_margin_start(12);
     list.root.set_margin_end(12);
     list.root.set_margin_top(6);
@@ -693,7 +706,7 @@ mod tests {
             drop(list);
             assert!(weak.upgrade().is_none(), "the list leaked");
 
-            let lib = build(&state);
+            let lib = build(&state, || {});
             let before = state.listener_count();
             drop(lib);
             state.notify(Change::Plugins);

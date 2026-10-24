@@ -24,6 +24,9 @@ pub struct Panel {
     /// Show the action list (keeping the selection, so a click there assigns to it) and put the
     /// typing focus in its search field (Ctrl+L).
     pub show_library: Rc<dyn Fn()>,
+    /// The × and Escape: while the action list is shown over a selection (Ctrl+L), go back to
+    /// the key's editor and return true; otherwise return false (the caller deselects).
+    pub back_to_key: Rc<dyn Fn() -> bool>,
 }
 
 /// The panel's page: the key editor for a selection, else the action list. `library_asked`
@@ -33,6 +36,32 @@ pub fn panel_page(has_selection: bool, library_asked: bool) -> &'static str {
         "inspector"
     } else {
         "library"
+    }
+}
+
+/// What the panel's × (and Escape) does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseDoes {
+    /// The action list is shown over a selection (Ctrl+L): back to the key's editor.
+    BackToKey,
+    /// Select nothing; the action list comes back.
+    Deselect,
+}
+
+impl CloseDoes {
+    pub fn tooltip(self) -> &'static str {
+        match self {
+            CloseDoes::BackToKey => "Back to the key",
+            CloseDoes::Deselect => "Close",
+        }
+    }
+}
+
+pub fn close_does(has_selection: bool, library_asked: bool) -> CloseDoes {
+    if has_selection && library_asked {
+        CloseDoes::BackToKey
+    } else {
+        CloseDoes::Deselect
     }
 }
 
@@ -176,17 +205,63 @@ impl Panel {
             .build();
         stack.add_named(&clamp, Some("inspector"));
 
-        let library = crate::ui::library::build(state);
-        stack.add_named(&library.root, Some("library"));
-
-        // Top of the panel: close the key editor (select nothing) and go back to the action list.
+        // Top of the panel: close the key editor (select nothing) and go back to the action list,
+        // or, while the list is shown over a selection, back to the key's editor.
         let close = gtk::Button::builder()
             .icon_name("window-close-symbolic")
-            .tooltip_text("Close")
-            .action_name("win.deselect")
+            .tooltip_text(CloseDoes::Deselect.tooltip())
             .visible(false)
             .build();
         let library_asked = Rc::new(std::cell::Cell::new(false));
+        // Show the page and the × for the current selection and `library_asked`.
+        let show_page: Rc<dyn Fn()> = {
+            let (state, stack, asked, close) = (
+                state.clone(),
+                stack.downgrade(),
+                library_asked.clone(),
+                close.downgrade(),
+            );
+            Rc::new(move || {
+                let has = !state.selection.borrow().is_empty();
+                if let Some(stack) = stack.upgrade() {
+                    stack.set_visible_child_name(panel_page(has, asked.get()));
+                }
+                if let Some(close) = close.upgrade() {
+                    close.set_visible(has);
+                    close.set_tooltip_text(Some(close_does(has, asked.get()).tooltip()));
+                }
+            })
+        };
+        let back_to_key: Rc<dyn Fn() -> bool> = {
+            let (state, asked, show_page) = (state.clone(), library_asked.clone(), show_page.clone());
+            Rc::new(move || {
+                let has = !state.selection.borrow().is_empty();
+                if close_does(has, asked.get()) != CloseDoes::BackToKey {
+                    return false;
+                }
+                asked.set(false);
+                show_page();
+                true
+            })
+        };
+        {
+            let back = back_to_key.clone();
+            close.connect_clicked(move |b| {
+                if !back() {
+                    let _ = b.activate_action("win.deselect", None);
+                }
+            });
+        }
+
+        // A click in the list over a selection assigns the action: the key's editor comes back.
+        let library = {
+            let (asked, show_page) = (library_asked.clone(), show_page.clone());
+            crate::ui::library::build(state, move || {
+                asked.set(false);
+                show_page();
+            })
+        };
+        stack.add_named(&library.root, Some("library"));
 
         let ctx: C = Rc::new(Ctx {
             state: state.clone(),
@@ -194,13 +269,7 @@ impl Panel {
             rebuild: RefCell::new(None),
         });
         let rebuild: Rc<dyn Fn()> = {
-            let (ctx_weak, content, stack, asked, close) = (
-                Rc::downgrade(&ctx),
-                content.clone(),
-                stack.clone(),
-                library_asked.clone(),
-                close.clone(),
-            );
+            let (ctx_weak, content, show_page) = (Rc::downgrade(&ctx), content.clone(), show_page.clone());
             Rc::new(move || {
                 let Some(ctx) = ctx_weak.upgrade() else {
                     return;
@@ -211,21 +280,21 @@ impl Panel {
                 while let Some(c) = content.first_child() {
                     content.remove(&c);
                 }
-                let has = fill(&ctx, &content);
+                fill(&ctx, &content);
                 // With nothing selected the panel shows the actions to drag onto the deck.
-                stack.set_visible_child_name(panel_page(has, asked.get()));
-                close.set_visible(has);
+                show_page();
             })
         };
         *ctx.rebuild.borrow_mut() = Some(rebuild.clone());
         rebuild();
 
         let show_library: Rc<dyn Fn()> = {
-            let (stack, asked, search) = (stack.clone(), library_asked.clone(), library.search.clone());
+            let (asked, search, show_page) =
+                (library_asked.clone(), library.search.clone(), show_page.clone());
             let state = state.clone();
             Rc::new(move || {
                 asked.set(!state.selection.borrow().is_empty());
-                stack.set_visible_child_name("library");
+                show_page();
                 search.grab_focus();
             })
         };
@@ -274,6 +343,7 @@ impl Panel {
             root: view.upcast(),
             header,
             show_library,
+            back_to_key,
         }
     }
 }
@@ -1349,6 +1419,82 @@ mod tests {
         assert_eq!(panel_page(true, true), "library");
         assert_eq!(panel_page(false, false), "library");
         assert_eq!(panel_page(false, true), "library");
+    }
+
+    #[test]
+    fn the_close_button_goes_back_to_the_key_while_the_list_is_asked_for() {
+        assert_eq!(close_does(true, true), CloseDoes::BackToKey);
+        assert_eq!(close_does(true, false), CloseDoes::Deselect);
+        assert_eq!(close_does(false, true), CloseDoes::Deselect);
+        assert_eq!(CloseDoes::BackToKey.tooltip(), "Back to the key");
+        assert_eq!(CloseDoes::Deselect.tooltip(), "Close");
+    }
+
+    #[test]
+    fn the_list_asked_over_a_key_gives_way_to_its_editor() {
+        crate::ui::with_gtk(|| {
+            let state = state();
+            let panel = Panel::build(&state);
+            let page = |p: &Panel| {
+                all::<gtk::Stack>(&p.root)
+                    .into_iter()
+                    .find(|s| s.child_by_name("library").is_some())
+                    .and_then(|s| s.visible_child_name())
+                    .map(|n| n.to_string())
+            };
+            let close = |p: &Panel| {
+                all::<gtk::Button>(&p.header.clone().upcast())
+                    .into_iter()
+                    .find(|b| b.icon_name().as_deref() == Some("window-close-symbolic"))
+                    .expect("×")
+            };
+            select(&state, Slot::Key(0));
+            assert_eq!(page(&panel).as_deref(), Some("inspector"));
+            assert_eq!(close(&panel).tooltip_text().as_deref(), Some("Close"));
+
+            // Ctrl+L, then the × (or Escape): back to the key, still selected.
+            (panel.show_library)();
+            assert_eq!(page(&panel).as_deref(), Some("library"));
+            assert_eq!(close(&panel).tooltip_text().as_deref(), Some("Back to the key"));
+            // Rebuilds (an edit from elsewhere) keep the list.
+            state.notify(Change::Page);
+            while glib::MainContext::default().iteration(false) {}
+            assert_eq!(page(&panel).as_deref(), Some("library"));
+            assert!((panel.back_to_key)());
+            assert_eq!(page(&panel).as_deref(), Some("inspector"));
+            assert!(!state.selection.borrow().is_empty());
+            assert_eq!(close(&panel).tooltip_text().as_deref(), Some("Close"));
+            // Not asked: the caller deselects.
+            assert!(!(panel.back_to_key)());
+
+            // Ctrl+L, then a click in the list assigns and shows the editor again.
+            state.edit(|e| e.set_key_actions(0, None, None));
+            while glib::MainContext::default().iteration(false) {}
+            (panel.show_library)();
+            let library = all::<gtk::Stack>(&panel.root)
+                .into_iter()
+                .find_map(|s| s.child_by_name("library"))
+                .expect("library page");
+            let row = all::<gtk::ListBoxRow>(&library)
+                .into_iter()
+                .next()
+                .expect("an action row");
+            row.activate();
+            pump_until(|| page(&panel).as_deref() == Some("inspector"));
+            assert_eq!(page(&panel).as_deref(), Some("inspector"));
+            let tap = state.editor.borrow().key(0).and_then(|k| k.tap.clone());
+            assert!(tap.is_some(), "the click assigned the action");
+            // Later rebuilds keep the editor.
+            state.notify(Change::Page);
+            while glib::MainContext::default().iteration(false) {}
+            assert_eq!(page(&panel).as_deref(), Some("inspector"));
+
+            // Ctrl+L, then another key picked on the deck: its editor.
+            (panel.show_library)();
+            select(&state, Slot::Key(3));
+            pump_until(|| page(&panel).as_deref() == Some("inspector"));
+            assert_eq!(page(&panel).as_deref(), Some("inspector"));
+        });
     }
 
     #[test]

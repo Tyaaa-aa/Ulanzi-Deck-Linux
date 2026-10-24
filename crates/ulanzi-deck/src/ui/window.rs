@@ -1,5 +1,7 @@
 //! The main window: sidebar, header with status, device canvas, inspector.
 
+use std::rc::Rc;
+
 use adw::prelude::*;
 use gtk::{gio, glib};
 use ulanzi_core::edit::Slot;
@@ -321,11 +323,11 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         });
     }
 
-    install_actions(&window, state);
+    install_actions(&window, state, panel.back_to_key.clone());
     Window { window, inner_split }
 }
 
-fn install_actions(window: &adw::ApplicationWindow, state: &State) {
+fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: Rc<dyn Fn() -> bool>) {
     let action = |name: &str, f: Box<dyn Fn()>| {
         let a = gio::SimpleAction::new(name, None);
         a.connect_activate(move |_, _| f());
@@ -406,11 +408,16 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
         action("shortcuts", Box::new(move || crate::ui::shortcuts::open(&w)));
     }
     {
-        // Escape (see key_routing) and the panel's close button: back to the action list. Off
-        // while nothing is selected, so Escape then goes on to whoever else wants it.
+        // Escape (see key_routing) and the panel's close button: back to the action list, or to
+        // the key's editor when the list was shown over it (Ctrl+L). Off while nothing is
+        // selected, so Escape then goes on to whoever else wants it.
         let deselect = gio::SimpleAction::new("deselect", None);
         let s = state.clone();
-        deselect.connect_activate(move |_, _| s.select(|sel| sel.clear()));
+        deselect.connect_activate(move |_, _| {
+            if !back_to_key() {
+                s.select(|sel| sel.clear())
+            }
+        });
         let update = {
             let (s, deselect) = (state.clone(), deselect.clone());
             move || deselect.set_enabled(!s.selection.borrow().is_empty())
