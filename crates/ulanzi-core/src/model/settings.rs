@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -61,6 +61,34 @@ impl Default for PluginEntry {
         Self {
             enabled: true,
             settings: toml::Table::new(),
+        }
+    }
+}
+
+/// Does a plugin setting's name look like a credential? Used for plugins whose manifest is not known.
+pub fn looks_secret(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    ["password", "token", "secret", "key"]
+        .iter()
+        .any(|w| k.contains(w))
+}
+
+/// Is `key` a secret setting of plugin `id`? `declared` has the secret keys of every plugin whose
+/// manifest is known; for the others the name decides.
+pub fn is_plugin_secret(declared: &BTreeMap<String, BTreeSet<String>>, id: &str, key: &str) -> bool {
+    match declared.get(id) {
+        Some(keys) => keys.contains(key),
+        None => looks_secret(key),
+    }
+}
+
+impl Settings {
+    /// Remove every plugin secret (declared ones, and any key that looks like a credential), for
+    /// files that get shared.
+    pub fn strip_plugin_secrets(&mut self, declared: &BTreeMap<String, BTreeSet<String>>) {
+        for (id, e) in &mut self.plugins {
+            e.settings
+                .retain(|k, _| !looks_secret(k) && !declared.get(id).is_some_and(|d| d.contains(k)));
         }
     }
 }

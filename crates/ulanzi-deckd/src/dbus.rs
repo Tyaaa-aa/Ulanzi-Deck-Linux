@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
-use ulanzi_core::model::{BrightnessOp, Model, Profile, Settings};
+use ulanzi_core::model::{BrightnessOp, Model, Profile, Settings, is_plugin_secret};
 use ulanzi_core::store::{ProfileLoad, Store, parse_profile};
 use ulanzi_proto::InputKind;
 use uuid::Uuid;
@@ -49,6 +49,8 @@ pub struct DeckService {
     plugins: Option<PluginHost>,
     /// Where plugins are installed, to know their secret settings before the host is up.
     plugins_dir: Option<PathBuf>,
+    /// Held while settings are read, changed and saved, so two writers cannot lose each other's change.
+    settings_lock: tokio::sync::Mutex<()>,
 }
 
 impl DeckService {
@@ -62,6 +64,7 @@ impl DeckService {
             obs_probe: crate::obs::system_probe(),
             plugins: None,
             plugins_dir: None,
+            settings_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -119,7 +122,13 @@ impl DeckService {
         emitter: &SignalEmitter<'_>,
     ) -> Result<()> {
         let host = self.plugins()?;
-        let declared = self.secret_fields().get(&id).is_some_and(|k| k.contains(&key));
+        let _guard = self.settings_lock.lock().await;
+        // Only a plugin and key the host knows touch settings.toml; anything else gets the host's
+        // own error and leaves the old copy alone.
+        let declared = host
+            .manifests()
+            .get(&id)
+            .is_some_and(|m| m.secret_keys().contains(&key.as_str()));
         let mut changed = None;
         if declared {
             let mut s = self
@@ -492,8 +501,9 @@ impl DeckService {
     /// Write profiles (all when `ids` is empty) to a `.ulanzideck` file.
     async fn export_bundle(&self, path: String, ids: Vec<String>, include_settings: bool) -> Result<()> {
         let ids: Vec<Uuid> = ids.iter().map(|i| Self::id(i)).collect::<Result<_>>()?;
-        let bytes = ulanzi_core::bundle::export(&self.store, &ids, include_settings)
-            .map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let bytes =
+            ulanzi_core::bundle::export_with(&self.store, &ids, include_settings, &self.secret_fields())
+                .map_err(|e| DeckError::Invalid(e.to_string()))?;
         ulanzi_core::store::write_atomic(std::path::Path::new(&path), &bytes)
             .map_err(|e| DeckError::Unavailable(format!("{path}: {e}")))
     }
@@ -557,12 +567,11 @@ impl DeckService {
         if s.obs.password.as_deref().is_some_and(|p| !p.is_empty()) {
             s.obs.password = Some(PASSWORD_PLACEHOLDER.into());
         }
-        for (id, keys) in self.secret_fields() {
-            if let Some(entry) = s.plugins.get_mut(&id) {
-                for k in keys {
-                    if let Some(v) = entry.settings.get_mut(&k) {
-                        *v = toml::Value::String(PASSWORD_PLACEHOLDER.into());
-                    }
+        let fields = self.secret_fields();
+        for (id, entry) in &mut s.plugins {
+            for (k, v) in &mut entry.settings {
+                if is_plugin_secret(&fields, id, k) {
+                    *v = toml::Value::String(PASSWORD_PLACEHOLDER.into());
                 }
             }
         }
@@ -572,6 +581,7 @@ impl DeckService {
     /// Replace the settings. A password equal to the placeholder keeps the stored one.
     async fn apply_settings(&self, toml_text: String) -> Result<()> {
         let mut s: Settings = toml::from_str(&toml_text).map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let _guard = self.settings_lock.lock().await;
         if s.obs.password.as_deref() == Some(PASSWORD_PLACEHOLDER) {
             let old = self
                 .store
@@ -581,22 +591,26 @@ impl DeckService {
         }
         let fields = self.secret_fields();
         if s.plugins.iter().any(|(id, e)| {
-            fields
-                .get(id)
-                .is_some_and(|ks| ks.iter().any(|k| is_placeholder(e.settings.get(k))))
+            e.settings
+                .iter()
+                .any(|(k, v)| is_placeholder(Some(v)) && is_plugin_secret(&fields, id, k))
         }) {
             let old = self
                 .store
                 .load_settings()
                 .map_err(|e| DeckError::Unavailable(e.to_string()))?;
             for (id, entry) in &mut s.plugins {
-                for k in fields.get(id).into_iter().flatten() {
-                    if is_placeholder(entry.settings.get(k)) {
-                        match old.plugins.get(id).and_then(|o| o.settings.get(k)) {
-                            Some(v) => entry.settings.insert(k.clone(), v.clone()),
-                            None => entry.settings.remove(k),
-                        };
-                    }
+                let masked: Vec<String> = entry
+                    .settings
+                    .iter()
+                    .filter(|(k, v)| is_placeholder(Some(v)) && is_plugin_secret(&fields, id, k))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for k in masked {
+                    match old.plugins.get(id).and_then(|o| o.settings.get(&k)) {
+                        Some(v) => entry.settings.insert(k, v.clone()),
+                        None => entry.settings.remove(&k),
+                    };
                 }
             }
         }
@@ -720,6 +734,7 @@ impl DeckService {
         if !host.list().iter().any(|p| p.id == id) {
             return Err(plugin_err(PluginError::NotInstalled(id)));
         }
+        let _guard = self.settings_lock.lock().await;
         let mut s = self
             .store
             .load_settings()
@@ -872,6 +887,7 @@ impl DeckService {
                 "OBS Studio isn’t installed.".into()
             }));
         };
+        let _guard = self.settings_lock.lock().await;
         let mut s = self
             .store
             .load_settings()

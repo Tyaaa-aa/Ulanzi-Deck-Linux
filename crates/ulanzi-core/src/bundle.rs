@@ -127,6 +127,17 @@ fn image_ext(name: &str) -> bool {
 
 /// Pack `ids` (all profiles when empty), optionally with the settings (OBS password removed).
 pub fn export(store: &Store, ids: &[Uuid], include_settings: bool) -> Result<Vec<u8>, BundleError> {
+    export_with(store, ids, include_settings, &Default::default())
+}
+
+/// Like [`export`], also removing the plugin secrets in `declared` (secret keys by plugin id).
+/// Keys that look like credentials are always removed.
+pub fn export_with(
+    store: &Store,
+    ids: &[Uuid],
+    include_settings: bool,
+    declared: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
+) -> Result<Vec<u8>, BundleError> {
     let profiles: Vec<Profile> = if ids.is_empty() {
         all_profiles(store)
     } else {
@@ -150,6 +161,7 @@ pub fn export(store: &Store, ids: &[Uuid], include_settings: bool) -> Result<Vec
     let settings = if include_settings {
         let mut s = store.load_settings()?;
         s.obs.password = None;
+        s.strip_plugin_secrets(declared);
         Some(s)
     } else {
         None
@@ -193,6 +205,7 @@ pub fn to_bytes(b: &Bundle) -> Result<Vec<u8>, BundleError> {
     if let Some(s) = &b.settings {
         let mut s = s.clone();
         s.obs.password = None;
+        s.strip_plugin_secrets(&Default::default());
         put("settings.toml", to_toml(&s)?.as_bytes())?;
     }
     for bp in &b.profiles {

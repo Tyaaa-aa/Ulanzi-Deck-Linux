@@ -60,6 +60,11 @@ async fn rig() -> Option<Rig> {
 
 /// A rig whose plugins folder `setup` fills first.
 async fn rig_with(setup: impl FnOnce(&std::path::Path)) -> Option<Rig> {
+    rig_full(setup, true).await
+}
+
+/// `host_up` false: the service has the plugins folder but no plugin host yet.
+async fn rig_full(setup: impl FnOnce(&std::path::Path), host_up: bool) -> Option<Rig> {
     let Some(bus) = bus() else {
         eprintln!("dbus-daemon not found; skipping");
         return None;
@@ -97,12 +102,10 @@ async fn rig_with(setup: impl FnOnce(&std::path::Path)) -> Option<Rig> {
         .expect("addr")
         .name(BUS_NAME)
         .expect("name")
-        .serve_at(
-            OBJECT_PATH,
-            DeckService::new(tx, store)
-                .with_plugins_dir(dir.path().join("plugins"))
-                .with_plugins(plugins),
-        )
+        .serve_at(OBJECT_PATH, {
+            let svc = DeckService::new(tx, store).with_plugins_dir(dir.path().join("plugins"));
+            if host_up { svc.with_plugins(plugins) } else { svc }
+        })
         .expect("serve")
         .build()
         .await
@@ -642,4 +645,110 @@ async fn set_secret_errors_use_the_user_facing_text() {
         .await
         .expect_err("unknown");
     assert_eq!(error_message(e), "the nope plugin is not installed");
+}
+
+fn install_probe(plugins: &std::path::Path) {
+    let folder = plugins.join("probe");
+    std::fs::create_dir_all(&folder).expect("folder");
+    std::fs::write(folder.join("plugin.toml"), PROBE_MANIFEST).expect("manifest");
+    std::fs::copy(common::plugins::wasm(PROBE_PACKAGE), folder.join("plugin.wasm")).expect("wasm");
+}
+
+const NAMED_SECRETS: &str =
+    "[plugins.gone]\nenabled = true\n\n[plugins.gone.settings]\nApi_Token = \"t0ken\"\nhost = \"h\"\n";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removed_plugin_secrets_stay_masked() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(WITH_SECRET,))
+        .await
+        .expect("apply");
+    p.call::<_, _, ()>("PluginRemove", &("probe",))
+        .await
+        .expect("remove");
+    let text: String = p.call("GetSettings", &()).await.expect("get");
+    assert!(!text.contains("hunter2"), "{text}");
+    assert!(text.contains("password = \"••••\""), "{text}");
+    assert!(text.contains("greeting = \"hi\""), "{text}");
+    // The masked text written back keeps the stored value.
+    p.call::<_, _, ()>("ApplySettings", &(text.as_str(),))
+        .await
+        .expect("apply");
+    assert_eq!(
+        stored(&r).await.plugins["probe"].settings["password"].as_str(),
+        Some("hunter2")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unparsable_manifest_secrets_are_masked_by_name() {
+    let Some(r) = rig_with(|plugins| {
+        std::fs::create_dir_all(plugins.join("gone")).expect("dir");
+        std::fs::write(plugins.join("gone/plugin.toml"), "not a manifest [").expect("write");
+    })
+    .await
+    else {
+        return;
+    };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(NAMED_SECRETS,))
+        .await
+        .expect("apply");
+    let text: String = p.call("GetSettings", &()).await.expect("get");
+    assert!(!text.contains("t0ken"), "{text}");
+    assert!(text.contains("host = \"h\""), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn secrets_are_masked_before_the_host_is_up() {
+    let Some(r) = rig_full(install_probe, false).await else {
+        return;
+    };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(WITH_SECRET,))
+        .await
+        .expect("apply");
+    let text: String = p.call("GetSettings", &()).await.expect("get");
+    assert!(!text.contains("hunter2"), "{text}");
+    assert!(text.contains("greeting = \"hi\""), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn export_leaves_out_plugin_secrets() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    let mixed = format!("{WITH_SECRET}\n{NAMED_SECRETS}");
+    p.call::<_, _, ()>("ApplySettings", &(mixed.as_str(),))
+        .await
+        .expect("apply");
+    let out = r._dir.path().join("x.ulanzideck");
+    p.call::<_, _, ()>(
+        "ExportBundle",
+        &(out.to_string_lossy().as_ref(), Vec::<String>::new(), true),
+    )
+    .await
+    .expect("export");
+    let b = ulanzi_core::bundle::read(&std::fs::read(&out).expect("read")).expect("bundle");
+    let s = b.settings.expect("settings");
+    assert!(!s.plugins["probe"].settings.contains_key("password"));
+    assert_eq!(s.plugins["probe"].settings["greeting"].as_str(), Some("hi"));
+    assert!(!s.plugins["gone"].settings.contains_key("Api_Token"));
+    assert_eq!(s.plugins["gone"].settings["host"].as_str(), Some("h"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_set_secret_keeps_the_settings_copy() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(WITH_SECRET,))
+        .await
+        .expect("apply");
+    // "greeting" is not a secret setting: the call fails and nothing is stripped.
+    p.call::<_, _, ()>("PluginSetSecret", &("probe", "greeting", "x"))
+        .await
+        .expect_err("undeclared");
+    let s = stored(&r).await;
+    assert_eq!(s.plugins["probe"].settings["password"].as_str(), Some("hunter2"));
+    assert_eq!(s.plugins["probe"].settings["greeting"].as_str(), Some("hi"));
 }
