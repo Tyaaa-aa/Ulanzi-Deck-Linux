@@ -9,7 +9,8 @@ use gtk::{gdk, glib};
 use ulanzi_core::plugin::{Field, Manifest, PickItem, Picker};
 
 use crate::plugins::{
-    Control, Input, control_for, item_ids, item_summary, item_value, shown_text, value_from,
+    Control, Input, Labels, control_for, item_ids, item_summary, item_value, shown_text, value_from,
+    wants_labels,
 };
 use crate::state::State;
 
@@ -100,6 +101,15 @@ fn item_row(
     row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     // The ids the row shows now: what the dialog opens with next time.
     let shown: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(ids));
+    let contract = state
+        .plugins
+        .borrow()
+        .manifests
+        .get(plugin)
+        .map(|m| m.contract.clone());
+    if contract.is_some_and(|c| wants_labels(&shown.borrow(), &c)) {
+        name_ids(state, plugin, &picker.id, &row, &shown);
+    }
     let (state, plugin, field) = (state.clone(), plugin.to_string(), f.clone());
     row.connect_activated(move |r| {
         let (weak, shown2, on, multi) = (r.downgrade(), shown.clone(), on.clone(), picker.multi);
@@ -114,6 +124,66 @@ fn item_row(
         });
     });
     row.upcast()
+}
+
+/// Show the labels of the ids `row` shows once the plugin's picker names them: asked in the
+/// background, once per picker for all the rows built within a few seconds
+/// ([`crate::state::AppState::item_labels`]). On an error the row keeps showing the ids.
+fn name_ids(
+    state: &State,
+    plugin: &str,
+    picker: &str,
+    row: &adw::ActionRow,
+    shown: &Rc<RefCell<Vec<String>>>,
+) {
+    let render = {
+        let (row, shown) = (row.downgrade(), Rc::downgrade(shown));
+        move |items: &[PickItem]| {
+            let (Some(row), Some(shown)) = (row.upgrade(), shown.upgrade()) else {
+                return;
+            };
+            if !items.is_empty() {
+                row.set_subtitle(&glib::markup_escape_text(&item_summary(&shown.borrow(), items)));
+            }
+        }
+    };
+    let waiter = {
+        let render = render.clone();
+        Box::new(move |items: &[PickItem]| render(items))
+    };
+    let now = std::time::Instant::now();
+    let lookup = state.item_labels.borrow_mut().want(plugin, picker, now, waiter);
+    match lookup {
+        Labels::Known(items) => render(&items),
+        Labels::Wait => {}
+        Labels::Ask => {
+            let weak = Rc::downgrade(state);
+            let (p, k) = (plugin.to_string(), picker.to_string());
+            let (plugin, picker) = (plugin.to_string(), picker.to_string());
+            let done = move |answer: Option<Vec<PickItem>>| {
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                let now = std::time::Instant::now();
+                let (waiters, items) = state
+                    .item_labels
+                    .borrow_mut()
+                    .answer(&plugin, &picker, now, answer);
+                render(&items);
+                for w in waiters {
+                    w(&items);
+                }
+            };
+            let Some(c) = state.client.borrow().clone() else {
+                done(None);
+                return;
+            };
+            crate::runtime::run(
+                async move { c.plugin_list_items(&p, &k, "", "").await },
+                move |r| done(r.ok()),
+            );
+        }
+    }
 }
 
 /// The row that edits `f` of plugin `m`, showing `current` (the stored value, else the default).
@@ -287,5 +357,56 @@ mod tests {
             ]))
         );
         assert_eq!(picked(&[], true), (Vec::new(), "None".to_string(), None));
+    }
+
+    #[test]
+    fn item_rows_show_the_labels_their_picker_named() {
+        crate::ui::with_gtk(|| {
+            use ulanzi_core::model::{Model, Profile};
+            let state = crate::state::AppState::new(Profile::new_default("Default", Model::D200X));
+            let m = Manifest::parse(
+                "id = \"ha\"\nname = \"HA\"\nversion = \"1.0.0\"\ncontract = \"1.1\"\n\
+                 [[pickers]]\nid = \"entities\"\n\
+                 [[settings]]\nkey = \"light\"\nkind = \"item\"\npicker = \"entities\"\n",
+            )
+            .expect("manifest");
+            state
+                .plugins
+                .borrow_mut()
+                .manifests
+                .insert("ha".into(), m.clone());
+            let value = toml::Value::String("light.kitchen".into());
+            let subtitle = |state: &State| {
+                let w = row(
+                    state,
+                    &m,
+                    &m.settings[0],
+                    Some(&value),
+                    Save::Live,
+                    Rc::new(|_| {}),
+                );
+                w.downcast::<adw::ActionRow>()
+                    .expect("item row")
+                    .subtitle()
+                    .map(|s| s.to_string())
+            };
+            // No service to ask: the id stays.
+            assert_eq!(subtitle(&state).as_deref(), Some("light.kitchen"));
+            // A fresh answer names it.
+            let kitchen = PickItem {
+                id: "light.kitchen".into(),
+                label: "Kitchen".into(),
+                subtitle: None,
+                group: None,
+                icon: None,
+                state: None,
+            };
+            let now = std::time::Instant::now();
+            state
+                .item_labels
+                .borrow_mut()
+                .answer("ha", "entities", now, Some(vec![kitchen]));
+            assert_eq!(subtitle(&state).as_deref(), Some("Kitchen"));
+        });
     }
 }

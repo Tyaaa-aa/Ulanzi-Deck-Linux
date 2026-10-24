@@ -28,6 +28,7 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Plugin actions in the key editor, listed by plugin, with rows for their parameters. A parameter that
   picks something opens the plugin's list (search, group filter, live state, ticks for several), keeps
   showing a stored value the list lacks, and offers typing by hand only when the plugin can't list.
+  Such rows show the names the plugin gives (Kitchen, not `light.kitchen`), asked in the background.
   Keys show a warning when their plugin is missing, turned off, stopped working or can't be loaded.
 - Home Assistant plugin (`plugins/ha`): toggle, run, set level and call any action (service), with live
   entity state on key labels (`{ha.light.desk}`, `{ha.sensor.temp.unit}`) and a list to pick entities

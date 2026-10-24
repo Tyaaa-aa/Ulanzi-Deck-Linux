@@ -110,10 +110,15 @@ pub struct AppState {
     pub picker_memory: RefCell<crate::action_list::Memory>,
     /// The key editor's section last picked, kept while switching keys.
     pub inspector_section: Cell<Option<crate::ui::inspector::Section>>,
+    /// Plugin pickers' answers for naming the ids item rows show, kept a few seconds.
+    pub item_labels: RefCell<crate::plugins::LabelCache<LabelWaiter>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
 pub type State = Rc<AppState>;
+
+/// An item row waiting for its picker's answer (see [`AppState::item_labels`]).
+pub type LabelWaiter = Box<dyn FnOnce(&[ulanzi_core::plugin::PickItem])>;
 
 impl AppState {
     /// Keep `row` open or closed across rebuilds under the name `path`.
@@ -154,6 +159,7 @@ impl AppState {
             library_memory: RefCell::default(),
             picker_memory: RefCell::default(),
             inspector_section: Cell::new(None),
+            item_labels: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
         })
     }

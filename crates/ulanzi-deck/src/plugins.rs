@@ -342,6 +342,104 @@ pub fn limit_note(limit: Option<usize>) -> Option<String> {
     limit.map(|l| format!("Pick up to {l}."))
 }
 
+/// How long a picker's answer names the ids of the item rows built after it.
+pub const LABELS_FRESH: std::time::Duration = std::time::Duration::from_secs(5);
+/// A question about labels with no answer after this long is asked again.
+pub const LABELS_ASK_AGAIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether an item row showing `ids` of a plugin built for `contract` asks the plugin for their
+/// labels (a 1.0 plugin can't list; nothing to name when nothing is stored).
+pub fn wants_labels(ids: &[String], contract: &str) -> bool {
+    !ids.is_empty() && can_list(contract)
+}
+
+/// What an item row does for its labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Labels {
+    /// A fresh answer: show these.
+    Known(std::rc::Rc<Vec<PickItem>>),
+    /// Ask the plugin, then hand the answer to [`LabelCache::answer`].
+    Ask,
+    /// Another row asked already; the answer comes to this one too.
+    Wait,
+}
+
+enum LabelEntry<W> {
+    Asking {
+        since: std::time::Instant,
+        waiters: Vec<W>,
+    },
+    Known {
+        at: std::time::Instant,
+        items: std::rc::Rc<Vec<PickItem>>,
+    },
+}
+
+/// The labels plugins answered, per (plugin, picker), kept [`LABELS_FRESH`], so an editor with
+/// many item rows asks once per picker, not once per row. `W` is what a waiting row gets called
+/// with (a callback in the app).
+pub struct LabelCache<W> {
+    entries: BTreeMap<(String, String), LabelEntry<W>>,
+}
+
+impl<W> Default for LabelCache<W> {
+    fn default() -> Self {
+        LabelCache {
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl<W> LabelCache<W> {
+    /// A row of `plugin`'s `picker` wants labels at `now`. With [`Labels::Wait`] the cache keeps
+    /// `waiter` for the answer; otherwise `waiter` is dropped.
+    pub fn want(&mut self, plugin: &str, picker: &str, now: std::time::Instant, waiter: W) -> Labels {
+        let key = (plugin.to_string(), picker.to_string());
+        match self.entries.get_mut(&key) {
+            Some(LabelEntry::Known { at, items }) if now.duration_since(*at) < LABELS_FRESH => {
+                return Labels::Known(items.clone());
+            }
+            Some(LabelEntry::Asking { since, waiters }) if now.duration_since(*since) < LABELS_ASK_AGAIN => {
+                waiters.push(waiter);
+                return Labels::Wait;
+            }
+            _ => {}
+        }
+        self.entries.insert(
+            key,
+            LabelEntry::Asking {
+                since: now,
+                waiters: Vec::new(),
+            },
+        );
+        Labels::Ask
+    }
+
+    /// The plugin answered (`None`: it couldn't; rows keep their ids, and nobody asks again
+    /// until [`LABELS_FRESH`] has passed). Returns the waiting rows and the items to name with.
+    pub fn answer(
+        &mut self,
+        plugin: &str,
+        picker: &str,
+        now: std::time::Instant,
+        items: Option<Vec<PickItem>>,
+    ) -> (Vec<W>, std::rc::Rc<Vec<PickItem>>) {
+        let key = (plugin.to_string(), picker.to_string());
+        let items = std::rc::Rc::new(items.unwrap_or_default());
+        let waiters = match self.entries.insert(
+            key,
+            LabelEntry::Known {
+                at: now,
+                items: items.clone(),
+            },
+        ) {
+            Some(LabelEntry::Asking { waiters, .. }) => waiters,
+            _ => Vec::new(),
+        };
+        (waiters, items)
+    }
+}
+
 /// The entries in display order: the stored ids first (in their order; with `placeholders`, an id
 /// the list lacks as an entry labelled with itself), then the rest as listed. So the current value
 /// is always on screen and marked, whatever the cap on shown rows.
@@ -1186,6 +1284,75 @@ mod tests {
         );
         assert_eq!(group_names(&items), ids(&["Lights", "Switches"]));
         assert!(group_items(&[]).is_empty());
+    }
+
+    #[test]
+    fn rows_ask_for_labels_once_per_picker() {
+        use std::time::{Duration, Instant};
+        let item = |id: &str, label: &str| PickItem {
+            id: id.into(),
+            label: label.into(),
+            subtitle: None,
+            group: None,
+            icon: None,
+            state: None,
+        };
+        let t0 = Instant::now();
+        let mut cache = LabelCache::<u32>::default();
+        // The first row asks; the others of that picker wait; another picker asks on its own.
+        assert_eq!(cache.want("ha", "entities", t0, 1), Labels::Ask);
+        assert_eq!(cache.want("ha", "entities", t0, 2), Labels::Wait);
+        assert_eq!(cache.want("ha", "entities", t0, 3), Labels::Wait);
+        assert_eq!(cache.want("ha", "toggleable", t0, 4), Labels::Ask);
+        assert_eq!(cache.want("obs", "entities", t0, 5), Labels::Ask);
+        let answer = vec![item("light.kitchen", "Kitchen"), item("light.desk", "Desk")];
+        let (waiters, items) = cache.answer("ha", "entities", t0, Some(answer.clone()));
+        assert_eq!(waiters, [2, 3]);
+        assert_eq!(*items, answer);
+        // A row built soon after gets the answer at once; later it asks again.
+        let soon = t0 + Duration::from_secs(1);
+        assert_eq!(
+            cache.want("ha", "entities", soon, 6),
+            Labels::Known(std::rc::Rc::new(answer))
+        );
+        assert_eq!(cache.want("ha", "entities", t0 + LABELS_FRESH, 7), Labels::Ask);
+        // A question nobody answered is asked again after a while.
+        assert_eq!(cache.want("ha", "toggleable", soon, 8), Labels::Wait);
+        assert_eq!(
+            cache.want("ha", "toggleable", t0 + LABELS_ASK_AGAIN, 9),
+            Labels::Ask
+        );
+        // A failure: the waiting rows keep their ids, and the next rows don't ask at once.
+        let (waiters, items) = cache.answer("obs", "entities", t0, None);
+        assert!(waiters.is_empty());
+        assert!(items.is_empty());
+        assert_eq!(
+            cache.want("obs", "entities", soon, 10),
+            Labels::Known(std::rc::Rc::new(Vec::new()))
+        );
+    }
+
+    #[test]
+    fn an_item_row_shows_labels_once_known() {
+        let item = |id: &str, label: &str| PickItem {
+            id: id.into(),
+            label: label.into(),
+            subtitle: None,
+            group: None,
+            icon: None,
+            state: None,
+        };
+        let ids = vec!["light.kitchen".to_string(), "light.gone".to_string()];
+        // Built from the stored value: the ids.
+        assert_eq!(item_summary(&ids, &[]), "light.kitchen and light.gone");
+        // The answer names what it lists; an id it lacks stays as itself.
+        let known = [item("light.kitchen", "Kitchen"), item("light.desk", "Desk")];
+        assert_eq!(item_summary(&ids, &known), "Kitchen and light.gone");
+        assert_eq!(item_summary(&ids[..1], &known), "Kitchen");
+        // Only plugins that can list are asked, and only for a stored value.
+        assert!(wants_labels(&ids, "1.1"));
+        assert!(!wants_labels(&ids, "1.0"));
+        assert!(!wants_labels(&[], "1.1"));
     }
 
     #[test]
