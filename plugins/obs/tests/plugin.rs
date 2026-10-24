@@ -2,6 +2,7 @@
 use std::time::Duration;
 
 use serde_json::Value;
+use ulanzi_plugin::Item;
 use ulanzi_plugin::testing::Harness;
 use ulanzi_plugin::{Level, Payload, Socket, Status, Timer, json};
 use ulanzi_plugin_obs::Obs;
@@ -117,6 +118,21 @@ fn live_with(h: &mut Harness<Obs>, settings: Value, auth: bool) -> Socket {
                 "GetSceneItemList" => (true, json!({"sceneItems": []})),
                 "GetInputMute" if data["inputName"] == "Mic" => (true, json!({"inputMuted": true})),
                 "GetInputMute" => (false, json!({"comment": "not an audio input"})),
+                "GetSceneCollectionList" => (
+                    true,
+                    json!({"currentSceneCollectionName": "Main", "sceneCollections": ["Main", "Stream"]}),
+                ),
+                "GetProfileList" => (
+                    true,
+                    json!({"currentProfileName": "Default", "profiles": ["Default", "Quiet"]}),
+                ),
+                "GetSourceFilterList" if data["sourceName"] == "Cam" => (
+                    true,
+                    json!({"filters": [
+                        {"filterName": "Color", "filterEnabled": true, "filterIndex": 0},
+                        {"filterName": "Sharpen", "filterEnabled": false, "filterIndex": 1}]}),
+                ),
+                "GetSourceFilterList" => (true, json!({"filters": []})),
                 other => panic!("unexpected load request {other}"),
             };
             answer(h, s, &id, &ty, ok, body);
@@ -712,4 +728,365 @@ fn forget_password_clears_the_cached_one() {
     h.open(s);
     h.message(s, hello(true));
     assert!(status_msg(&h).1.starts_with("Password needed"));
+}
+
+// ---- pickers (contract 1.1) ----
+
+fn ids(items: &[Item]) -> Vec<&str> {
+    items.iter().map(|i| i.id.as_str()).collect()
+}
+
+fn count(h: &Harness<Obs>, s: Socket, ty: &str) -> usize {
+    sent_requests(h, s).iter().filter(|r| r.1 == ty).count()
+}
+
+#[test]
+fn pickers_list_what_obs_holds() {
+    let mut h = Harness::<Obs>::new();
+    live(&mut h);
+    assert_eq!(
+        h.list_items("scenes", "", ""),
+        Ok(vec![Item::new("A", "A").state("Live"), Item::new("B", "B")])
+    );
+    assert_eq!(
+        h.list_items("audio_inputs", "", ""),
+        Ok(vec![Item::new("Mic", "Mic").state("Muted")])
+    );
+    assert_eq!(
+        h.list_items("scene_sources", "", ""),
+        Ok(vec![Item::new("Cam", "Cam").subtitle("A").group("A")])
+    );
+    assert_eq!(h.list_items("sources", "", ""), Ok(vec![Item::new("Cam", "Cam")]));
+    assert_eq!(
+        h.list_items("filters", "", ""),
+        Ok(vec![
+            Item::new("Color", "Color").group("Cam").state("On"),
+            Item::new("Sharpen", "Sharpen").group("Cam").state("Off"),
+        ])
+    );
+    assert_eq!(
+        h.list_items("collections", "", ""),
+        Ok(vec![
+            Item::new("Main", "Main").state("Current"),
+            Item::new("Stream", "Stream")
+        ])
+    );
+    assert_eq!(
+        h.list_items("profiles", "", ""),
+        Ok(vec![
+            Item::new("Default", "Default").state("Current"),
+            Item::new("Quiet", "Quiet")
+        ])
+    );
+    assert!(h.list_items("nope", "", "").is_err());
+}
+
+#[test]
+fn scene_picker_marks_live_and_preview() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    event(
+        &mut h,
+        s,
+        "StudioModeStateChanged",
+        json!({"studioModeEnabled": true}),
+    );
+    event(&mut h, s, "CurrentPreviewSceneChanged", json!({"sceneName": "B"}));
+    assert_eq!(
+        h.list_items("scenes", "", ""),
+        Ok(vec![
+            Item::new("A", "A").state("Live"),
+            Item::new("B", "B").state("Preview")
+        ])
+    );
+    event(&mut h, s, "CurrentProgramSceneChanged", json!({"sceneName": "B"}));
+    let items = h.list_items("scenes", "", "").expect("a list");
+    assert_eq!(items[1].state.as_deref(), Some("Live"));
+}
+
+#[test]
+fn pickers_filter_by_query_and_group() {
+    let mut h = Harness::<Obs>::new();
+    live(&mut h);
+    assert_eq!(ids(&h.list_items("scenes", "b", "").expect("a list")), ["B"]);
+    assert_eq!(
+        ids(&h.list_items("filters", "SHARP", "").expect("a list")),
+        ["Sharpen"]
+    );
+    assert_eq!(
+        ids(&h.list_items("collections", "TREA", "").expect("a list")),
+        ["Stream"]
+    );
+    assert!(h.list_items("scenes", "zzz", "").expect("a list").is_empty());
+    assert_eq!(
+        ids(&h.list_items("scene_sources", "", "A").expect("a list")),
+        ["Cam"]
+    );
+    assert!(h.list_items("scene_sources", "", "B").expect("a list").is_empty());
+    assert_eq!(
+        ids(&h.list_items("filters", "", "Cam").expect("a list")),
+        ["Color", "Sharpen"]
+    );
+    assert!(h.list_items("filters", "", "Mic").expect("a list").is_empty());
+    // A group never matches part of a name, and plain lists have no groups.
+    assert!(h.list_items("filters", "", "Ca").expect("a list").is_empty());
+    assert!(h.list_items("scenes", "", "A").expect("a list").is_empty());
+}
+
+#[test]
+fn pickers_need_a_connection() {
+    let mut h = Harness::<Obs>::new();
+    let off = Err("Not connected to OBS".to_string());
+    assert_eq!(h.list_items("scenes", "", ""), off);
+    let s = live(&mut h);
+    assert!(h.list_items("scenes", "", "").is_ok());
+    h.lose_socket(s);
+    h.closed(s, "gone");
+    assert_eq!(h.list_items("scenes", "", ""), off);
+    assert_eq!(h.list_items("profiles", "", ""), off);
+}
+
+#[test]
+fn lists_not_loaded_yet_are_empty_not_an_error() {
+    let mut h = Harness::<Obs>::new();
+    h.init(settings()).expect("init");
+    let s = current(&h);
+    h.open(s);
+    h.message(s, hello(false));
+    h.message(
+        s,
+        Payload::Text(json!({"op": 2, "d": {"negotiatedRpcVersion": 1}}).to_string()),
+    );
+    for picker in [
+        "scenes",
+        "audio_inputs",
+        "scene_sources",
+        "sources",
+        "filters",
+        "collections",
+        "profiles",
+    ] {
+        assert_eq!(h.list_items(picker, "", ""), Ok(vec![]), "{picker}");
+    }
+}
+
+#[test]
+fn listing_sends_nothing_and_sets_no_state() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let (sent, states) = (sent_requests(&h, s).len(), h.states().clone());
+    for picker in [
+        "scenes",
+        "audio_inputs",
+        "scene_sources",
+        "sources",
+        "filters",
+        "collections",
+        "profiles",
+    ] {
+        let _ = h.list_items(picker, "x", "y");
+        let _ = h.list_items(picker, "", "");
+    }
+    assert_eq!(sent_requests(&h, s).len(), sent);
+    assert_eq!(h.states(), &states);
+    assert!(
+        h.states()
+            .keys()
+            .all(|k| !k.contains("filter") && !k.contains("profile") && !k.contains("collection")),
+        "{:?}",
+        h.states().keys()
+    );
+}
+
+#[test]
+fn filter_events_update_the_lists_in_place() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let before = sent_requests(&h, s).len();
+    event(
+        &mut h,
+        s,
+        "SourceFilterEnableStateChanged",
+        json!({"sourceName": "Cam", "filterName": "Sharpen", "filterEnabled": true}),
+    );
+    event(
+        &mut h,
+        s,
+        "SourceFilterNameChanged",
+        json!({"sourceName": "Cam", "oldFilterName": "Color", "filterName": "Tint"}),
+    );
+    let items = h.list_items("filters", "", "").expect("a list");
+    assert_eq!(
+        items,
+        vec![
+            Item::new("Tint", "Tint").group("Cam").state("On"),
+            Item::new("Sharpen", "Sharpen").group("Cam").state("On"),
+        ]
+    );
+    event(
+        &mut h,
+        s,
+        "SourceFilterRemoved",
+        json!({"sourceName": "Cam", "filterName": "Tint"}),
+    );
+    assert_eq!(
+        ids(&h.list_items("filters", "", "").expect("a list")),
+        ["Sharpen"]
+    );
+    assert_eq!(
+        sent_requests(&h, s).len(),
+        before,
+        "no request for in-place changes"
+    );
+}
+
+#[test]
+fn created_filters_are_fetched_once_per_tick() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let before = sent_requests(&h, s).len();
+    for i in 0..20 {
+        event(
+            &mut h,
+            s,
+            "SourceFilterCreated",
+            json!({"sourceName": "Cam", "filterName": format!("F{i}")}),
+        );
+    }
+    assert_eq!(sent_requests(&h, s).len(), before, "waits for the tick");
+    let t = tick(&h);
+    h.fire(t);
+    let new: Vec<_> = sent_requests(&h, s)[before..]
+        .iter()
+        .filter(|r| r.1 == "GetSourceFilterList")
+        .cloned()
+        .collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    assert_eq!(new[0].2, json!({"sourceName": "Cam"}));
+    answer(
+        &mut h,
+        s,
+        &new[0].0,
+        "GetSourceFilterList",
+        true,
+        json!({"filters": [{"filterName": "Only", "filterEnabled": true}]}),
+    );
+    assert_eq!(ids(&h.list_items("filters", "", "").expect("a list")), ["Only"]);
+}
+
+#[test]
+fn collection_and_profile_events_refresh_the_lists() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let before = sent_requests(&h, s).len();
+    for _ in 0..10 {
+        event(&mut h, s, "ProfileListChanged", json!({"profiles": ["Default"]}));
+        event(
+            &mut h,
+            s,
+            "SceneCollectionListChanged",
+            json!({"sceneCollections": []}),
+        );
+    }
+    event(
+        &mut h,
+        s,
+        "CurrentProfileChanged",
+        json!({"profileName": "Quiet"}),
+    );
+    event(
+        &mut h,
+        s,
+        "CurrentSceneCollectionChanged",
+        json!({"sceneCollectionName": "Stream"}),
+    );
+    assert_eq!(sent_requests(&h, s).len(), before, "waits for the tick");
+    let t = tick(&h);
+    h.fire(t);
+    assert_eq!(count(&h, s, "GetProfileList"), 2);
+    assert_eq!(count(&h, s, "GetSceneCollectionList"), 2);
+    let reqs = sent_requests(&h, s);
+    for (id, ty, _) in &reqs[before..] {
+        match ty.as_str() {
+            "GetProfileList" => answer(
+                &mut h,
+                s,
+                id,
+                ty,
+                true,
+                json!({"currentProfileName": "Quiet", "profiles": ["Default", "Quiet", "New"]}),
+            ),
+            "GetSceneCollectionList" => answer(
+                &mut h,
+                s,
+                id,
+                ty,
+                true,
+                json!({"currentSceneCollectionName": "Stream", "sceneCollections": ["Main", "Stream"]}),
+            ),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        h.list_items("profiles", "", ""),
+        Ok(vec![
+            Item::new("Default", "Default"),
+            Item::new("Quiet", "Quiet").state("Current"),
+            Item::new("New", "New"),
+        ])
+    );
+    assert_eq!(
+        h.list_items("collections", "", ""),
+        Ok(vec![
+            Item::new("Main", "Main"),
+            Item::new("Stream", "Stream").state("Current")
+        ])
+    );
+}
+
+#[test]
+fn filter_requests_are_bounded() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    event(&mut h, s, "SceneItemCreated", json!({"sceneName": "A"}));
+    let t = tick(&h);
+    h.fire(t);
+    let before = sent_requests(&h, s).len();
+    let reqs = sent_requests(&h, s);
+    let (id, ty, _) = reqs[before - 2].clone();
+    assert_eq!(ty, "GetSceneList");
+    answer(
+        &mut h,
+        s,
+        &id,
+        &ty,
+        true,
+        json!({"currentProgramSceneName": "A", "currentPreviewSceneName": null, "scenes": [{"sceneName": "A"}]}),
+    );
+    let (id, ty, _) = sent_requests(&h, s).pop().expect("scene items request");
+    assert_eq!(ty, "GetSceneItemList");
+    let items: Vec<Value> = (0..400)
+        .map(|i| json!({"sceneItemId": i, "sourceName": format!("S{i}"), "sceneItemEnabled": true}))
+        .collect();
+    answer(&mut h, s, &id, &ty, true, json!({ "sceneItems": items }));
+    let (mut total, mut max_open, mut answered) = (0, 0, before + 1);
+    loop {
+        let reqs = sent_requests(&h, s);
+        let fresh: Vec<_> = reqs[answered..]
+            .iter()
+            .filter(|r| r.1 == "GetSourceFilterList")
+            .cloned()
+            .collect();
+        answered = reqs.len();
+        if fresh.is_empty() {
+            break;
+        }
+        max_open = max_open.max(fresh.len());
+        total += fresh.len();
+        for (id, ty, _) in fresh {
+            answer(&mut h, s, &id, &ty, true, json!({"filters": []}));
+        }
+    }
+    assert!(max_open <= 25, "{max_open} in flight");
+    assert!((100..=200).contains(&total), "{total} sources asked");
 }

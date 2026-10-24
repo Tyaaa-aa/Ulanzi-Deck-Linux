@@ -90,11 +90,30 @@ action = "set_scene"
 params = { scene = "Gameplay" }
 ```
 
+## Pickers
+
+Action params that name something in OBS are picked from a list in the app instead of typed. The lists come
+from what the plugin already knows about OBS (nothing is asked of OBS when a list opens), so they need OBS to
+be connected: otherwise the picker says "Not connected to OBS" and you can still type a name.
+
+| Picker | Used by | Entries |
+|---|---|---|
+| `scenes` | `set_scene.scene`, `toggle_scenes.a` / `b`, `toggle_source.scene` | scenes; "Live" for the program scene, "Preview" for the preview scene |
+| `audio_inputs` | `toggle_mute.input`, `input_volume.input` | inputs that have audio; "Muted" when muted |
+| `scene_sources` | `toggle_source.source` | each source in each scene, grouped by scene |
+| `sources` | `toggle_filter.source` | every source that appears in a scene |
+| `filters` | `toggle_filter.filter` | filters, grouped by source; "On" or "Off" |
+| `collections` | `set_collection.name` | scene collections; "Current" for the active one |
+| `profiles` | `set_profile.name` | OBS profiles; "Current" for the active one |
+
+Searching matches part of a name, ignoring case. Filter lists are fetched for at most 200 sources (25
+requests at a time) and refresh when OBS reports a change. They use no state keys.
+
 ## Live state
 
 Use these in any key label as `{obs.<key>}`. Yes/no values are `yes` or `no`; times are `mm:ss` or
 `h:mm:ss`. When OBS is not connected the yes/no values are `no` and the names, times, stats, `mute.…` and
-`visible.…` values are empty (`last_error` keeps its last text).
+`visible.…` values are empty (`last_error` is empty too: going offline forgets it).
 
 | Key | Value |
 |---|---|
@@ -131,7 +150,7 @@ are skipped and values over 1 KiB are cut.
 | Profiles following scene or input renames | Plugins cannot edit profiles |
 | OBS's refusal as the key's error | An action returns before OBS answers: see `{obs.last_error}` and the log |
 | Wrong-password message | The host does not pass the close code, so a close during sign-in reads "OBS closed the connection during sign-in" |
-| Key colours and icons that follow state, scene and input pickers, the wide-screen widget, `ObsList`, D-Bus `ObsStatus` | Planned for later plugin milestones |
+| Key colours and icons that follow state, the wide-screen widget, `ObsList`, D-Bus `ObsStatus` | Planned for later plugin milestones |
 
 ## Tests
 

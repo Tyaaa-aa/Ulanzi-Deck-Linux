@@ -842,7 +842,7 @@ mod tests {
             for a in &manifest.actions {
                 let mut t = defaults(a);
                 for p in &a.params {
-                    if p.kind == FieldKind::Text && !t.contains_key(&p.key) {
+                    if matches!(p.kind, FieldKind::Text | FieldKind::Item) && !t.contains_key(&p.key) {
                         t.insert(
                             p.key.clone(),
                             toml::Value::String(

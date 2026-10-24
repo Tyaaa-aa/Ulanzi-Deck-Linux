@@ -63,6 +63,20 @@ fn obs_manifest_is_valid() {
     assert_eq!(m.name, "OBS Studio");
     assert!(m.background);
     assert_eq!(m.actions.len(), 22);
+    assert_eq!(m.contract, "1.1");
+    let pickers: Vec<_> = m.pickers.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(
+        pickers,
+        [
+            "scenes",
+            "audio_inputs",
+            "scene_sources",
+            "sources",
+            "filters",
+            "collections",
+            "profiles"
+        ]
+    );
     assert_eq!(m.permissions.network, ["127.0.0.1", "localhost"]);
 }
 
@@ -152,4 +166,63 @@ async fn obs_plugin_wrong_password_and_foreign_host() {
     let before = mock.connections();
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(mock.connections(), before, "no connection to a foreign host");
+}
+
+#[tokio::test]
+async fn obs_plugin_pickers_list_what_the_mock_holds() {
+    let mock = mock(Mode::Open).await;
+    let mut p = start(PACKAGE, MANIFEST, BTreeMap::new());
+    // Before the plugin is told to connect, the pickers say so.
+    assert_eq!(
+        p.list("scenes", "", "").await,
+        Err("Not connected to OBS".to_string())
+    );
+    p.send(Event::Init {
+        settings: json!({"host": "127.0.0.1", "port": mock.port}),
+    });
+    let mut seen = Seen::default();
+    assert!(
+        seen.wait(&mut p, |s| s.state("connected") == "yes"
+            && s.state("scene") == "A")
+            .await,
+        "connected"
+    );
+    // The filter and list answers may land just after the status; ask until they are in.
+    let mut filters = Vec::new();
+    for _ in 0..100 {
+        filters = p.list("filters", "", "").await.expect("filters");
+        if !filters.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let names: Vec<_> = filters
+        .iter()
+        .map(|i| (i.group.as_deref(), i.id.as_str(), i.state.as_deref()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            (Some("Cam"), "Color", Some("On")),
+            (Some("Cam"), "Sharpen", Some("Off"))
+        ]
+    );
+    let scenes = p.list("scenes", "", "").await.expect("scenes");
+    let scenes: Vec<_> = scenes
+        .iter()
+        .map(|i| (i.id.as_str(), i.state.as_deref()))
+        .collect();
+    assert_eq!(scenes, [("A", Some("Live")), ("B", None)]);
+    let profiles = p.list("profiles", "quie", "").await.expect("profiles");
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].id, "Quiet");
+    let collections = p.list("collections", "", "").await.expect("collections");
+    assert_eq!(collections[0].state.as_deref(), Some("Current"));
+    let mic = p.list("audio_inputs", "", "").await.expect("inputs");
+    assert_eq!(
+        (mic[0].id.as_str(), mic[0].state.as_deref()),
+        ("Mic", Some("Muted"))
+    );
+    let sources = p.list("scene_sources", "", "A").await.expect("sources");
+    assert_eq!(sources[0].group.as_deref(), Some("A"));
 }

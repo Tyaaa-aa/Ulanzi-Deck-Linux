@@ -123,6 +123,13 @@ pub struct Tracked {
     pub live: Live,
     /// (scene, item id) → (source name, enabled).
     pub items: BTreeMap<(String, i64), (String, bool)>,
+    /// Source name → its filters in OBS order, with whether each is on. Only for the pickers.
+    pub filters: BTreeMap<String, Vec<(String, bool)>>,
+    /// Scene collections and OBS profiles, and which is current. Only for the pickers.
+    pub collections: Vec<String>,
+    pub collection: String,
+    pub profiles: Vec<String>,
+    pub profile: String,
 }
 
 impl Tracked {
@@ -147,6 +154,10 @@ pub struct EventEffect {
     pub changed: bool,
     /// Scenes or items changed shape: fetch them again.
     pub reload: bool,
+    /// The scene collection or profile lists (or which is current) changed: fetch them again.
+    pub lists: bool,
+    /// The filters of this source changed in a way that needs a fresh look.
+    pub refilter: Option<String>,
     /// Recording or streaming started, paused, resumed or stopped.
     pub record: Option<OutputChange>,
     pub stream: Option<OutputChange>,
@@ -263,6 +274,9 @@ pub fn apply_event(t: &mut Tracked, ty: &str, d: &Value) -> EventEffect {
                 .into_iter()
                 .map(|((sc, id), v)| ((if sc == old { new.clone() } else { sc }, id), v))
                 .collect();
+            if let Some(list) = t.filters.remove(&old) {
+                t.filters.insert(new.clone(), list);
+            }
             t.sync_hidden();
         }
         "InputNameChanged" => {
@@ -278,16 +292,56 @@ pub fn apply_event(t: &mut Tracked, ty: &str, d: &Value) -> EventEffect {
                     *name = new.clone();
                 }
             }
+            if let Some(list) = t.filters.remove(&old) {
+                t.filters.insert(new.clone(), list);
+            }
             // A scene used as a source inside another scene is renamed by SceneNameChanged.
             t.sync_hidden();
         }
-        "SceneCreated"
-        | "SceneRemoved"
-        | "SceneItemCreated"
-        | "SceneItemRemoved"
-        | "SceneListChanged"
-        | "CurrentSceneCollectionChanged"
+        "SceneCreated" | "SceneRemoved" | "SceneItemCreated" | "SceneItemRemoved" | "SceneListChanged"
         | "InputCreated" => e.reload = true,
+        "CurrentSceneCollectionChanged" => {
+            // Another collection has other sources, so other filters.
+            t.filters.clear();
+            t.collection = s(d, "sceneCollectionName").into();
+            e.reload = true;
+            e.lists = true;
+        }
+        "CurrentProfileChanged" => {
+            t.profile = s(d, "profileName").into();
+            e.lists = true;
+            e.changed = false;
+        }
+        "SceneCollectionListChanged" | "ProfileListChanged" => {
+            e.lists = true;
+            e.changed = false;
+        }
+        "SourceFilterCreated" => {
+            e.refilter = Some(s(d, "sourceName").into());
+            e.changed = false;
+        }
+        "SourceFilterRemoved" => {
+            if let Some(list) = t.filters.get_mut(s(d, "sourceName")) {
+                list.retain(|(name, _)| name != s(d, "filterName"));
+            }
+            e.changed = false;
+        }
+        "SourceFilterNameChanged" => {
+            if let Some(list) = t.filters.get_mut(s(d, "sourceName")) {
+                for (name, _) in list.iter_mut().filter(|(n, _)| n == s(d, "oldFilterName")) {
+                    *name = s(d, "filterName").into();
+                }
+            }
+            e.changed = false;
+        }
+        "SourceFilterEnableStateChanged" => {
+            if let Some(list) = t.filters.get_mut(s(d, "sourceName")) {
+                for (_, on) in list.iter_mut().filter(|(n, _)| n == s(d, "filterName")) {
+                    *on = b(d, "filterEnabled");
+                }
+            }
+            e.changed = false;
+        }
         "InputRemoved" => {
             // Forget it at once; the reload (which refills `inputs` from scratch) confirms.
             let name = s(d, "inputName");

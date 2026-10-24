@@ -1,7 +1,7 @@
 id = "obs"
 name = "OBS Studio"
 version = "1.0.0"
-contract = "1.0"
+contract = "1.1"
 description = "Scenes, recording, streaming, replay buffer, virtual camera and audio, with live state on key labels."
 categories = ["streaming"]
 background = true
@@ -37,11 +37,41 @@ kind = "secret"
 label = "Password"
 help = "OBS: Tools → WebSocket Server Settings → Show Connect Info"
 
+[[pickers]]
+id = "scenes"
+style = "grid"
+
+[[pickers]]
+id = "audio_inputs"
+style = "list"
+
+[[pickers]]
+id = "scene_sources"
+style = "list"
+groups = true
+
+[[pickers]]
+id = "sources"
+style = "list"
+
+[[pickers]]
+id = "filters"
+style = "list"
+groups = true
+
+[[pickers]]
+id = "collections"
+style = "list"
+
+[[pickers]]
+id = "profiles"
+style = "list"
+
 [[actions]]
 id = "set_scene"
 name = "Switch scene"
 params = [
-  { key = "scene", kind = "text", label = "Scene" },
+  { key = "scene", kind = "item", picker = "scenes", label = "Scene" },
   { key = "preview", kind = "toggle", label = "Set the preview scene instead" },
 ]
 
@@ -49,16 +79,16 @@ params = [
 id = "toggle_scenes"
 name = "Toggle between two scenes"
 params = [
-  { key = "a", kind = "text", label = "First scene" },
-  { key = "b", kind = "text", label = "Second scene" },
+  { key = "a", kind = "item", picker = "scenes", label = "First scene" },
+  { key = "b", kind = "item", picker = "scenes", label = "Second scene" },
 ]
 
 [[actions]]
 id = "toggle_source"
 name = "Show or hide a source"
 params = [
-  { key = "scene", kind = "text", label = "Scene" },
-  { key = "source", kind = "text", label = "Source" },
+  { key = "scene", kind = "item", picker = "scenes", label = "Scene" },
+  { key = "source", kind = "item", picker = "scene_sources", label = "Scene / Source" },
 ]
 
 [[actions]]
@@ -105,14 +135,14 @@ name = "Toggle virtual camera"
 id = "toggle_mute"
 name = "Mute or unmute an input"
 params = [
-  { key = "input", kind = "text", label = "Audio input" },
+  { key = "input", kind = "item", picker = "audio_inputs", label = "Audio input" },
 ]
 
 [[actions]]
 id = "input_volume"
 name = "Change an input's volume"
 params = [
-  { key = "input", kind = "text", label = "Audio input" },
+  { key = "input", kind = "item", picker = "audio_inputs", label = "Audio input" },
   { key = "op", kind = "choice", label = "Change", choices = ["up", "down", "mute", "set"] },
   { key = "percent", kind = "number", label = "Volume (percent, for Set)", min = 0, max = 100 },
   { key = "step", kind = "number", label = "Step (dB)", min = 1, max = 20, default = 2 },
@@ -122,8 +152,8 @@ params = [
 id = "toggle_filter"
 name = "Turn a filter on or off"
 params = [
-  { key = "source", kind = "text", label = "Source" },
-  { key = "filter", kind = "text", label = "Filter" },
+  { key = "source", kind = "item", picker = "sources", label = "Source" },
+  { key = "filter", kind = "item", picker = "filters", label = "Filter" },
 ]
 
 [[actions]]
@@ -134,14 +164,14 @@ name = "Studio mode: transition"
 id = "set_collection"
 name = "Switch scene collection"
 params = [
-  { key = "name", kind = "text", label = "Scene collection" },
+  { key = "name", kind = "item", picker = "collections", label = "Scene collection" },
 ]
 
 [[actions]]
 id = "set_profile"
 name = "Switch OBS profile"
 params = [
-  { key = "name", kind = "text", label = "OBS profile" },
+  { key = "name", kind = "item", picker = "profiles", label = "OBS profile" },
 ]
 
 [[actions]]

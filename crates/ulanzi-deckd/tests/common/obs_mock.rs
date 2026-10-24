@@ -94,6 +94,24 @@ fn answer(ty: &str, data: &Value) -> (bool, Value, Option<&'static str>) {
             json!({"outputActive": false, "outputPaused": false, "outputDuration": 0}),
             None,
         ),
+        "GetSceneCollectionList" => (
+            true,
+            json!({"currentSceneCollectionName": "Main", "sceneCollections": ["Main", "Stream"]}),
+            None,
+        ),
+        "GetProfileList" => (
+            true,
+            json!({"currentProfileName": "Default", "profiles": ["Default", "Quiet"]}),
+            None,
+        ),
+        "GetSourceFilterList" if data["sourceName"] == "Cam" => (
+            true,
+            json!({"filters": [
+                {"filterName": "Color", "filterEnabled": true, "filterIndex": 0},
+                {"filterName": "Sharpen", "filterEnabled": false, "filterIndex": 1}]}),
+            None,
+        ),
+        "GetSourceFilterList" => (true, json!({"filters": []}), None),
         "GetStudioModeEnabled" => (true, json!({"studioModeEnabled": false}), None),
         "GetInputVolume" => (true, json!({"inputVolumeDb": -1.0, "inputVolumeMul": 0.89}), None),
         "GetStats" => (true, json!({"cpuUsage": 1.0, "activeFps": 30.0}), None),

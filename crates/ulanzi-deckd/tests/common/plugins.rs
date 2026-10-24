@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
-use ulanzi_core::plugin::Manifest;
+use ulanzi_core::plugin::{Manifest, PickItem};
 use ulanzi_deckd::plugins::{Event, Exit, InstanceHandle, Output, PluginEngine, spawn_instance};
 
 /// Generous bound for anything that should happen "promptly"; tests never sleep unbounded.
@@ -135,6 +135,21 @@ impl Running {
         tokio::time::timeout(PROMPTLY, rx)
             .await
             .expect("action reply in time")
+            .expect("reply sent")
+    }
+
+    /// Ask for a picker's entries, as the host does when a picker opens.
+    pub async fn list(&self, picker: &str, query: &str, group: &str) -> Result<Vec<PickItem>, String> {
+        let (reply, rx) = oneshot::channel();
+        self.send(Event::ListItems {
+            picker: picker.into(),
+            query: query.into(),
+            group: group.into(),
+            reply,
+        });
+        tokio::time::timeout(PROMPTLY, rx)
+            .await
+            .expect("list reply in time")
             .expect("reply sent")
     }
 

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use ulanzi_plugin::{Cx, Level, Payload, Plugin, Socket, Status, Timer};
+use ulanzi_plugin::{Cx, Item, Level, Payload, Plugin, Socket, Status, Timer};
 
 use crate::actions::{ObsAction, Plan, VolumeOp, parse_action, plan, volume_db};
 use crate::protocol::{
@@ -29,6 +29,10 @@ const PENDING_TICKS: u64 = 5;
 const HOST_STATE_KEYS: usize = 256;
 const HOST_KEY_BYTES: usize = 256;
 const HOST_VALUE_BYTES: usize = 1024;
+/// Filter lists are fetched for at most this many sources, and at most this many requests wait
+/// for OBS at once, so a big collection or an event burst cannot flood the host's event queue.
+const MAX_FILTER_SOURCES: usize = 200;
+const FILTERS_IN_FLIGHT: usize = 25;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Config {
@@ -142,6 +146,10 @@ pub struct Obs {
     key_size_warned: bool,
     /// A scene, item or input event changed the shape; reload at the next tick, once.
     reload_wanted: bool,
+    /// The collection or profile lists changed; fetch them at the next tick, once.
+    lists_wanted: bool,
+    /// Sources whose filter lists are still to be asked for.
+    filter_todo: BTreeSet<String>,
     status: Option<(Status, String)>,
 }
 
@@ -171,6 +179,8 @@ impl Default for Obs {
             key_cap_warned: false,
             key_size_warned: false,
             reload_wanted: false,
+            lists_wanted: false,
+            filter_todo: BTreeSet::new(),
             status: None,
         }
     }
@@ -195,6 +205,16 @@ fn str_of(v: &Value, k: &str) -> String {
 /// Without these two answers the plugin knows nothing useful about OBS.
 fn is_essential(ty: &str) -> bool {
     matches!(ty, "GetVersion" | "GetSceneList")
+}
+
+fn strings_of(v: &Value, k: &str) -> Vec<String> {
+    v.get(k)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
 }
 
 fn bool_of(v: &Value, k: &str) -> bool {
@@ -225,6 +245,79 @@ fn parse_settings(settings: &Value) -> Result<(String, u16, Option<String>), Str
         .filter(|p| !p.is_empty())
         .map(str::to_string);
     Ok((host, port, password))
+}
+
+/// Mark the current one of a list of names.
+fn current_of(names: &[String], current: &str) -> Vec<Item> {
+    names
+        .iter()
+        .map(|n| {
+            let item = Item::new(n, n);
+            if n == current { item.state("Current") } else { item }
+        })
+        .collect()
+}
+
+/// Every entry of picker `picker`, from what the plugin already knows (nothing is asked of OBS).
+fn picker_items(t: &Tracked, picker: &str) -> Result<Vec<Item>, String> {
+    let live = &t.live;
+    let sources_in_scenes: BTreeSet<&String> = live.sources.iter().map(|(_, source)| source).collect();
+    Ok(match picker {
+        "scenes" => live
+            .scenes
+            .iter()
+            .map(|n| {
+                let item = Item::new(n, n);
+                if *n == live.program {
+                    item.state("Live")
+                } else if live.preview.as_ref() == Some(n) {
+                    item.state("Preview")
+                } else {
+                    item
+                }
+            })
+            .collect(),
+        "audio_inputs" => live
+            .inputs
+            .iter()
+            .chain(live.muted.iter())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|n| {
+                let item = Item::new(n, n);
+                if live.muted.contains(n) {
+                    item.state("Muted")
+                } else {
+                    item
+                }
+            })
+            .collect(),
+        "scene_sources" => live
+            .scenes
+            .iter()
+            .flat_map(|scene| {
+                live.sources
+                    .iter()
+                    .filter(move |(sc, _)| sc == scene)
+                    .map(move |(sc, source)| Item::new(source, source).subtitle(sc).group(sc))
+            })
+            .collect(),
+        "sources" => sources_in_scenes.into_iter().map(|n| Item::new(n, n)).collect(),
+        "filters" => sources_in_scenes
+            .into_iter()
+            .filter_map(|source| t.filters.get(source).map(|list| (source, list)))
+            .flat_map(|(source, list)| {
+                list.iter().map(move |(name, on)| {
+                    Item::new(name, name)
+                        .group(source)
+                        .state(if *on { "On" } else { "Off" })
+                })
+            })
+            .collect(),
+        "collections" => current_of(&t.collections, &t.collection),
+        "profiles" => current_of(&t.profiles, &t.profile),
+        other => return Err(format!("OBS has no picker \"{other}\"")),
+    })
 }
 
 impl Obs {
@@ -282,6 +375,8 @@ impl Obs {
         self.preview_name.clear();
         self.cap_warned = false;
         self.reload_wanted = false;
+        self.lists_wanted = false;
+        self.filter_todo.clear();
         self.publish(cx);
     }
 
@@ -441,8 +536,69 @@ impl Obs {
             "GetReplayBufferStatus",
             "GetVirtualCamStatus",
             "GetInputList",
+            "GetSceneCollectionList",
+            "GetProfileList",
         ] {
             let _ = self.send_request(cx, ty, json!({}), Kind::Load { generation }, "");
+        }
+    }
+
+    fn reload_lists(&mut self, cx: &mut Cx) {
+        let generation = self.generation;
+        for ty in ["GetSceneCollectionList", "GetProfileList"] {
+            let _ = self.send_request(cx, ty, json!({}), Kind::Load { generation }, "");
+        }
+    }
+
+    /// Ask for the filters of every source in a scene that has none yet, within the caps. Entries
+    /// of sources that left the scenes stay (a reload rebuilds the scenes one answer at a time);
+    /// the pickers skip them and a collection change drops them.
+    fn queue_filters(&mut self) {
+        let live = &self.tracked.live;
+        let names: BTreeSet<&String> = live.sources.iter().map(|(_, source)| source).collect();
+        for source in names {
+            if self.tracked.filters.len() + self.filter_todo.len() >= MAX_FILTER_SOURCES {
+                break;
+            }
+            if !self.tracked.filters.contains_key(source) {
+                self.filter_todo.insert(source.clone());
+            }
+        }
+    }
+
+    /// Send queued filter requests while fewer than [`FILTERS_IN_FLIGHT`] wait for an answer.
+    fn pump_filters(&mut self, cx: &mut Cx) {
+        let generation = self.generation;
+        let mut open = self
+            .pending
+            .values()
+            .filter(|p| p.ty == "GetSourceFilterList")
+            .count();
+        while open < FILTERS_IN_FLIGHT && matches!(self.phase, Phase::Live(_)) {
+            let Some(source) = self.filter_todo.pop_first() else {
+                break;
+            };
+            if self
+                .pending
+                .values()
+                .any(|p| p.ty == "GetSourceFilterList" && p.arg == source)
+            {
+                continue;
+            }
+            let data = json!({"sourceName": source});
+            if self
+                .send_request(
+                    cx,
+                    "GetSourceFilterList",
+                    data,
+                    Kind::Load { generation },
+                    &source,
+                )
+                .is_err()
+            {
+                break;
+            }
+            open += 1;
         }
     }
 
@@ -518,6 +674,15 @@ impl Obs {
         if e.reload {
             self.reload_wanted = true;
         }
+        if e.lists {
+            self.lists_wanted = true;
+        }
+        if let Some(source) = e.refilter
+            && self.tracked.live.sources.iter().any(|(_, name)| *name == source)
+            && self.filter_todo.len() < MAX_FILTER_SOURCES
+        {
+            self.filter_todo.insert(source);
+        }
         if e.changed || e.reload {
             self.update_ok_status(cx);
             self.publish(cx);
@@ -539,7 +704,13 @@ impl Obs {
                     } else if is_essential(&p.ty) {
                         cx.log(Level::Warn, &format!("OBS refused {}", p.ty));
                         self.go_down(cx, Down::Dropped, true);
+                    } else if p.ty == "GetSourceFilterList" {
+                        // Remember "none" so the source is not asked about again and again.
+                        self.tracked.filters.entry(p.arg.clone()).or_default();
                     }
+                }
+                if p.ty == "GetSourceFilterList" {
+                    self.pump_filters(cx);
                 }
             }
             Kind::Action | Kind::VolumeRead { .. } | Kind::FilterRead { .. } => {
@@ -697,6 +868,24 @@ impl Obs {
                     self.tracked.live.muted.remove(&p.arg);
                 }
             }
+            "GetSceneCollectionList" => {
+                self.tracked.collection = str_of(v, "currentSceneCollectionName");
+                self.tracked.collections = strings_of(v, "sceneCollections");
+            }
+            "GetProfileList" => {
+                self.tracked.profile = str_of(v, "currentProfileName");
+                self.tracked.profiles = strings_of(v, "profiles");
+            }
+            "GetSourceFilterList" => {
+                let filters = v
+                    .get("filters")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .map(|f| (str_of(f, "filterName"), bool_of(f, "filterEnabled")))
+                    .collect();
+                self.tracked.filters.insert(p.arg.clone(), filters);
+            }
             "GetSceneItemList" => {
                 for item in v
                     .get("sceneItems")
@@ -711,6 +900,8 @@ impl Obs {
                     );
                 }
                 self.tracked.sync_hidden();
+                self.queue_filters();
+                self.pump_filters(cx);
             }
             _ => {}
         }
@@ -729,6 +920,10 @@ impl Obs {
             if !matches!(self.phase, Phase::Live(_)) {
                 return;
             }
+        }
+        if self.lists_wanted {
+            self.lists_wanted = false;
+            self.reload_lists(cx);
         }
         let stale: Vec<String> = self
             .pending
@@ -756,6 +951,7 @@ impl Obs {
             self.go_down(cx, Down::Dropped, true);
             return;
         }
+        self.pump_filters(cx);
         if ticks.is_multiple_of(2) {
             let _ = self.send_request(cx, "GetStats", json!({}), Kind::Stats, "");
         }
@@ -834,6 +1030,29 @@ impl Plugin for Obs {
             }
         }
         Ok(())
+    }
+
+    fn list_items(
+        &mut self,
+        _cx: &mut Cx,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<Item>, String> {
+        if !matches!(self.phase, Phase::Live(_)) {
+            return Err("Not connected to OBS".to_string());
+        }
+        let items = picker_items(&self.tracked, picker)?;
+        let query = query.to_lowercase();
+        Ok(items
+            .into_iter()
+            .filter(|i| {
+                (query.is_empty()
+                    || i.label.to_lowercase().contains(&query)
+                    || i.id.to_lowercase().contains(&query))
+                    && (group.is_empty() || i.group.as_deref() == Some(group))
+            })
+            .collect())
     }
 
     fn opened(&mut self, _cx: &mut Cx, socket: Socket) {
