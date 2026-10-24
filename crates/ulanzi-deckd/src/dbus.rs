@@ -194,9 +194,10 @@ fn plugin_err(e: PluginError) -> DeckError {
     let msg = e.to_string();
     match e {
         PluginError::NotInstalled(_) => DeckError::NotFound(msg),
-        PluginError::Manifest(_) | PluginError::Load(_) | PluginError::Permission(_) => {
-            DeckError::Invalid(msg)
-        }
+        PluginError::Manifest(_)
+        | PluginError::Load(_)
+        | PluginError::Permission(_)
+        | PluginError::Invalid(_) => DeckError::Invalid(msg),
         PluginError::Off(_) | PluginError::Failed(_) | PluginError::Action(_) | PluginError::Io(_) => {
             DeckError::Unavailable(msg)
         }

@@ -8,7 +8,7 @@ mod net;
 mod secrets;
 mod supervisor;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -53,6 +53,9 @@ pub enum PluginError {
     Action(String),
     #[error("{0}")]
     Io(String),
+    /// A request the plugin's manifest does not allow (for example an undeclared secret).
+    #[error("{0}")]
+    Invalid(String),
 }
 
 /// Where an installed plugin stands.
@@ -157,6 +160,29 @@ impl PluginHost {
     /// Install (or replace) the plugin in folder `src`; returns its id. Only in developer mode.
     pub async fn install_dir(&self, src: &Path, developer_mode: bool) -> Result<String, PluginError> {
         self.inner.install_dir(src, developer_mode).await
+    }
+
+    /// The manifests of the loaded plugins (folders that cannot be loaded have none).
+    pub fn manifests(&self) -> BTreeMap<String, ulanzi_core::plugin::Manifest> {
+        self.inner.manifests()
+    }
+
+    /// Check the plugin folder `src` like an install would (compiling it), writing nothing;
+    /// works without Developer mode.
+    pub async fn inspect_dir(&self, src: &Path) -> Result<ulanzi_core::plugin::Inspected, PluginError> {
+        self.inner.inspect_dir(src).await
+    }
+
+    /// The declared secret keys of `id` that are set, in the secret store or (older plugins) in
+    /// its settings.
+    pub async fn secret_keys(&self, id: &str) -> Result<Vec<String>, PluginError> {
+        self.inner.secret_keys(id).await
+    }
+
+    /// Set (or, with `None` or an empty value, clear) a declared secret of `id`, restarting
+    /// the plugin when it was starting or running so it sees the new value.
+    pub async fn set_secret(&self, id: &str, key: &str, value: Option<String>) -> Result<(), PluginError> {
+        self.inner.set_secret(id, key, value).await
     }
 
     /// Stop the plugin and delete its folder and secrets. Its settings are kept.

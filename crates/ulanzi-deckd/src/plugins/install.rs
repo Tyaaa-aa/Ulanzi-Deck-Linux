@@ -6,6 +6,8 @@ use std::io;
 use std::path::Path;
 
 use super::supervisor::{Host, read_manifest, stop_run};
+use ulanzi_core::plugin::Inspected;
+
 use super::{LoadedPlugin, PluginEngine, PluginError};
 
 const DEVELOPER_ONLY: &str = "Turn on Developer mode to install plugins from a folder";
@@ -123,6 +125,18 @@ fn swap_in(dir: &Path, id: &str) -> Result<(), PluginError> {
 }
 
 impl Host {
+    /// [`validate`] a folder without installing it or checking Developer mode.
+    pub(super) async fn inspect_dir(&self, src: &Path) -> Result<Inspected, PluginError> {
+        let engine = self.engine.clone().map_err(PluginError::Load)?;
+        let src = src.to_path_buf();
+        let loaded = blocking(move || validate(&src, &engine)).await?;
+        let installed_version = self.installed_version(&loaded.manifest.id);
+        Ok(Inspected {
+            manifest: loaded.manifest.clone(),
+            installed_version,
+        })
+    }
+
     pub(super) async fn install_dir(&self, src: &Path, developer_mode: bool) -> Result<String, PluginError> {
         if !developer_mode {
             return Err(PluginError::Permission(DEVELOPER_ONLY.into()));

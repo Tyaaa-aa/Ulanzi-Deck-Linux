@@ -7,6 +7,15 @@ description = "Host test plugin: exercises every host function and misbehaves on
 [permissions]
 network = ["127.0.0.1"]
 
+[[settings]]
+key = "password"
+kind = "secret"
+label = "Password"
+
+[[settings]]
+key = "greeting"
+kind = "text"
+
 [[actions]]
 id = "state"
 name = "Set state"

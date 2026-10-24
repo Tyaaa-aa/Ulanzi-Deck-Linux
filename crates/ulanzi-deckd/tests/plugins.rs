@@ -1475,3 +1475,164 @@ async fn a_start_that_panics_is_not_starting_forever() {
         .await
         .expect("shutdown in time");
 }
+
+// ---- Plugin host: manifests, folder inspection, secret writes ----
+
+fn probe_folder(dir: &std::path::Path) {
+    plugin_folder(dir, "probe", PROBE_MANIFEST, Some(PROBE_PACKAGE));
+}
+
+#[tokio::test]
+async fn manifests_list_loaded_plugins_only() {
+    let setup = |dir: &std::path::Path| {
+        probe_folder(dir);
+        plugin_folder(dir, "broken", PROBE_MANIFEST, None);
+    };
+    let h = host_with(setup, &Settings::default(), &[], mem_secrets()).await;
+    let manifests = h.host.manifests();
+    assert_eq!(manifests.keys().collect::<Vec<_>>(), ["probe"]);
+    assert_eq!(manifests["probe"].secret_keys(), ["password"]);
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn inspect_dir_reads_without_installing() {
+    let h = host_with(|_| {}, &Settings::default(), &[], mem_secrets()).await;
+    let src = common::plugins::fixture(PROBE_PACKAGE, PROBE_MANIFEST);
+    let inspected = h.host.inspect_dir(src.path()).await.expect("inspects");
+    assert_eq!(inspected.manifest.id, "probe");
+    assert_eq!(inspected.installed_version, None);
+    assert!(!h.dir.path().join("probe").exists());
+    assert!(h.status("probe").is_none());
+
+    assert_eq!(
+        h.host.install_dir(src.path(), true).await,
+        Ok("probe".to_string())
+    );
+    let inspected = h.host.inspect_dir(src.path()).await.expect("inspects again");
+    assert_eq!(inspected.installed_version.as_deref(), Some("1.0.0"));
+
+    std::fs::write(src.path().join("plugin.wasm"), b"").expect("empty wasm");
+    let err = h.host.inspect_dir(src.path()).await.expect_err("refused");
+    assert!(matches!(err, PluginError::Load(_)), "{err:?}");
+    h.host.shutdown().await;
+}
+
+/// A host with the probe running and a handle on the secrets it uses.
+async fn probe_with_secrets(settings: &Settings, used: &[&str]) -> (Host, Arc<MemSecrets>) {
+    let secrets = Arc::new(MemSecrets::default());
+    let h = host_with(probe_folder, settings, used, secrets.clone()).await;
+    (h, secrets)
+}
+
+fn stored(secrets: &MemSecrets, plugin: &str) -> BTreeMap<String, String> {
+    let all = secrets.0.lock().unwrap_or_else(|e| e.into_inner());
+    all.get(plugin).cloned().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn set_secret_restarts_with_the_new_value() {
+    let (mut h, _) = probe_with_secrets(&Settings::default(), &["probe"]).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    assert_eq!(h.host.secret_keys("probe").await, Ok(vec![]));
+
+    assert_eq!(
+        h.host
+            .set_secret("probe", "password", Some("s3cret".into()))
+            .await,
+        Ok(())
+    );
+    let get = json!({"k": "password"});
+    assert_eq!(h.host.action("probe", "secret_get", get.clone()).await, Ok(()));
+    assert!(h.saw_state("probe", "secret", "s3cret").await);
+    assert_eq!(
+        h.host.secret_keys("probe").await,
+        Ok(vec!["password".to_string()])
+    );
+
+    assert_eq!(h.host.set_secret("probe", "password", None).await, Ok(()));
+    assert_eq!(h.host.action("probe", "secret_get", get).await, Ok(()));
+    assert!(h.saw_state("probe", "secret", "none").await);
+    assert_eq!(h.host.secret_keys("probe").await, Ok(vec![]));
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_secret_keeps_other_secrets() {
+    let (mut h, _) = probe_with_secrets(&Settings::default(), &["probe"]).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    let kv = json!({"k": "k", "v": "v"});
+    assert_eq!(h.host.action("probe", "secret_set", kv).await, Ok(()));
+    assert_eq!(
+        h.host
+            .set_secret("probe", "password", Some("s3cret".into()))
+            .await,
+        Ok(())
+    );
+    let get = json!({"k": "k"});
+    assert_eq!(h.host.action("probe", "secret_get", get).await, Ok(()));
+    assert!(h.saw_state("probe", "secret", "v").await);
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_secret_does_not_start_an_off_plugin() {
+    let mut settings = Settings::default();
+    settings.plugins.insert(
+        "probe".into(),
+        PluginEntry {
+            enabled: false,
+            ..PluginEntry::default()
+        },
+    );
+    let (h, secrets) = probe_with_secrets(&settings, &["probe"]).await;
+    assert_eq!(h.status("probe"), Some(PluginStatus::Off));
+    assert_eq!(
+        h.host
+            .set_secret("probe", "password", Some("s3cret".into()))
+            .await,
+        Ok(())
+    );
+    assert_eq!(h.status("probe"), Some(PluginStatus::Off));
+    assert_eq!(
+        stored(&secrets, "probe").get("password").map(String::as_str),
+        Some("s3cret")
+    );
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn set_secret_refuses_undeclared_keys() {
+    let (h, secrets) = probe_with_secrets(&Settings::default(), &[]).await;
+    assert_eq!(
+        h.host.set_secret("probe", "other", Some("x".into())).await,
+        Err(PluginError::Invalid("Probe has no secret setting “other”".into()))
+    );
+    assert_eq!(
+        h.host.set_secret("nope", "password", Some("x".into())).await,
+        Err(PluginError::NotInstalled("nope".into()))
+    );
+    assert!(stored(&secrets, "probe").is_empty());
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn secret_keys_see_the_settings_copy() {
+    let mut settings = Settings::default();
+    let mut table = toml::Table::new();
+    table.insert("password".into(), toml::Value::String("x".into()));
+    table.insert("greeting".into(), toml::Value::String("hi".into()));
+    settings.plugins.insert(
+        "probe".into(),
+        PluginEntry {
+            settings: table,
+            ..PluginEntry::default()
+        },
+    );
+    let (h, _) = probe_with_secrets(&settings, &[]).await;
+    assert_eq!(
+        h.host.secret_keys("probe").await,
+        Ok(vec!["password".to_string()])
+    );
+    h.host.shutdown().await;
+}

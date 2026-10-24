@@ -360,6 +360,125 @@ impl Host {
             .collect()
     }
 
+    pub(super) fn manifests(&self) -> BTreeMap<String, Manifest> {
+        self.state()
+            .plugins
+            .iter()
+            .filter_map(|(id, e)| Some((id.clone(), e.loaded.as_ref()?.manifest.clone())))
+            .collect()
+    }
+
+    /// The version of the installed plugin `id`, if it is listed with one.
+    pub(super) fn installed_version(&self, id: &str) -> Option<String> {
+        let st = self.state();
+        st.plugins
+            .get(id)
+            .map(|e| e.version.clone())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// The manifest and settings table of `id`, or why it has none.
+    fn manifest_of(&self, id: &str) -> Result<(Manifest, toml::Table), PluginError> {
+        let st = self.state();
+        let e = st
+            .plugins
+            .get(id)
+            .ok_or_else(|| PluginError::NotInstalled(id.to_string()))?;
+        match &e.loaded {
+            Some(loaded) => Ok((loaded.manifest.clone(), e.settings.clone())),
+            None => Err(PluginError::Load(e.status.detail())),
+        }
+    }
+
+    pub(super) async fn secret_keys(&self, id: &str) -> Result<Vec<String>, PluginError> {
+        let (manifest, settings) = self.manifest_of(id)?;
+        let stored = self
+            .secrets
+            .load(id)
+            .await
+            .map_err(|why| PluginError::Io(format!("cannot read the secrets: {why}")))?;
+        Ok(manifest
+            .secret_keys()
+            .into_iter()
+            .filter(|k| {
+                stored.get(*k).is_some_and(|v| !v.is_empty())
+                    || settings
+                        .get(*k)
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|v| !v.is_empty())
+            })
+            .map(str::to_string)
+            .collect())
+    }
+
+    pub(super) async fn set_secret(
+        &self,
+        id: &str,
+        key: &str,
+        value: Option<String>,
+    ) -> Result<(), PluginError> {
+        let _ops = self.ops.lock().await;
+        let (run, relaunch) = {
+            let mut st = self.state();
+            let e = st
+                .plugins
+                .get_mut(id)
+                .ok_or_else(|| PluginError::NotInstalled(id.to_string()))?;
+            let Some(loaded) = &e.loaded else {
+                return Err(PluginError::Load(e.status.detail()));
+            };
+            if !loaded.manifest.secret_keys().contains(&key) {
+                return Err(PluginError::Invalid(format!(
+                    "{} has no secret setting “{key}”",
+                    e.name
+                )));
+            }
+            let relaunch = e.enabled
+                && matches!(
+                    e.status,
+                    PluginStatus::Starting | PluginStatus::Running | PluginStatus::Problem(_)
+                );
+            let run = Self::take_run(e);
+            if relaunch {
+                // Actions wait (briefly) for the new instance instead of starting another.
+                e.status = PluginStatus::Starting;
+                self.bump();
+            }
+            (run, relaunch)
+        };
+        if let Some(run) = run {
+            // The instance's own last secrets are saved while it ends.
+            stop_run(run).await;
+        }
+        let saved = async {
+            let mut secrets = self
+                .secrets
+                .load(id)
+                .await
+                .map_err(|why| PluginError::Io(format!("cannot save the secret: {why}")))?;
+            match value.filter(|v| !v.is_empty()) {
+                Some(v) => secrets.insert(key.to_string(), v),
+                None => secrets.remove(key),
+            };
+            self.secrets
+                .save(id, &secrets)
+                .await
+                .map_err(|why| PluginError::Io(format!("cannot save the secret: {why}")))
+        }
+        .await;
+        if relaunch {
+            let mut st = self.state();
+            if !st.closed
+                && let Some(e) = st.plugins.get_mut(id)
+                && e.enabled
+            {
+                e.last_crash = None;
+                self.launch(id, e);
+            }
+        }
+        saved
+    }
+
     pub(super) fn watch(&self) -> watch::Receiver<u64> {
         self.changed.subscribe()
     }
