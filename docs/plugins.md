@@ -15,6 +15,7 @@ only what its manifest asks for and you allow. For how the rest of the app is bu
 [Secrets](#secrets) ·
 [Building and installing](#building-and-installing) ·
 [Example: hello](#example-hello) ·
+[The OBS Studio plugin](#the-obs-studio-plugin) ·
 [Managing plugins](#managing-plugins) ·
 [Later contract versions](#later-contract-versions)
 
@@ -324,6 +325,24 @@ Walk-through:
    the user sees as the key's error.
 4. Its test ([`tests/hello.rs`](../examples/plugins/hello/tests/hello.rs)) uses the `Harness` and runs
    with `cargo test -p ulanzi-plugin-hello`.
+
+## The OBS Studio plugin
+
+[`plugins/obs`](../plugins/obs/README.md) is a larger, real-world plugin: the OBS integration as a sandboxed
+plugin. It shows what the small hello example leaves out:
+
+- A WebSocket client (`network = ["127.0.0.1", "localhost"]`) that signs in with obs-websocket 5 and
+  never blocks: every handler sends and returns, answers arrive as events.
+- The password in the secret store. The user enters it once under `[plugins.obs.settings]`; `init` moves
+  it into the keyring and warns until the line is deleted.
+- Reconnect with timers (1 s, doubling to 10 s) and `background = true`, so labels stay live without a
+  key press. Events from an old socket are ignored.
+- Live labels: 16 fixed keys such as `{obs.scene}` and `{obs.rec_time}` plus `{obs.mute.<input>}`, all
+  set back to empty when the connection drops.
+
+Its tests ([`plugins/obs/tests/plugin.rs`](../plugins/obs/tests/plugin.rs)) are a model for `Harness` tests of a
+plugin with a network connection: they open and close sockets, deliver messages and fire timers by hand,
+with no real OBS and no waiting.
 
 ## Managing plugins
 
