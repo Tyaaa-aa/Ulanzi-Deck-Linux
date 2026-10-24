@@ -1,6 +1,7 @@
 //! The session-bus API (`io.github.tyaaa_aa.UlanziDeck1`) used by the GUI and `ulanzictl`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -46,6 +47,8 @@ pub struct DeckService {
     obs: Option<crate::obs::ObsHandle>,
     obs_probe: crate::obs::client::ProbeFn,
     plugins: Option<PluginHost>,
+    /// Where plugins are installed, to know their secret settings before the host is up.
+    plugins_dir: Option<PathBuf>,
 }
 
 impl DeckService {
@@ -58,6 +61,7 @@ impl DeckService {
             obs: None,
             obs_probe: crate::obs::system_probe(),
             plugins: None,
+            plugins_dir: None,
         }
     }
 
@@ -71,6 +75,75 @@ impl DeckService {
     /// the deck has started).
     pub fn set_plugins(&mut self, host: PluginHost) {
         self.plugins = Some(host);
+    }
+
+    /// The folder plugins are installed in (read for `plugin.toml` files before the host is up).
+    pub fn with_plugins_dir(mut self, dir: PathBuf) -> DeckService {
+        self.plugins_dir = Some(dir);
+        self
+    }
+
+    /// Secret setting keys by plugin id: from the `plugin.toml` files on disk (unparsable ones
+    /// skipped), merged with the host's manifests once it is ready.
+    fn secret_fields(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        if let Some(dir) = &self.plugins_dir
+            && let Ok(entries) = std::fs::read_dir(dir)
+        {
+            for e in entries.flatten() {
+                let Ok(text) = std::fs::read_to_string(e.path().join("plugin.toml")) else {
+                    continue;
+                };
+                let Ok(m) = ulanzi_core::plugin::Manifest::parse(&text) else {
+                    continue;
+                };
+                let keys: BTreeSet<String> = m.secret_keys().into_iter().map(String::from).collect();
+                out.entry(m.id).or_default().extend(keys);
+            }
+        }
+        if let Some(host) = &self.plugins {
+            for (id, m) in host.manifests() {
+                let keys: BTreeSet<String> = m.secret_keys().into_iter().map(String::from).collect();
+                out.entry(id).or_default().extend(keys);
+            }
+        }
+        out
+    }
+
+    /// Set or clear a plugin secret: the copy in `settings.toml` goes first, then the store.
+    async fn write_secret(
+        &self,
+        id: String,
+        key: String,
+        value: Option<String>,
+        emitter: &SignalEmitter<'_>,
+    ) -> Result<()> {
+        let host = self.plugins()?;
+        let declared = self.secret_fields().get(&id).is_some_and(|k| k.contains(&key));
+        let mut changed = None;
+        if declared {
+            let mut s = self
+                .store
+                .load_settings()
+                .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+            if s.plugins
+                .get_mut(&id)
+                .and_then(|e| e.settings.remove(&key))
+                .is_some()
+            {
+                self.store
+                    .save_settings(&s)
+                    .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+                host.apply_settings(&s).await;
+                changed = Some(s);
+            }
+        }
+        let result = host.set_secret(&id, &key, value).await.map_err(plugin_err);
+        if let Some(s) = changed {
+            self.send(DeckMsg::Settings(Box::new(s))).await?;
+            let _ = Self::settings_changed(emitter).await;
+        }
+        result
     }
 
     fn plugins(&self) -> Result<&PluginHost> {
@@ -187,6 +260,10 @@ impl DeckService {
     fn id(s: &str) -> Result<Uuid> {
         Uuid::parse_str(s).map_err(|_| DeckError::Invalid(format!("{s:?} is not a profile id")))
     }
+}
+
+fn is_placeholder(v: Option<&toml::Value>) -> bool {
+    v.and_then(toml::Value::as_str) == Some(PASSWORD_PLACEHOLDER)
 }
 
 /// A plugin error as a D-Bus error; the message is the sentence shown to the user.
@@ -480,6 +557,15 @@ impl DeckService {
         if s.obs.password.as_deref().is_some_and(|p| !p.is_empty()) {
             s.obs.password = Some(PASSWORD_PLACEHOLDER.into());
         }
+        for (id, keys) in self.secret_fields() {
+            if let Some(entry) = s.plugins.get_mut(&id) {
+                for k in keys {
+                    if let Some(v) = entry.settings.get_mut(&k) {
+                        *v = toml::Value::String(PASSWORD_PLACEHOLDER.into());
+                    }
+                }
+            }
+        }
         toml::to_string_pretty(&s).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
@@ -492,6 +578,27 @@ impl DeckService {
                 .load_settings()
                 .map_err(|e| DeckError::Unavailable(e.to_string()))?;
             s.obs.password = old.obs.password;
+        }
+        let fields = self.secret_fields();
+        if s.plugins.iter().any(|(id, e)| {
+            fields
+                .get(id)
+                .is_some_and(|ks| ks.iter().any(|k| is_placeholder(e.settings.get(k))))
+        }) {
+            let old = self
+                .store
+                .load_settings()
+                .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+            for (id, entry) in &mut s.plugins {
+                for k in fields.get(id).into_iter().flatten() {
+                    if is_placeholder(entry.settings.get(k)) {
+                        match old.plugins.get(id).and_then(|o| o.settings.get(k)) {
+                            Some(v) => entry.settings.insert(k.clone(), v.clone()),
+                            None => entry.settings.remove(k),
+                        };
+                    }
+                }
+            }
         }
         let old_obs = self.store.load_settings().map(|o| o.obs).ok();
         self.store
@@ -526,6 +633,56 @@ impl DeckService {
                 )
             })
             .collect())
+    }
+
+    /// Every installed plugin's manifest as JSON: `{ "<id>": Manifest }`.
+    async fn plugin_manifests(&self) -> Result<String> {
+        serde_json::to_string(&self.plugins()?.manifests()).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// Check the plugin folder at `path` (absolute) like an install would, writing nothing; JSON
+    /// `Inspected`. Works without Developer mode.
+    async fn plugin_inspect_dir(&self, path: String) -> Result<String> {
+        if !std::path::Path::new(&path).is_absolute() {
+            return Err(DeckError::Invalid(format!(
+                "the plugin folder must be an absolute path, not \"{path}\""
+            )));
+        }
+        let i = self
+            .plugins()?
+            .inspect_dir(std::path::Path::new(&path))
+            .await
+            .map_err(plugin_err)?;
+        serde_json::to_string(&i).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// The declared secret keys of the plugin that are set (never their values).
+    async fn plugin_secret_keys(&self, id: String) -> Result<Vec<String>> {
+        self.plugins()?.secret_keys(&id).await.map_err(plugin_err)
+    }
+
+    /// Set a declared secret of the plugin; the copy in `settings.toml`, if any, is removed.
+    async fn plugin_set_secret(
+        &self,
+        id: String,
+        key: String,
+        value: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<()> {
+        if value.is_empty() {
+            return Err(DeckError::Invalid("Enter a value, or use Clear".into()));
+        }
+        self.write_secret(id, key, Some(value), &emitter).await
+    }
+
+    /// Clear a declared secret of the plugin (also the copy in `settings.toml`).
+    async fn plugin_clear_secret(
+        &self,
+        id: String,
+        key: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<()> {
+        self.write_secret(id, key, None, &emitter).await
     }
 
     /// Install (or replace) the plugin in the folder at `path` (absolute); returns its id. Only in

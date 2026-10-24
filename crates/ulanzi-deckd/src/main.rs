@@ -1,7 +1,7 @@
 //! `ulanzi-deckd`: the Ulanzi Deck background service.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -86,7 +86,9 @@ async fn main() -> ExitCode {
         .object_server()
         .at(
             OBJECT_PATH,
-            DeckService::new(tx.clone(), store.clone()).with_obs(obs.clone(), probe),
+            DeckService::new(tx.clone(), store.clone())
+                .with_obs(obs.clone(), probe)
+                .with_plugins_dir(plugins_dir(&store)),
         )
         .await
     {
@@ -244,16 +246,21 @@ async fn plugins_ready(conn: zbus::Connection, plugins: PluginSlot, store: Store
     ulanzi_deckd::dbus::forward_plugins(conn, host).await;
 }
 
-/// Load the installed plugins and start the ones that run in the background or that a profile
-/// uses (the others start on their first action).
-async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<DeckMsg>) -> PluginHost {
-    let dir = match ulanzi_core::store::data_dir() {
+/// Where plugins are installed: `<data folder>/plugins`.
+fn plugins_dir(store: &Store) -> PathBuf {
+    match ulanzi_core::store::data_dir() {
         Ok(d) => d.join("plugins"),
         Err(e) => {
             tracing::error!("no data folder ({e}); plugins are kept in the config folder");
             store.root().join("plugins")
         }
-    };
+    }
+}
+
+/// Load the installed plugins and start the ones that run in the background or that a profile
+/// uses (the others start on their first action).
+async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<DeckMsg>) -> PluginHost {
+    let dir = plugins_dir(store);
     let used: BTreeSet<String> = store
         .list_profiles()
         .into_iter()

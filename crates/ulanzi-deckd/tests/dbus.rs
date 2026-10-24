@@ -1,5 +1,8 @@
 //! D-Bus API tests on a private bus (skipped when `dbus-daemon` is not installed).
 
+mod common;
+
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -7,6 +10,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use ulanzi_core::model::{Model, Profile, Settings};
+use ulanzi_core::plugin::{Inspected, Manifest};
 use ulanzi_core::store::Store;
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, INTERFACE, OBJECT_PATH, forward_signals};
@@ -93,7 +97,12 @@ async fn rig_with(setup: impl FnOnce(&std::path::Path)) -> Option<Rig> {
         .expect("addr")
         .name(BUS_NAME)
         .expect("name")
-        .serve_at(OBJECT_PATH, DeckService::new(tx, store).with_plugins(plugins))
+        .serve_at(
+            OBJECT_PATH,
+            DeckService::new(tx, store)
+                .with_plugins_dir(dir.path().join("plugins"))
+                .with_plugins(plugins),
+        )
         .expect("serve")
         .build()
         .await
@@ -492,4 +501,145 @@ async fn plugin_set_enabled_writes_settings() {
     let saved = std::fs::read_to_string(r._dir.path().join("c/settings.toml")).expect("read");
     let s: Settings = toml::from_str(&saved).expect("toml");
     assert!(s.plugins["hello"].enabled);
+}
+
+const PROBE_PACKAGE: &str = "ulanzi-plugin-probe";
+const PROBE_MANIFEST: &str = include_str!("plugins/probe/plugin.toml");
+
+/// A rig with the probe plugin installed.
+async fn probe_rig() -> Option<Rig> {
+    rig_with(|plugins| {
+        let folder = plugins.join("probe");
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(folder.join("plugin.toml"), PROBE_MANIFEST).expect("manifest");
+        std::fs::copy(common::plugins::wasm(PROBE_PACKAGE), folder.join("plugin.wasm")).expect("wasm");
+    })
+    .await
+}
+
+const WITH_SECRET: &str = "[plugins.probe]\nenabled = true\n\n[plugins.probe.settings]\npassword = \"hunter2\"\ngreeting = \"hi\"\n";
+
+async fn stored(r: &Rig) -> Settings {
+    toml::from_str(&std::fs::read_to_string(r._dir.path().join("c/settings.toml")).expect("read"))
+        .expect("toml")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_manifests_json() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    let json: String = p.call("PluginManifests", &()).await.expect("manifests");
+    let m: BTreeMap<String, Manifest> = serde_json::from_str(&json).expect("json");
+    assert_eq!(m["probe"].settings[0].key, "password");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_inspect_dir_json() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    let folder = common::plugins::fixture(PROBE_PACKAGE, PROBE_MANIFEST);
+    let json: String = p
+        .call("PluginInspectDir", &(folder.path().to_string_lossy().as_ref(),))
+        .await
+        .expect("inspect");
+    let i: Inspected = serde_json::from_str(&json).expect("json");
+    assert_eq!(i.manifest.id, "probe");
+    assert_eq!(i.installed_version.as_deref(), Some("1.0.0"));
+    let e = p
+        .call::<_, _, String>("PluginInspectDir", &("plugins/probe",))
+        .await
+        .expect_err("relative path");
+    assert_eq!(
+        error_message(e),
+        "the plugin folder must be an absolute path, not \"plugins/probe\""
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_settings_masks_plugin_secrets() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(WITH_SECRET,))
+        .await
+        .expect("apply");
+    let text: String = p.call("GetSettings", &()).await.expect("get");
+    assert!(!text.contains("hunter2"), "{text}");
+    assert!(text.contains("password = \"••••\""), "{text}");
+    assert!(text.contains("greeting = \"hi\""), "{text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn placeholder_round_trip_keeps_or_drops() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(WITH_SECRET,))
+        .await
+        .expect("apply");
+    let masked: String = p.call("GetSettings", &()).await.expect("get");
+    p.call::<_, _, ()>("ApplySettings", &(masked.as_str(),))
+        .await
+        .expect("apply");
+    assert_eq!(
+        stored(&r).await.plugins["probe"].settings["password"].as_str(),
+        Some("hunter2")
+    );
+    p.call::<_, _, ()>("PluginSetSecret", &("probe", "password", "new"))
+        .await
+        .expect("set");
+    p.call::<_, _, ()>("ApplySettings", &(masked.as_str(),))
+        .await
+        .expect("apply");
+    let s = stored(&r).await;
+    let t = &s.plugins["probe"].settings;
+    assert!(!t.contains_key("password"), "{t:?}");
+    assert_eq!(t["greeting"].as_str(), Some("hi"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_secret_strips_the_settings_copy() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("ApplySettings", &(WITH_SECRET,))
+        .await
+        .expect("apply");
+    let mut signals = p.receive_signal("SettingsChanged").await.expect("signal");
+    p.call::<_, _, ()>("PluginSetSecret", &("probe", "password", "new"))
+        .await
+        .expect("set");
+    assert!(
+        !stored(&r).await.plugins["probe"]
+            .settings
+            .contains_key("password")
+    );
+    let keys: Vec<String> = p.call("PluginSecretKeys", &("probe",)).await.expect("keys");
+    assert_eq!(keys, ["password"]);
+    tokio::time::timeout(Duration::from_secs(5), signals.next())
+        .await
+        .expect("SettingsChanged arrives");
+    p.call::<_, _, ()>("PluginClearSecret", &("probe", "password"))
+        .await
+        .expect("clear");
+    let keys: Vec<String> = p.call("PluginSecretKeys", &("probe",)).await.expect("keys");
+    assert!(keys.is_empty(), "{keys:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_secret_errors_use_the_user_facing_text() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    let e = p
+        .call::<_, _, ()>("PluginSetSecret", &("probe", "other", "x"))
+        .await
+        .expect_err("undeclared");
+    assert_eq!(error_message(e), "Probe has no secret setting “other”");
+    let e = p
+        .call::<_, _, ()>("PluginSetSecret", &("probe", "password", ""))
+        .await
+        .expect_err("empty");
+    assert_eq!(error_message(e), "Enter a value, or use Clear");
+    let e = p
+        .call::<_, _, ()>("PluginSetSecret", &("nope", "password", "x"))
+        .await
+        .expect_err("unknown");
+    assert_eq!(error_message(e), "the nope plugin is not installed");
 }
