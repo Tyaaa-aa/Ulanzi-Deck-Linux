@@ -1,4 +1,4 @@
-//! Settings → Integrations: installed plugins, their settings pages and developer installs.
+//! Settings → Integrations: installed plugins, their settings pages and installing plugins.
 //! The words and decisions come from [`crate::plugins`]; this is the GTK around them.
 
 use std::cell::{Cell, RefCell};
@@ -16,16 +16,21 @@ use crate::state::{Change, State};
 use crate::ui::window::refresh_plugins;
 use crate::ui::{plugin_fields, preferences};
 
-/// The rows of the install dialog, in order: (title, subtitle).
-pub fn install_rows(i: &Inspected) -> Vec<(String, String)> {
+/// Why the install dialog's Install button is off.
+const NEEDS_DEVELOPER_MODE: &str = "Turn on Developer Mode to install unverified plugins";
+
+/// The rows of the install dialog, in order: (title, subtitle). Without Developer Mode a row says
+/// it is needed (the dialog's Install button is off then).
+pub fn install_rows(i: &Inspected, developer_mode: bool) -> Vec<(String, String)> {
     let m = &i.manifest;
-    let mut rows = vec![
-        (
-            "Unverified plugin".to_string(),
-            "Not from the Ulanzi Deck marketplace. Only install plugins you trust.".to_string(),
-        ),
-        (format!("{} {}", m.name, m.version), m.description.clone()),
-    ];
+    let mut rows = vec![(
+        "Unverified plugin".to_string(),
+        "Not from the Ulanzi Deck marketplace. Only install plugins you trust.".to_string(),
+    )];
+    if !developer_mode {
+        rows.push((NEEDS_DEVELOPER_MODE.to_string(), String::new()));
+    }
+    rows.push((format!("{} {}", m.name, m.version), m.description.clone()));
     if let Some(v) = &i.installed_version {
         rows.push((format!("Replaces version {v}"), String::new()));
     }
@@ -197,46 +202,76 @@ pub fn plugins_group(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
     group
 }
 
-/// Developer Mode, and installing a plugin from a folder while it is on.
+/// What an install starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A `.ulanziplugin` file.
+    File,
+    /// A plugin folder (developers).
+    Folder,
+}
+
+fn install_row(title: &str, subtitle: &str, icon: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .activatable(true)
+        .build();
+    row.add_prefix(&gtk::Image::from_icon_name(icon));
+    row
+}
+
+/// Installing a plugin from a file (always offered), Developer Mode, and installing from a folder
+/// while it is on.
 pub fn developer_group(state: &State, dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::new();
     let on = state.settings.borrow().developer_mode;
+    let file = install_row(
+        "Install Plugin…",
+        "Choose a .ulanziplugin file",
+        "document-open-symbolic",
+    );
     let mode = adw::SwitchRow::builder()
         .title("Developer Mode")
-        .subtitle("Install plugins from a folder. For plugin authors.")
+        .subtitle("Install unverified plugins and plugin folders.")
         .active(on)
         .build();
-    let install = adw::ButtonRow::builder()
-        .title("Install from Folder…")
-        .start_icon_name("folder-open-symbolic")
-        .visible(on)
-        .build();
+    let folder = install_row(
+        "Install from Folder (developers)…",
+        "Choose the folder that contains plugin.toml",
+        "folder-open-symbolic",
+    );
+    folder.set_visible(on);
     {
-        let (state, install) = (state.clone(), install.downgrade());
+        let (state, folder) = (state.clone(), folder.downgrade());
         mode.connect_active_notify(move |r| {
             let v = r.is_active();
             preferences::change_now(&state, |s| s.developer_mode = v);
-            if let Some(i) = install.upgrade() {
+            if let Some(i) = folder.upgrade() {
                 i.set_visible(v);
             }
         });
     }
-    {
+    for (row, source) in [(&file, Source::File), (&folder, Source::Folder)] {
         let (state, dialog) = (state.clone(), dialog.downgrade());
-        install.connect_activated(move |_| {
+        row.connect_activated(move |_| {
             if let Some(d) = dialog.upgrade() {
-                install_flow(&state, &d);
+                install_flow(&state, &d, source);
             }
         });
     }
+    group.add(&file);
     group.add(&mode);
-    group.add(&install);
+    group.add(&folder);
     group
 }
 
-fn cant_install(dialog: &adw::PreferencesDialog, why: &str) {
+fn cant_install(dialog: &adw::PreferencesDialog, source: Source, why: &str) {
     let alert = adw::AlertDialog::builder()
-        .heading("Can’t Install This Folder")
+        .heading(match source {
+            Source::File => "Can’t Install This Plugin",
+            Source::Folder => "Can’t Install This Folder",
+        })
         .body(why)
         .default_response("close")
         .close_response("close")
@@ -245,35 +280,69 @@ fn cant_install(dialog: &adw::PreferencesDialog, why: &str) {
     alert.present(Some(dialog));
 }
 
-/// Choose a plugin folder, show what it is and what it may do, and install it on "Install".
-pub fn install_flow(state: &State, dialog: &adw::PreferencesDialog) {
-    let chooser = gtk::FileDialog::builder()
-        .title("Choose a Plugin Folder")
-        .modal(true)
-        .build();
+/// Choose a plugin file or folder, show what it is and what it may do, and install it on
+/// "Install".
+pub fn install_flow(state: &State, dialog: &adw::PreferencesDialog, source: Source) {
+    let chooser = gtk::FileDialog::builder().modal(true).build();
     let window = dialog.root().and_downcast::<gtk::Window>();
     let (state, dialog) = (state.clone(), dialog.clone());
-    chooser.select_folder(window.as_ref(), None::<&gio::Cancellable>, move |r| {
+    let chosen = move |r: Result<gio::File, glib::Error>| {
         // An error here is the chooser being closed.
-        let Ok(folder) = r else { return };
-        let Some(path) = folder.path() else {
-            cant_install(&dialog, "The folder must be on this computer.");
+        let Ok(chosen) = r else { return };
+        let Some(path) = chosen.path() else {
+            let why = match source {
+                Source::File => "The file must be on this computer.",
+                Source::Folder => "The folder must be on this computer.",
+            };
+            cant_install(&dialog, source, why);
             return;
         };
         let Some(c) = state.client.borrow().clone() else {
-            cant_install(&dialog, &ClientError::NotRunning.to_string());
+            cant_install(&dialog, source, &ClientError::NotRunning.to_string());
             return;
         };
         let p = path.clone();
-        runtime::run(async move { c.plugin_inspect_dir(&p).await }, move |r| match r {
-            Ok(i) => confirm_install(&state, &dialog, path, &i),
-            Err(e) => cant_install(&dialog, &e.to_string()),
-        });
-    });
+        runtime::run(
+            async move {
+                match source {
+                    Source::File => c.plugin_inspect_file(&p).await,
+                    Source::Folder => c.plugin_inspect_dir(&p).await,
+                }
+            },
+            move |r| match r {
+                Ok(i) => confirm_install(&state, &dialog, source, path, &i),
+                Err(e) => cant_install(&dialog, source, &e.to_string()),
+            },
+        );
+    };
+    match source {
+        Source::File => {
+            let filter = gtk::FileFilter::new();
+            filter.set_name(Some("Ulanzi Deck plugins"));
+            filter.add_suffix("ulanziplugin");
+            let filters = gio::ListStore::new::<gtk::FileFilter>();
+            filters.append(&filter);
+            chooser.set_title("Choose a Plugin File");
+            chooser.set_filters(Some(&filters));
+            chooser.set_default_filter(Some(&filter));
+            chooser.open(window.as_ref(), None::<&gio::Cancellable>, chosen);
+        }
+        Source::Folder => {
+            chooser.set_title("Choose a Plugin Folder");
+            chooser.select_folder(window.as_ref(), None::<&gio::Cancellable>, chosen);
+        }
+    }
 }
 
-fn confirm_install(state: &State, dialog: &adw::PreferencesDialog, path: PathBuf, i: &Inspected) {
+fn confirm_install(
+    state: &State,
+    dialog: &adw::PreferencesDialog,
+    source: Source,
+    path: PathBuf,
+    i: &Inspected,
+) {
     let name = i.manifest.name.clone();
+    let developer_mode = state.settings.borrow().developer_mode;
     let alert = adw::AlertDialog::builder()
         .heading(format!("Install {name}?"))
         .default_response("cancel")
@@ -283,7 +352,7 @@ fn confirm_install(state: &State, dialog: &adw::PreferencesDialog, path: PathBuf
         .selection_mode(gtk::SelectionMode::None)
         .css_classes(["boxed-list"])
         .build();
-    for (n, (title, subtitle)) in install_rows(i).into_iter().enumerate() {
+    for (n, (title, subtitle)) in install_rows(i, developer_mode).into_iter().enumerate() {
         let row = adw::ActionRow::builder().title(escape(&title)).build();
         if !subtitle.is_empty() {
             row.set_subtitle(&escape(&subtitle));
@@ -292,6 +361,8 @@ fn confirm_install(state: &State, dialog: &adw::PreferencesDialog, path: PathBuf
             let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
             icon.add_css_class("warning");
             row.add_prefix(&icon);
+        } else if title == NEEDS_DEVELOPER_MODE {
+            row.add_prefix(&gtk::Image::from_icon_name("dialog-information-symbolic"));
         }
         list.append(&row);
     }
@@ -299,22 +370,28 @@ fn confirm_install(state: &State, dialog: &adw::PreferencesDialog, path: PathBuf
     alert.add_response("cancel", "Cancel");
     alert.add_response("install", "Install");
     alert.set_response_appearance("install", adw::ResponseAppearance::Suggested);
+    alert.set_response_enabled("install", developer_mode);
     {
         let (state, dialog) = (state.clone(), dialog.clone());
         alert.connect_response(Some("install"), move |_, _| {
             let Some(c) = state.client.borrow().clone() else {
-                cant_install(&dialog, &ClientError::NotRunning.to_string());
+                cant_install(&dialog, source, &ClientError::NotRunning.to_string());
                 return;
             };
             let (state, dialog, path, name) = (state.clone(), dialog.clone(), path.clone(), name.clone());
             runtime::run(
-                async move { c.plugin_install_dir(&path).await },
+                async move {
+                    match source {
+                        Source::File => c.plugin_install_file(&path).await,
+                        Source::Folder => c.plugin_install_dir(&path).await,
+                    }
+                },
                 move |r| match r {
                     Ok(_) => {
                         toast(&dialog, &format!("{name} installed"));
                         refresh_plugins(&state);
                     }
-                    Err(e) => cant_install(&dialog, &e.to_string()),
+                    Err(e) => cant_install(&dialog, source, &e.to_string()),
                 },
             );
         });
@@ -549,6 +626,8 @@ fn settings_group(p: &Rc<Page>, dialog: &adw::PreferencesDialog, m: &Manifest) -
             );
         });
         group.add(&plugin_fields::row(
+            &p.state,
+            m,
             f,
             current(f, &table).as_ref(),
             plugin_fields::Save::OnApply,
@@ -795,17 +874,19 @@ mod tests {
             installed_version: Some("0.9.0".into()),
         };
         let s = |a: &str, b: &str| (a.to_string(), b.to_string());
-        assert_eq!(
-            install_rows(&i),
-            vec![
-                s(
-                    "Unverified plugin",
-                    "Not from the Ulanzi Deck marketplace. Only install plugins you trust."
-                ),
-                ("OBS Studio 1.0.0".to_string(), description),
-                s("Replaces version 0.9.0", ""),
-                s("Connect to 127.0.0.1, localhost", ""),
-            ]
-        );
+        let want = vec![
+            s(
+                "Unverified plugin",
+                "Not from the Ulanzi Deck marketplace. Only install plugins you trust.",
+            ),
+            ("OBS Studio 1.0.0".to_string(), description),
+            s("Replaces version 0.9.0", ""),
+            s("Connect to 127.0.0.1, localhost", ""),
+        ];
+        assert_eq!(install_rows(&i, true), want);
+        // Without Developer Mode the dialog says how to install it (its Install button is off).
+        let mut off = want.clone();
+        off.insert(1, s("Turn on Developer Mode to install unverified plugins", ""));
+        assert_eq!(install_rows(&i, false), off);
     }
 }

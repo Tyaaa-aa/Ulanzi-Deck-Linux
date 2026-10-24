@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- The app picks plugin items from lists: an `item` setting or parameter opens the plugin's list (search,
+  group filter, live state, ticks for several), keeps showing a stored value the list lacks, and offers
+  typing by hand only when the plugin can't list. Settings → Integrations → Install Plugin… installs a
+  `.ulanziplugin` file (with Developer Mode on); Install from Folder (developers)… stays for folders.
 - Plugins as one file: `<id>-<version>.ulanziplugin` (a ZIP with `plugin.toml`, `plugin.wasm` and
   optional `assets/`). `ulanzictl plugin install` takes a file or a folder, `scripts/package-plugin.sh
   <plugin-dir>` builds a package, and the D-Bus methods `PluginInspectFile` and `PluginInstallFile`

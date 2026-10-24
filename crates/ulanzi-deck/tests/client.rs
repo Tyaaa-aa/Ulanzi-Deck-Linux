@@ -276,6 +276,27 @@ async fn plugin_errors_reach_the_gui() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn plugin_pickers_and_file_installs_reach_the_service() {
+    let Some(r) = rig().await else { return };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    match c.plugin_list_items("hello", "scenes", "", "").await {
+        Err(ClientError::Service(m)) => assert_eq!(m, "the hello plugin is not installed"),
+        other => panic!("{other:?}"),
+    }
+    let missing = r._dir.path().join("nope.ulanziplugin");
+    assert!(matches!(
+        c.plugin_inspect_file(&missing).await,
+        Err(ClientError::Service(_))
+    ));
+    match c.plugin_install_file(&missing).await {
+        Err(ClientError::Service(m)) => {
+            assert_eq!(m, "Turn on Developer mode to install unverified plugins")
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn plugins_changed_is_forwarded() {
     let Some(r) = rig_with(|plugins| {
         let folder = plugins.join("hello");

@@ -910,15 +910,18 @@ fn undo_tag(key: &str) -> &'static str {
 /// are kept as they are.
 fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml::Table) -> Vec<gtk::Widget> {
     use crate::plugins::{Control, control_for, current};
-    let plugins = state.plugins.borrow();
-    let Some(a) = plugins.manifests.get(plugin).and_then(|m| m.action(action)) else {
+    // Cloned: the rows are built without holding the plugins borrowed.
+    let Some(m) = state.plugins.borrow().manifests.get(plugin).cloned() else {
+        return Vec::new();
+    };
+    let Some(a) = m.action(action) else {
         return Vec::new();
     };
     a.params
         .iter()
         .map(|f| {
             let value = current(f, params);
-            let how = match control_for(f, value.as_ref()) {
+            let how = match control_for(f, &m.pickers, value.as_ref()) {
                 Control::Entry | Control::Json | Control::Spin { .. } => How::Typing(undo_tag(&f.key)),
                 _ => How::Set,
             };
@@ -939,7 +942,14 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
                     }
                 });
             });
-            crate::ui::plugin_fields::row(f, value.as_ref(), crate::ui::plugin_fields::Save::Live, on)
+            crate::ui::plugin_fields::row(
+                state,
+                &m,
+                f,
+                value.as_ref(),
+                crate::ui::plugin_fields::Save::Live,
+                on,
+            )
         })
         .collect()
 }

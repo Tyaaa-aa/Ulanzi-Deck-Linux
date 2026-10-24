@@ -1,13 +1,17 @@
 //! One row per plugin setting, from the manifest's `[[settings]]` (secrets excepted: they use a
 //! password row that writes straight into the plugin's secret store).
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use ulanzi_core::plugin::Field;
+use ulanzi_core::plugin::{Field, Manifest, PickItem, Picker};
 
-use crate::plugins::{Control, Input, control_for, shown_text, value_from};
+use crate::plugins::{
+    Control, Input, control_for, item_ids, item_summary, item_value, shown_text, value_from,
+};
+use crate::state::State;
 
 /// Called with the value to store (`Ok(None)` removes the key) or the message to show.
 pub type OnValue = Rc<dyn Fn(Result<Option<toml::Value>, String>)>;
@@ -59,6 +63,14 @@ pub fn combo_items(
     (items, selected as u32)
 }
 
+/// What an item row keeps after a pick: the ids, the row's subtitle and the value to store.
+pub fn picked(picks: &[PickItem], multi: bool) -> (Vec<String>, String, Option<toml::Value>) {
+    let ids: Vec<String> = picks.iter().map(|p| p.id.clone()).collect();
+    let shown = item_summary(&ids, picks);
+    let value = item_value(&ids, multi);
+    (ids, shown, value)
+}
+
 /// How a text row saves.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Save {
@@ -68,10 +80,54 @@ pub enum Save {
     Live,
 }
 
-/// The row that edits `f`, showing `current` (the stored value, else the default).
-pub fn row(f: &Field, current: Option<&toml::Value>, save: Save, on: OnValue) -> gtk::Widget {
+/// The row of an `item` field with a picker: the stored value (labels once picked), opening the
+/// plugin's list. A pick is written at once (one write per pick), on the settings page too.
+fn item_row(
+    state: &State,
+    plugin: &str,
+    f: &Field,
+    picker: Picker,
+    current: Option<&toml::Value>,
+    on: OnValue,
+) -> gtk::Widget {
+    let ids = item_ids(current, picker.multi);
+    let row = adw::ActionRow::builder()
+        .title(glib::markup_escape_text(f.title()).as_str())
+        .subtitle(glib::markup_escape_text(&item_summary(&ids, &[])).as_str())
+        .activatable(true)
+        .build();
+    set_help(&row, &f.help, true);
+    row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    // The ids the row shows now: what the dialog opens with next time.
+    let shown: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(ids));
+    let (state, plugin, title) = (state.clone(), plugin.to_string(), f.title().to_string());
+    row.connect_activated(move |r| {
+        let (weak, shown2, on, multi) = (r.downgrade(), shown.clone(), on.clone(), picker.multi);
+        let current = shown.borrow().clone();
+        crate::ui::item_picker::open(r, &state, &plugin, &title, &picker, current, move |picks| {
+            let (ids, summary, value) = picked(&picks, multi);
+            if let Some(r) = weak.upgrade() {
+                r.set_subtitle(&glib::markup_escape_text(&summary));
+            }
+            *shown2.borrow_mut() = ids;
+            on(Ok(value));
+        });
+    });
+    row.upcast()
+}
+
+/// The row that edits `f` of plugin `m`, showing `current` (the stored value, else the default).
+pub fn row(
+    state: &State,
+    m: &Manifest,
+    f: &Field,
+    current: Option<&toml::Value>,
+    save: Save,
+    on: OnValue,
+) -> gtk::Widget {
     let title = glib::markup_escape_text(f.title()).to_string();
-    match control_for(f, current) {
+    match control_for(f, &m.pickers, current) {
+        Control::Item { picker } => item_row(state, &m.id, f, picker, current, on),
         Control::Entry | Control::Json => {
             let row = adw::EntryRow::builder()
                 .title(&title)
@@ -205,5 +261,31 @@ mod tests {
         assert_eq!(number_of(Some(&toml::Value::Integer(4455))), Some(4455.0));
         assert_eq!(number_of(Some(&toml::Value::Float(0.5))), Some(0.5));
         assert_eq!(number_of(Some(&toml::Value::String("x".into()))), None);
+    }
+
+    #[test]
+    fn a_pick_shows_labels_and_stores_ids() {
+        let p = |id: &str, label: &str| PickItem {
+            id: id.into(),
+            label: label.into(),
+            subtitle: None,
+            group: None,
+            icon: None,
+            state: None,
+        };
+        let (ids, shown, v) = picked(&[p("light.k", "Kitchen")], false);
+        assert_eq!(ids, vec!["light.k".to_string()]);
+        assert_eq!(shown, "Kitchen");
+        assert_eq!(v, Some(toml::Value::String("light.k".into())));
+        let (_, shown, v) = picked(&[p("a", "A"), p("b", "B")], true);
+        assert_eq!(shown, "A and B");
+        assert_eq!(
+            v,
+            Some(toml::Value::Array(vec![
+                toml::Value::String("a".into()),
+                toml::Value::String("b".into())
+            ]))
+        );
+        assert_eq!(picked(&[], true), (Vec::new(), "None".to_string(), None));
     }
 }

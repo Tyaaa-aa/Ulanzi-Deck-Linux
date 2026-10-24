@@ -190,7 +190,7 @@ Menu (☰) → **Preferences** (**Ctrl+,**):
 |---|---|
 | **General** | Light/dark style, **Start at Login**, tray icon, switch profiles by app, hold time |
 | **Device** | Brightness, sleep after inactivity and how dim, **Show Volume Changes**, label style (hide all, position, colour) |
-| **Integrations** | OBS Studio connection; whether keyboard shortcuts and typing are allowed |
+| **Integrations** | OBS Studio connection; whether keyboard shortcuts and typing are allowed; plugins (status, settings, **Install Plugin…** from a `.ulanziplugin` file, which needs **Developer Mode** since packages are unsigned) |
 | **Backups** | Back up now, restore, open the backups folder |
 
 ## The tray icon

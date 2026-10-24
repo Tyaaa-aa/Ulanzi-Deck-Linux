@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use ulanzi_core::model::Action;
-use ulanzi_core::plugin::{Field, FieldKind, Manifest, ManifestAction};
+use ulanzi_core::plugin::{Field, FieldKind, Manifest, ManifestAction, PickItem, Picker};
 
 /// One installed plugin (or plugin folder that could not be loaded), as `PluginList` reports it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -242,6 +242,10 @@ pub enum Control {
     },
     Color,
     Json,
+    /// Picked from the plugin's list (an `item` field whose picker the manifest declares).
+    Item {
+        picker: Picker,
+    },
     /// The value has a type the app can't edit; it is shown and kept as it is.
     ReadOnly,
 }
@@ -249,8 +253,21 @@ pub enum Control {
 /// The widest range a number row allows when the field gives no bounds.
 const UNBOUNDED: f64 = 1e9;
 
-pub fn control_for(f: &Field, current: Option<&toml::Value>) -> Control {
+pub fn control_for(f: &Field, pickers: &[Picker], current: Option<&toml::Value>) -> Control {
     let textual = matches!(current, None | Some(toml::Value::String(_)));
+    if f.kind == FieldKind::Item
+        && let Some(p) = f
+            .picker
+            .as_deref()
+            .and_then(|id| pickers.iter().find(|p| p.id == id))
+    {
+        let list = |a: &[toml::Value]| a.iter().all(toml::Value::is_str);
+        return match current {
+            None | Some(toml::Value::String(_)) => Control::Item { picker: p.clone() },
+            Some(toml::Value::Array(a)) if p.multi && list(a) => Control::Item { picker: p.clone() },
+            _ => Control::ReadOnly,
+        };
+    }
     match &f.kind {
         FieldKind::Text => match current {
             Some(toml::Value::Table(_)) => Control::ReadOnly,
@@ -280,6 +297,158 @@ pub fn control_for(f: &Field, current: Option<&toml::Value>) -> Control {
                 Control::ReadOnly
             }
         }
+    }
+}
+
+/// The ids an `item` field holds: a string is one id (with `multi`, a legacy comma-separated
+/// string is several), an array of strings is several. Blank ids are dropped; a stored id is kept
+/// whether or not the plugin still lists it.
+pub fn item_ids(v: Option<&toml::Value>, multi: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |id: &str| {
+        if !id.trim().is_empty() && !out.iter().any(|x| x == id) {
+            out.push(id.to_string());
+        }
+    };
+    match v {
+        Some(toml::Value::String(s)) if multi => s.split(',').for_each(|id| add(id.trim())),
+        Some(toml::Value::String(s)) => add(s),
+        Some(toml::Value::Array(a)) => a.iter().filter_map(toml::Value::as_str).for_each(&mut add),
+        _ => {}
+    }
+    out
+}
+
+/// The value to store for the picked ids: nothing for none, a string, or an array with `multi`.
+pub fn item_value(selected: &[String], multi: bool) -> Option<toml::Value> {
+    match selected {
+        [] => None,
+        _ if multi => Some(toml::Value::Array(
+            selected
+                .iter()
+                .map(|id| toml::Value::String(id.clone()))
+                .collect(),
+        )),
+        [first, ..] => Some(toml::Value::String(first.clone())),
+    }
+}
+
+/// The label of `id` among `known`, else the id itself.
+fn label_of<'a>(id: &'a str, known: &'a [PickItem]) -> &'a str {
+    known.iter().find(|i| i.id == id).map_or(id, |i| i.label.as_str())
+}
+
+/// What an item row shows: "None", one label, "A and B", "A, B and C", "A, B and 3 more". An id
+/// the plugin no longer lists shows as itself.
+pub fn item_summary(ids: &[String], known: &[PickItem]) -> String {
+    let labels: Vec<&str> = ids.iter().map(|id| label_of(id, known)).collect();
+    match labels.as_slice() {
+        [] => "None".into(),
+        [one] => (*one).to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} more", rest.len()),
+    }
+}
+
+/// The ids typed into the picker's manual entry (with `multi`, separated by commas).
+pub fn manual_ids(text: &str, multi: bool) -> Vec<String> {
+    item_ids(Some(&toml::Value::String(text.trim().to_string())), multi)
+}
+
+/// Entries by group, groups in first-seen order; entries without a group under "".
+pub fn group_items(items: &[PickItem]) -> Vec<(String, Vec<PickItem>)> {
+    let mut out: Vec<(String, Vec<PickItem>)> = Vec::new();
+    for i in items {
+        let g = i.group.clone().unwrap_or_default();
+        match out.iter_mut().find(|(n, _)| *n == g) {
+            Some((_, v)) => v.push(i.clone()),
+            None => out.push((g, vec![i.clone()])),
+        }
+    }
+    out
+}
+
+/// The groups seen in `items`, first-seen order, without the empty one (the group drop-down).
+pub fn group_names(items: &[PickItem]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for g in items.iter().filter_map(|i| i.group.as_deref()) {
+        if !g.is_empty() && !out.iter().any(|x| x == g) {
+            out.push(g.to_string());
+        }
+    }
+    out
+}
+
+/// Whether a plugin built for `contract` can list items (`list-items` came with 1.1).
+pub fn can_list(contract: &str) -> bool {
+    let mut parts = contract.trim().split('.').map(str::parse::<u32>);
+    match (parts.next(), parts.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (1, 1),
+        _ => false,
+    }
+}
+
+/// The themed icon name to look up for an entry's `icon` (`mdi:lightbulb` → `lightbulb`); `None`
+/// when there is nothing to look up.
+pub fn icon_lookup(icon: &str) -> Option<&str> {
+    let name = icon.rsplit_once(':').map_or(icon, |(_, n)| n).trim();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Stored ids the list does not contain, as entries labelled with the id, so the current value
+/// stays visible (and selected) instead of silently disappearing.
+pub fn missing_current(items: &[PickItem], current: &[String]) -> Vec<PickItem> {
+    current
+        .iter()
+        .filter(|id| !items.iter().any(|i| &i.id == *id))
+        .map(|id| PickItem {
+            id: id.clone(),
+            label: id.clone(),
+            subtitle: Some("Not in the list now".into()),
+            group: None,
+            icon: None,
+            state: None,
+        })
+        .collect()
+}
+
+/// Add `id` to or remove it from the selection, keeping the order it was picked in.
+pub fn toggle_id(selected: &mut Vec<String>, id: &str, on: bool) {
+    let at = selected.iter().position(|x| x == id);
+    match (on, at) {
+        (true, None) => selected.push(id.to_string()),
+        (false, Some(i)) => {
+            selected.remove(i);
+        }
+        _ => {}
+    }
+}
+
+/// At most this many entries are shown at once; searching narrows the rest.
+pub const SHOW_MAX: usize = 300;
+
+/// The entries to show and, when some are left out, a note saying so.
+pub fn shown_items(items: &[PickItem], max: usize) -> (&[PickItem], Option<String>) {
+    if items.len() <= max {
+        return (items, None);
+    }
+    (
+        &items[..max],
+        Some(format!(
+            "Showing {max} of {}. Search to find the rest.",
+            items.len()
+        )),
+    )
+}
+
+/// What the picker says when the plugin answers an empty list.
+pub fn empty_message(query: &str, group: &str) -> String {
+    match (query.trim(), group) {
+        ("", "") => "The list is empty".into(),
+        (q, "") => format!("Nothing matches “{q}”"),
+        ("", g) => format!("Nothing in {g}"),
+        (q, g) => format!("Nothing in {g} matches “{q}”"),
     }
 }
 
@@ -482,7 +651,7 @@ mod tests {
         let table: toml::Table = toml::from_str(r#"entities = ["light.a", "light.b"]"#).expect("toml");
         let v = current(&f, &table);
         assert_eq!(shown_text(v.as_ref()), "light.a, light.b");
-        assert_eq!(control_for(&f, v.as_ref()), Control::Entry);
+        assert_eq!(control_for(&f, &[], v.as_ref()), Control::Entry);
     }
 
     #[test]
@@ -527,12 +696,15 @@ mod tests {
     fn unknown_kind_with_a_table_is_read_only() {
         let f = field("m", FieldKind::Other("map".into()));
         let table: toml::Table = toml::from_str("m = { a = 1 }").expect("toml");
-        assert_eq!(control_for(&f, current(&f, &table).as_ref()), Control::ReadOnly);
         assert_eq!(
-            control_for(&f, Some(&toml::Value::String("x".into()))),
+            control_for(&f, &[], current(&f, &table).as_ref()),
+            Control::ReadOnly
+        );
+        assert_eq!(
+            control_for(&f, &[], Some(&toml::Value::String("x".into()))),
             Control::Entry
         );
-        assert_eq!(control_for(&f, None), Control::Entry);
+        assert_eq!(control_for(&f, &[], None), Control::Entry);
     }
 
     #[test]
@@ -632,7 +804,7 @@ mod tests {
             ..field("port", FieldKind::Number)
         };
         assert_eq!(
-            control_for(&port, None),
+            control_for(&port, &[], None),
             Control::Spin {
                 min: 1.0,
                 max: 65535.0,
@@ -641,7 +813,7 @@ mod tests {
             }
         );
         assert_eq!(
-            control_for(&field("x", FieldKind::Number), None),
+            control_for(&field("x", FieldKind::Number), &[], None),
             Control::Spin {
                 min: -1e9,
                 max: 1e9,
@@ -650,11 +822,17 @@ mod tests {
             }
         );
         assert_eq!(
-            control_for(&field("p", FieldKind::Secret), None),
+            control_for(&field("p", FieldKind::Secret), &[], None),
             Control::Password
         );
-        assert_eq!(control_for(&field("t", FieldKind::Toggle), None), Control::Switch);
-        assert_eq!(control_for(&field("j", FieldKind::Json), None), Control::Json);
+        assert_eq!(
+            control_for(&field("t", FieldKind::Toggle), &[], None),
+            Control::Switch
+        );
+        assert_eq!(
+            control_for(&field("j", FieldKind::Json), &[], None),
+            Control::Json
+        );
         assert_eq!(shown_text(Some(&toml::Value::Float(3.0))), "3");
         assert_eq!(shown_text(Some(&toml::Value::Integer(4455))), "4455");
     }
@@ -874,5 +1052,246 @@ mod tests {
                 assert!(r.is_ok(), "{name}/{}: {:?} with {t:?}", a.id, r);
             }
         }
+    }
+
+    fn item(id: &str, label: &str, group: Option<&str>) -> PickItem {
+        PickItem {
+            id: id.into(),
+            label: label.into(),
+            subtitle: None,
+            group: group.map(Into::into),
+            icon: None,
+            state: None,
+        }
+    }
+
+    fn picker(id: &str, multi: bool) -> Picker {
+        Picker {
+            id: id.into(),
+            style: ulanzi_core::plugin::PickerStyle::List,
+            groups: true,
+            multi,
+        }
+    }
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn item_fields_with_a_declared_picker_are_picked() {
+        let scenes = picker("scenes", false);
+        let entities = picker("entities", true);
+        let pickers = vec![scenes.clone(), entities.clone()];
+        let f = Field {
+            picker: Some("scenes".into()),
+            ..field("scene", FieldKind::Item)
+        };
+        let s = |v: &str| toml::Value::String(v.into());
+        assert_eq!(
+            control_for(&f, &pickers, None),
+            Control::Item {
+                picker: scenes.clone()
+            }
+        );
+        assert_eq!(
+            control_for(&f, &pickers, Some(&s("Gone"))),
+            Control::Item { picker: scenes }
+        );
+        // A table can't be an id.
+        let table: toml::Table = toml::from_str("scene = { a = 1 }").expect("toml");
+        assert_eq!(control_for(&f, &pickers, table.get("scene")), Control::ReadOnly);
+        // Undeclared picker or no picker: a text entry, as in contract 1.0.
+        let undeclared = Field {
+            picker: Some("nope".into()),
+            ..field("scene", FieldKind::Item)
+        };
+        assert_eq!(control_for(&undeclared, &pickers, None), Control::Entry);
+        assert_eq!(
+            control_for(&field("x", FieldKind::Item), &pickers, None),
+            Control::Entry
+        );
+        // A multi picker holds a list; a single one can't show one.
+        let multi = Field {
+            picker: Some("entities".into()),
+            ..field("entities", FieldKind::Item)
+        };
+        let arr: toml::Table = toml::from_str(r#"entities = ["light.a", "light.b"]"#).expect("toml");
+        assert_eq!(
+            control_for(&multi, &pickers, arr.get("entities")),
+            Control::Item {
+                picker: entities.clone()
+            }
+        );
+        assert_eq!(
+            control_for(&multi, &pickers, Some(&s("light.a, light.b"))),
+            Control::Item { picker: entities }
+        );
+        assert_eq!(control_for(&f, &pickers, arr.get("entities")), Control::ReadOnly);
+        let mixed: toml::Table = toml::from_str(r#"entities = ["light.a", 3]"#).expect("toml");
+        assert_eq!(
+            control_for(&multi, &pickers, mixed.get("entities")),
+            Control::ReadOnly
+        );
+    }
+
+    #[test]
+    fn item_ids_read_strings_lists_and_legacy_commas() {
+        let s = |v: &str| toml::Value::String(v.into());
+        assert_eq!(item_ids(None, false), Vec::<String>::new());
+        assert_eq!(item_ids(Some(&s("")), false), Vec::<String>::new());
+        assert_eq!(item_ids(Some(&s("Scene 1")), false), ids(&["Scene 1"]));
+        // A single id is kept as stored, commas and all.
+        assert_eq!(item_ids(Some(&s("a, b")), false), ids(&["a, b"]));
+        assert_eq!(
+            item_ids(Some(&s(" light.a, light.b ,,light.a")), true),
+            ids(&["light.a", "light.b"])
+        );
+        let arr: toml::Table = toml::from_str(r#"e = ["light.a", "", "switch.b"]"#).expect("toml");
+        assert_eq!(item_ids(arr.get("e"), true), ids(&["light.a", "switch.b"]));
+    }
+
+    #[test]
+    fn item_values_round_trip() {
+        assert_eq!(item_value(&[], false), None);
+        assert_eq!(item_value(&[], true), None);
+        assert_eq!(
+            item_value(&ids(&["Scene 1"]), false),
+            Some(toml::Value::String("Scene 1".into()))
+        );
+        let arr: toml::Table = toml::from_str(r#"e = ["light.a", "switch.b"]"#).expect("toml");
+        let v = arr.get("e").cloned();
+        assert_eq!(item_value(&item_ids(v.as_ref(), true), true), v);
+        // The legacy comma string becomes a list on the next pick.
+        let legacy = toml::Value::String("light.a,switch.b".into());
+        assert_eq!(item_value(&item_ids(Some(&legacy), true), true), v);
+    }
+
+    #[test]
+    fn item_summaries() {
+        let known = vec![
+            item("light.kitchen", "Kitchen", Some("Lights")),
+            item("light.hall", "Hall", Some("Lights")),
+            item("light.desk", "Desk", Some("Lights")),
+        ];
+        assert_eq!(item_summary(&[], &known), "None");
+        assert_eq!(item_summary(&ids(&["light.kitchen"]), &known), "Kitchen");
+        assert_eq!(item_summary(&ids(&["light.gone"]), &known), "light.gone");
+        assert_eq!(
+            item_summary(&ids(&["light.kitchen", "light.gone"]), &known),
+            "Kitchen and light.gone"
+        );
+        assert_eq!(
+            item_summary(&ids(&["light.kitchen", "light.hall", "light.desk"]), &known),
+            "Kitchen, Hall and Desk"
+        );
+        assert_eq!(
+            item_summary(&ids(&["light.kitchen", "light.hall", "a", "b", "c"]), &known),
+            "Kitchen, Hall and 3 more"
+        );
+    }
+
+    #[test]
+    fn items_are_grouped_in_first_seen_order() {
+        let items = vec![
+            item("light.a", "A", Some("Lights")),
+            item("x", "X", None),
+            item("switch.b", "B", Some("Switches")),
+            item("light.c", "C", Some("Lights")),
+        ];
+        let g = group_items(&items);
+        let shape: Vec<(&str, Vec<&str>)> = g
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.iter().map(|i| i.id.as_str()).collect()))
+            .collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("Lights", vec!["light.a", "light.c"]),
+                ("", vec!["x"]),
+                ("Switches", vec!["switch.b"]),
+            ]
+        );
+        assert_eq!(group_names(&items), ids(&["Lights", "Switches"]));
+        assert!(group_items(&[]).is_empty());
+    }
+
+    #[test]
+    fn only_contract_1_1_and_later_lists() {
+        assert!(!can_list("1.0"));
+        assert!(can_list("1.1"));
+        assert!(can_list("1.2"));
+        assert!(can_list("2.0"));
+        assert!(!can_list("nonsense"));
+    }
+
+    #[test]
+    fn icons_are_looked_up_without_their_prefix() {
+        assert_eq!(icon_lookup("mdi:lightbulb"), Some("lightbulb"));
+        assert_eq!(
+            icon_lookup("camera-video-symbolic"),
+            Some("camera-video-symbolic")
+        );
+        assert_eq!(icon_lookup(""), None);
+        assert_eq!(icon_lookup("mdi:"), None);
+    }
+
+    #[test]
+    fn a_stored_id_the_list_lacks_stays_visible() {
+        let items = vec![item("Scene 1", "Scene 1", None)];
+        let missing = missing_current(&items, &ids(&["Scene 1", "Old scene"]));
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].id, "Old scene");
+        assert_eq!(missing[0].label, "Old scene");
+        assert_eq!(missing[0].subtitle.as_deref(), Some("Not in the list now"));
+        assert!(missing_current(&items, &ids(&["Scene 1"])).is_empty());
+    }
+
+    #[test]
+    fn toggling_keeps_the_pick_order() {
+        let mut sel = ids(&["b"]);
+        toggle_id(&mut sel, "a", true);
+        toggle_id(&mut sel, "a", true);
+        assert_eq!(sel, ids(&["b", "a"]));
+        toggle_id(&mut sel, "b", false);
+        toggle_id(&mut sel, "zz", false);
+        assert_eq!(sel, ids(&["a"]));
+    }
+
+    #[test]
+    fn long_lists_are_cut_with_a_note() {
+        let items: Vec<PickItem> = (0..5).map(|i| item(&i.to_string(), "x", None)).collect();
+        let (shown, note) = shown_items(&items, 10);
+        assert_eq!((shown.len(), note), (5, None));
+        let (shown, note) = shown_items(&items, 3);
+        assert_eq!(shown.len(), 3);
+        assert_eq!(note.as_deref(), Some("Showing 3 of 5. Search to find the rest."));
+    }
+
+    #[test]
+    fn empty_lists_say_why() {
+        assert_eq!(empty_message("", ""), "The list is empty");
+        assert_eq!(empty_message("kit", ""), "Nothing matches “kit”");
+        assert_eq!(empty_message("", "Lights"), "Nothing in Lights");
+        assert_eq!(empty_message("kit", "Lights"), "Nothing in Lights matches “kit”");
+    }
+
+    #[test]
+    fn item_params_start_empty() {
+        let f = Field {
+            picker: Some("scenes".into()),
+            ..field("scene", FieldKind::Item)
+        };
+        assert_eq!(initial_value(&f), None);
+    }
+    #[test]
+    fn manual_entry_is_trimmed_and_split_for_multi() {
+        assert_eq!(manual_ids("  Scene 1 ", false), ids(&["Scene 1"]));
+        assert_eq!(manual_ids("a, b", false), ids(&["a, b"]));
+        assert_eq!(
+            manual_ids("light.a, switch.b,", true),
+            ids(&["light.a", "switch.b"])
+        );
+        assert!(manual_ids("   ", false).is_empty());
     }
 }

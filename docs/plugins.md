@@ -209,7 +209,7 @@ the rows under the action in the key editor for `params`.
 | `choice` | Drop-down of `choices` | the chosen value (string) |
 | `color` | Colour button | `"#rrggbb"` |
 | `json` | Text entry that must hold valid JSON | the JSON text, as a string |
-| `item` | With a `picker`: the picked entry, from the plugin's list (contract 1.1, see [Pickers](#pickers)). Without one: a text entry | the entry's id (string); a list of ids for a `multi` picker |
+| `item` | With a `picker`: a row showing the current value that opens the plugin's list (search, a group filter when the picker has `groups`, ticks and Done for `multi`; saved on the pick). A stored id the list lacks stays shown as the current value. Typing an id by hand is offered only when the plugin can't list (an error, an empty list, or a 1.0 plugin). Without a picker: a text entry | the entry's id (string); a list of ids for a `multi` picker (an old comma-separated string is read as a list and saved as one on the next pick) |
 | `key_combo`, `file` | Text entry | string |
 | `secret` | Password entry | nothing in `settings.toml`: see [Secrets](#secrets). Only in `[[settings]]`, never in `params`. |
 
@@ -492,10 +492,13 @@ password, and `lan = true` limits it to Home Assistant on the local network.
 In the app: Settings → Integrations lists the installed plugins with their status and an on/off switch.
 Each plugin's page shows its status (with a banner and Restart when it needs attention or stopped
 working), Turned On, Restart, its settings from `[[settings]]`, and Remove… (which also deletes its
-secrets; keys that use it keep their settings and show "Needs the “<id>” plugin"). With Developer Mode on,
-Install from Folder… installs a plugin folder after showing its permissions. Plugin actions appear in the
-key editor's action picker, one section per plugin, with rows for their `params`; keys whose plugin is
-missing, turned off, stopped working or cannot be loaded show a warning badge.
+secrets; keys that use it keep their settings and show "Needs the “<id>” plugin"). Install Plugin… opens a
+`.ulanziplugin` file and shows what the plugin is and what it may do, with an "Unverified plugin" warning;
+packages are unsigned, so its Install button works only with Developer Mode on (the dialog says so). With
+Developer Mode on, Install from Folder (developers)… does the same for a folder that contains
+`plugin.toml`. Plugin actions appear in the key editor's action picker, one section per plugin, with rows
+for their `params` (an `item` param opens the plugin's list; see [Pickers](#pickers)); keys whose plugin
+is missing, turned off, stopped working or cannot be loaded show a warning badge.
 
 From the command line:
 

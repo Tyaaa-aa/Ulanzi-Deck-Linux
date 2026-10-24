@@ -20,7 +20,7 @@ cargo run -q -p ulanzi-core --example showcase -- "$box" >/dev/null
 mkdir -p "$box/config/gtk-4.0"
 printf '[Settings]\ngtk-icon-theme-name=Adwaita\ngtk-decoration-layout=:minimize,maximize,close\n' \
   >"$box/config/gtk-4.0/settings.ini"
-# Developer Mode on, so the Install from Folder… row shows.
+# Developer Mode on, so the Install from Folder (developers)… row shows.
 settings="$box/config/ulanzi-deck/settings.toml"
 if grep -q '^developer_mode' "$settings"; then
   sed -i 's/^developer_mode = .*/developer_mode = true/' "$settings"

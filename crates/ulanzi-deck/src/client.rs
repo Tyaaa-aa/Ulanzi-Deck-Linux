@@ -9,7 +9,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use tokio::sync::{Notify, broadcast};
 use ulanzi_core::model::{Profile, Settings};
-use ulanzi_core::plugin::{Inspected, Manifest};
+use ulanzi_core::plugin::{Inspected, Manifest, PickItem};
 use ulanzi_core::store::parse_profile;
 use uuid::Uuid;
 use zbus::Connection;
@@ -504,6 +504,44 @@ impl Client {
             .proxy
             .call("PluginInstallDir", &(path.to_string_lossy().as_ref(),))
             .await?)
+    }
+
+    /// What installing the `.ulanziplugin` file at `path` (absolute) would install, writing nothing
+    /// that stays. Works without Developer mode.
+    pub async fn plugin_inspect_file(&self, path: &Path) -> Result<Inspected> {
+        let text: String = self
+            .inner
+            .proxy
+            .call("PluginInspectFile", &(path.to_string_lossy().as_ref(),))
+            .await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Install (or replace) the plugin in the `.ulanziplugin` file at `path` (absolute); returns
+    /// its id. Needs Developer mode.
+    pub async fn plugin_install_file(&self, path: &Path) -> Result<String> {
+        Ok(self
+            .inner
+            .proxy
+            .call("PluginInstallFile", &(path.to_string_lossy().as_ref(),))
+            .await?)
+    }
+
+    /// The entries of the plugin's picker matching `query` (`""`: all), only `group` unless it is
+    /// `""`. Starts the plugin if needed; an error is the plugin's own message.
+    pub async fn plugin_list_items(
+        &self,
+        id: &str,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<PickItem>> {
+        let text: String = self
+            .inner
+            .proxy
+            .call("PluginListItems", &(id, picker, query, group))
+            .await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
     }
 
     /// Stop the plugin and delete it and its secrets (its settings are kept).
