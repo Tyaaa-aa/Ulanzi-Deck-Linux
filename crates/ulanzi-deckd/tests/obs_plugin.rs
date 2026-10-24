@@ -191,7 +191,7 @@ async fn obs_plugin_pickers_list_what_the_mock_holds() {
     let mut filters = Vec::new();
     for _ in 0..100 {
         filters = p.list("filters", "", "").await.expect("filters");
-        if !filters.is_empty() {
+        if filters.len() >= 3 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -204,7 +204,8 @@ async fn obs_plugin_pickers_list_what_the_mock_holds() {
         names,
         [
             (Some("Cam"), "Color", Some("On")),
-            (Some("Cam"), "Sharpen", Some("Off"))
+            (Some("Cam"), "Sharpen", Some("Off")),
+            (Some("Mic"), "Noise", Some("On")),
         ]
     );
     let scenes = p.list("scenes", "", "").await.expect("scenes");
@@ -213,6 +214,9 @@ async fn obs_plugin_pickers_list_what_the_mock_holds() {
         .map(|i| (i.id.as_str(), i.state.as_deref()))
         .collect();
     assert_eq!(scenes, [("A", Some("Live")), ("B", None)]);
+    let sources = p.list("sources", "", "").await.expect("sources");
+    let sources: Vec<_> = sources.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(sources, ["Cam", "Mic"]);
     let profiles = p.list("profiles", "quie", "").await.expect("profiles");
     assert_eq!(profiles.len(), 1);
     assert_eq!(profiles[0].id, "Quiet");

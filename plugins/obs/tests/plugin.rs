@@ -132,6 +132,10 @@ fn live_with(h: &mut Harness<Obs>, settings: Value, auth: bool) -> Socket {
                         {"filterName": "Color", "filterEnabled": true, "filterIndex": 0},
                         {"filterName": "Sharpen", "filterEnabled": false, "filterIndex": 1}]}),
                 ),
+                "GetSourceFilterList" if data["sourceName"] == "Mic" => (
+                    true,
+                    json!({"filters": [{"filterName": "Noise", "filterEnabled": true, "filterIndex": 0}]}),
+                ),
                 "GetSourceFilterList" => (true, json!({"filters": []})),
                 other => panic!("unexpected load request {other}"),
             };
@@ -756,12 +760,17 @@ fn pickers_list_what_obs_holds() {
         h.list_items("scene_sources", "", ""),
         Ok(vec![Item::new("Cam", "Cam").subtitle("A").group("A")])
     );
-    assert_eq!(h.list_items("sources", "", ""), Ok(vec![Item::new("Cam", "Cam")]));
+    // Scene sources, and global inputs like a mic (its noise filters).
+    assert_eq!(
+        h.list_items("sources", "", ""),
+        Ok(vec![Item::new("Cam", "Cam"), Item::new("Mic", "Mic")])
+    );
     assert_eq!(
         h.list_items("filters", "", ""),
         Ok(vec![
             Item::new("Color", "Color").group("Cam").state("On"),
             Item::new("Sharpen", "Sharpen").group("Cam").state("Off"),
+            Item::new("Noise", "Noise").group("Mic").state("On"),
         ])
     );
     assert_eq!(
@@ -827,7 +836,11 @@ fn pickers_filter_by_query_and_group() {
         ids(&h.list_items("filters", "", "Cam").expect("a list")),
         ["Color", "Sharpen"]
     );
-    assert!(h.list_items("filters", "", "Mic").expect("a list").is_empty());
+    assert_eq!(
+        ids(&h.list_items("filters", "", "Mic").expect("a list")),
+        ["Noise"]
+    );
+    assert!(h.list_items("filters", "", "Nope").expect("a list").is_empty());
     // A group never matches part of a name, and plain lists have no groups.
     assert!(h.list_items("filters", "", "Ca").expect("a list").is_empty());
     assert!(h.list_items("scenes", "", "A").expect("a list").is_empty());
@@ -915,7 +928,7 @@ fn filter_events_update_the_lists_in_place() {
         "SourceFilterNameChanged",
         json!({"sourceName": "Cam", "oldFilterName": "Color", "filterName": "Tint"}),
     );
-    let items = h.list_items("filters", "", "").expect("a list");
+    let items = h.list_items("filters", "", "Cam").expect("a list");
     assert_eq!(
         items,
         vec![
@@ -930,7 +943,7 @@ fn filter_events_update_the_lists_in_place() {
         json!({"sourceName": "Cam", "filterName": "Tint"}),
     );
     assert_eq!(
-        ids(&h.list_items("filters", "", "").expect("a list")),
+        ids(&h.list_items("filters", "", "Cam").expect("a list")),
         ["Sharpen"]
     );
     assert_eq!(
@@ -971,7 +984,10 @@ fn created_filters_are_fetched_once_per_tick() {
         true,
         json!({"filters": [{"filterName": "Only", "filterEnabled": true}]}),
     );
-    assert_eq!(ids(&h.list_items("filters", "", "").expect("a list")), ["Only"]);
+    assert_eq!(
+        ids(&h.list_items("filters", "", "Cam").expect("a list")),
+        ["Only"]
+    );
 }
 
 #[test]
@@ -1087,6 +1103,101 @@ fn filter_requests_are_bounded() {
             answer(&mut h, s, &id, &ty, true, json!({"filters": []}));
         }
     }
-    assert!(max_open <= 25, "{max_open} in flight");
-    assert!((100..=200).contains(&total), "{total} sources asked");
+    assert_eq!(max_open, 25, "requests in flight at once");
+    assert_eq!(total, 200, "sources asked");
+}
+
+#[test]
+fn global_inputs_get_their_filters_too() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let asked: Vec<_> = sent_requests(&h, s)
+        .into_iter()
+        .filter(|r| r.1 == "GetSourceFilterList")
+        .map(|r| r.2["sourceName"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(asked, ["Cam", "Mic"]);
+    assert_eq!(ids(&h.list_items("sources", "mic", "").expect("a list")), ["Mic"]);
+    assert_eq!(
+        h.list_items("filters", "", "Mic"),
+        Ok(vec![Item::new("Noise", "Noise").group("Mic").state("On")])
+    );
+}
+
+#[test]
+fn created_filter_during_a_request_is_asked_again_after_it() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let t = tick(&h);
+    let asks = |h: &Harness<Obs>| {
+        sent_requests(h, s)
+            .into_iter()
+            .filter(|r| r.1 == "GetSourceFilterList")
+            .collect::<Vec<_>>()
+    };
+    let before = asks(&h).len();
+    event(
+        &mut h,
+        s,
+        "SourceFilterCreated",
+        json!({"sourceName": "Cam", "filterName": "F1"}),
+    );
+    h.fire(t);
+    assert_eq!(asks(&h).len(), before + 1);
+    // A second creation while the first request is unanswered: nothing new goes out yet.
+    event(
+        &mut h,
+        s,
+        "SourceFilterCreated",
+        json!({"sourceName": "Cam", "filterName": "F2"}),
+    );
+    h.fire(t);
+    assert_eq!(asks(&h).len(), before + 1);
+    let (id, ty, _) = asks(&h).pop().expect("request");
+    answer(
+        &mut h,
+        s,
+        &id,
+        &ty,
+        true,
+        json!({"filters": [{"filterName": "F1", "filterEnabled": true}]}),
+    );
+    // The answer frees the source: it is asked about again, so F2 is not lost.
+    assert_eq!(asks(&h).len(), before + 2);
+    let (id, ty, _) = asks(&h).pop().expect("request");
+    answer(
+        &mut h,
+        s,
+        &id,
+        &ty,
+        true,
+        json!({"filters": [{"filterName": "F1", "filterEnabled": true}, {"filterName": "F2", "filterEnabled": true}]}),
+    );
+    assert_eq!(
+        ids(&h.list_items("filters", "", "Cam").expect("a list")),
+        ["F1", "F2"]
+    );
+}
+
+#[test]
+fn a_dropped_filter_request_is_asked_again() {
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    let t = tick(&h);
+    let before = count(&h, s, "GetSourceFilterList");
+    event(
+        &mut h,
+        s,
+        "SourceFilterCreated",
+        json!({"sourceName": "Cam", "filterName": "F1"}),
+    );
+    h.fire(t);
+    assert_eq!(count(&h, s, "GetSourceFilterList"), before + 1);
+    for _ in 0..6 {
+        h.fire(t);
+    }
+    assert!(
+        count(&h, s, "GetSourceFilterList") >= before + 2,
+        "asked again after the first went unanswered"
+    );
 }

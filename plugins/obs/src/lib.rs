@@ -261,7 +261,14 @@ fn current_of(names: &[String], current: &str) -> Vec<Item> {
 /// Every entry of picker `picker`, from what the plugin already knows (nothing is asked of OBS).
 fn picker_items(t: &Tracked, picker: &str) -> Result<Vec<Item>, String> {
     let live = &t.live;
-    let sources_in_scenes: BTreeSet<&String> = live.sources.iter().map(|(_, source)| source).collect();
+    // Sources in scenes, and the global audio inputs (a mic carries the noise filters).
+    let sources_in_scenes: BTreeSet<&String> = live
+        .sources
+        .iter()
+        .map(|(_, source)| source)
+        .chain(live.inputs.iter())
+        .chain(live.muted.iter())
+        .collect();
     Ok(match picker {
         "scenes" => live
             .scenes
@@ -550,41 +557,94 @@ impl Obs {
         }
     }
 
-    /// Ask for the filters of every source in a scene that has none yet, within the caps. Entries
-    /// of sources that left the scenes stay (a reload rebuilds the scenes one answer at a time);
-    /// the pickers skip them and a collection change drops them.
-    fn queue_filters(&mut self) {
+    /// Sources that can have filters: those in a scene, and the global audio inputs.
+    fn known_sources(&self) -> BTreeSet<String> {
         let live = &self.tracked.live;
-        let names: BTreeSet<&String> = live.sources.iter().map(|(_, source)| source).collect();
-        for source in names {
-            if self.tracked.filters.len() + self.filter_todo.len() >= MAX_FILTER_SOURCES {
-                break;
-            }
-            if !self.tracked.filters.contains_key(source) {
+        live.sources
+            .iter()
+            .map(|(_, source)| source)
+            .chain(live.inputs.iter())
+            .chain(live.muted.iter())
+            .cloned()
+            .collect()
+    }
+
+    fn filters_in_flight(&self, source: &str) -> bool {
+        self.pending
+            .values()
+            .any(|p| p.ty == "GetSourceFilterList" && p.arg == source)
+    }
+
+    /// Whether `source` may be (re)queued: it already has an entry, or the entries of sources
+    /// that still exist plus the queue leave room under [`MAX_FILTER_SOURCES`].
+    fn filter_room(&self, known: &BTreeSet<String>, source: &str) -> bool {
+        if !known.contains(source) {
+            return false;
+        }
+        if self.tracked.filters.contains_key(source) {
+            return true;
+        }
+        let kept = self.tracked.filters.keys().filter(|k| known.contains(*k)).count();
+        kept + self.filter_todo.len() < MAX_FILTER_SOURCES
+    }
+
+    /// Ask for the filters of every known source that has none yet, within the caps. Entries of
+    /// sources that left stay until a reload settles (it rebuilds scenes one answer at a time).
+    fn queue_filters(&mut self) {
+        let known = self.known_sources();
+        for source in &known {
+            if !self.tracked.filters.contains_key(source)
+                && !self.filters_in_flight(source)
+                && self.filter_room(&known, source)
+            {
                 self.filter_todo.insert(source.clone());
             }
         }
     }
 
-    /// Send queued filter requests while fewer than [`FILTERS_IN_FLIGHT`] wait for an answer.
+    /// Queue `source` again (a request was lost or went stale, or its filters changed).
+    fn requeue_filters(&mut self, source: &str) {
+        if self.filter_room(&self.known_sources(), source) {
+            self.filter_todo.insert(source.to_string());
+        }
+    }
+
+    /// Forget filter entries of sources that no longer exist, once a reload has fully landed.
+    fn settle_filters(&mut self) {
+        let busy = self.pending.values().any(|p| {
+            matches!(p.kind, Kind::Load { .. })
+                && matches!(
+                    p.ty.as_str(),
+                    "GetSceneList" | "GetSceneItemList" | "GetInputList" | "GetInputMute"
+                )
+        });
+        if !busy {
+            let known = self.known_sources();
+            self.tracked.filters.retain(|source, _| known.contains(source));
+        }
+    }
+
+    /// Send queued filter requests while fewer than [`FILTERS_IN_FLIGHT`] wait for an answer. A
+    /// source that already has a request out stays queued and goes out after that answer.
     fn pump_filters(&mut self, cx: &mut Cx) {
         let generation = self.generation;
-        let mut open = self
+        let open = self
             .pending
             .values()
             .filter(|p| p.ty == "GetSourceFilterList")
             .count();
-        while open < FILTERS_IN_FLIGHT && matches!(self.phase, Phase::Live(_)) {
-            let Some(source) = self.filter_todo.pop_first() else {
+        let ready: Vec<String> = self
+            .filter_todo
+            .iter()
+            .filter(|source| !self.filters_in_flight(source))
+            .take(FILTERS_IN_FLIGHT.saturating_sub(open))
+            .cloned()
+            .collect();
+        for source in ready {
+            if !matches!(self.phase, Phase::Live(_)) {
                 break;
-            };
-            if self
-                .pending
-                .values()
-                .any(|p| p.ty == "GetSourceFilterList" && p.arg == source)
-            {
-                continue;
             }
+            self.filter_todo.remove(&source);
             let data = json!({"sourceName": source});
             if self
                 .send_request(
@@ -598,7 +658,6 @@ impl Obs {
             {
                 break;
             }
-            open += 1;
         }
     }
 
@@ -677,11 +736,8 @@ impl Obs {
         if e.lists {
             self.lists_wanted = true;
         }
-        if let Some(source) = e.refilter
-            && self.tracked.live.sources.iter().any(|(_, name)| *name == source)
-            && self.filter_todo.len() < MAX_FILTER_SOURCES
-        {
-            self.filter_todo.insert(source);
+        if let Some(source) = e.refilter {
+            self.requeue_filters(&source);
         }
         if e.changed || e.reload {
             self.update_ok_status(cx);
@@ -710,7 +766,13 @@ impl Obs {
                     }
                 }
                 if p.ty == "GetSourceFilterList" {
+                    if generation != self.generation {
+                        self.requeue_filters(&p.arg);
+                    }
                     self.pump_filters(cx);
+                }
+                if generation == self.generation {
+                    self.settle_filters();
                 }
             }
             Kind::Action | Kind::VolumeRead { .. } | Kind::FilterRead { .. } => {
@@ -867,6 +929,8 @@ impl Obs {
                 } else {
                     self.tracked.live.muted.remove(&p.arg);
                 }
+                self.queue_filters();
+                self.pump_filters(cx);
             }
             "GetSceneCollectionList" => {
                 self.tracked.collection = str_of(v, "currentSceneCollectionName");
@@ -932,6 +996,7 @@ impl Obs {
             .map(|(id, _)| id.clone())
             .collect();
         let mut lost = false;
+        let mut filters_lost: Vec<String> = Vec::new();
         for id in stale {
             if let Some(p) = self.pending.remove(&id) {
                 match p.kind {
@@ -943,13 +1008,21 @@ impl Obs {
                         cx.log(Level::Warn, &format!("OBS didn’t answer {}", p.ty));
                         lost = true;
                     }
-                    Kind::Load { .. } | Kind::Stats => {}
+                    Kind::Load { generation } => {
+                        if p.ty == "GetSourceFilterList" && generation == self.generation {
+                            filters_lost.push(p.arg);
+                        }
+                    }
+                    Kind::Stats => {}
                 }
             }
         }
         if lost {
             self.go_down(cx, Down::Dropped, true);
             return;
+        }
+        for source in filters_lost {
+            self.requeue_filters(&source);
         }
         self.pump_filters(cx);
         if ticks.is_multiple_of(2) {

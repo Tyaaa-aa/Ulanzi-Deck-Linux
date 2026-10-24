@@ -111,6 +111,11 @@ fn answer(ty: &str, data: &Value) -> (bool, Value, Option<&'static str>) {
                 {"filterName": "Sharpen", "filterEnabled": false, "filterIndex": 1}]}),
             None,
         ),
+        "GetSourceFilterList" if data["sourceName"] == "Mic" => (
+            true,
+            json!({"filters": [{"filterName": "Noise", "filterEnabled": true, "filterIndex": 0}]}),
+            None,
+        ),
         "GetSourceFilterList" => (true, json!({"filters": []}), None),
         "GetStudioModeEnabled" => (true, json!({"studioModeEnabled": false}), None),
         "GetInputVolume" => (true, json!({"inputVolumeDb": -1.0, "inputVolumeMul": 0.89}), None),
