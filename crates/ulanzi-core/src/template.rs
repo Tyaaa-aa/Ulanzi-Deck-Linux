@@ -1,5 +1,5 @@
 //! Profile templates: a few generic ones built in, plus any `.ulanzideck` the user keeps in
-//! `~/.local/share/ulanzi-deck/templates/` (where "Save as Template…" puts them).
+//! `~/.local/share/ulanzi-deck/templates/` (where "Save as Template" puts them).
 
 use std::path::{Path, PathBuf};
 

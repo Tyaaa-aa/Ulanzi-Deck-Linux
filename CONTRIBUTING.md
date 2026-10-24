@@ -53,7 +53,7 @@ with the model, the firmware version (`ulanzictl status`) and the `lsusb` line.
 ## Questions and sharing setups
 
 Use [Discussions](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/discussions) for "how do I…?",
-showing off your deck, and sharing templates (`.ulanzideck` files from **Save as Template…**).
+showing off your deck, and sharing templates (`.ulanzideck` files from **Save as Template**).
 
 ## Security
 

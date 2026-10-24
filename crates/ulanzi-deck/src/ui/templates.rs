@@ -164,7 +164,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
         flow.append(&button);
     }
     let note = gtk::Label::builder()
-        .label("Make your own: right-click a profile → Save as Template…")
+        .label("Make your own: right-click a profile → Save as Template")
         .css_classes(["dim-label", "caption"])
         .margin_bottom(12)
         .build();

@@ -84,7 +84,7 @@ Start some music or a video in any player (browser tab is fine).
 ## 5. Profiles and following the app in front (5 min)
 
 - [ ] 5.1 Click **Productivity** in the sidebar. → The deck switches to its keys.
-- [ ] 5.2 Right-click **Video Editing** → **Auto-Switch…** → add your text editor (or any app), close.
+- [ ] 5.2 Right-click **Video Editing** → **Auto-Switch** → add your text editor (or any app), close.
   The dialog's top row says it works on your desktop.
 - [ ] 5.3 Bring that app to the front. → The deck switches to Video Editing. Bring something else to the
   front. → It goes back to Media Desk (the default).
@@ -110,11 +110,11 @@ Start some music or a video in any player (browser tab is fine).
 
 ## 7. Templates, sharing, backups (4 min)
 
-- [ ] 7.1 Profiles **+** → **From Template…**. → Four templates with previews. Pick **Media Desk**. → A
+- [ ] 7.1 Profiles **+** → **From Template**. → Four templates with previews. Pick **Media Desk**. → A
   new profile appears and the deck switches to it.
-- [ ] 7.2 Right-click it → **Export…**, save to your Desktop. Then menu → **Import…** the same file,
+- [ ] 7.2 Right-click it → **Export**, save to your Desktop. Then menu → **Import** the same file,
   choose **Keep Both**. → A copy "… (2)" appears. **Undo** on the message removes it again.
-- [ ] 7.3 Right-click a profile → **Save as Template…**. → It's offered next time in From Template.
+- [ ] 7.3 Right-click a profile → **Save as Template**. → It's offered next time in From Template.
 - [ ] 7.4 Preferences → **Backups** → **Back Up Now**, change a key, then **Restore…** that backup.
   → The key goes back.
 
