@@ -1,7 +1,7 @@
 # Home Assistant plugin
 
 Toggles, runs and sets Home Assistant entities from your keys, calls any service, and shows live entity state
-on key labels. It is a sandboxed plugin (contract 1.0) and talks to Home Assistant over its WebSocket API.
+on key labels. It is a sandboxed plugin (contract 1.1) and talks to Home Assistant over its WebSocket API.
 It needs Home Assistant 2022.4 or newer.
 
 The plugin only talks to Home Assistant on your local network (`lan = true`). That allows `localhost`, names
@@ -51,7 +51,7 @@ attributes = ["climate.living:current_temperature"]   # optional, up to 40
 |---|---|
 | `url` | Required. `192.168.1.5`, `homeassistant.local:8123`, `http://host:8123`, `https://host` (`ws://` and `wss://` work too, and a pasted `/api/websocket` ending is removed). No scheme means `http`; no port means 8123 for http and 443 for https; a path is kept as a prefix (`/ha` becomes `/ha/api/websocket`). Credentials, a query or a fragment are refused. |
 | `token` | The long-lived access token. |
-| `entities` | The entities whose state you want on key labels. A list, or one comma-separated string. Ids are lowercase (`light.desk`); an entry that is not a valid entity id is skipped with a warning. |
+| `entities` | The entities whose state you want on key labels. In the app you pick them from the entity list. In `settings.toml` a list, or one comma-separated string (the older form, still read). Ids are lowercase (`light.desk`); an entry that is not a valid entity id is skipped with a warning. |
 | `attributes` | Extra attribute values as `entity:attribute`. Optional. |
 
 Only the listed entities are subscribed (Home Assistant sends just those, never the whole install). Actions can
@@ -96,7 +96,7 @@ the log.
 | `fan` | `fan.set_percentage` | `fan.increase_speed` / `decrease_speed` with `percentage_step` |
 | `cover` | `cover.set_cover_position` | `set_cover_position` from the tracked position plus or minus `step`; the cover must be listed under `entities` |
 
-A dial turn is an ordinary action in contract 1.0: assign `set_level` with `op = "up"` or `"down"` to it.
+A dial turn is an ordinary action in contract 1.1: assign `set_level` with `op = "up"` or `"down"` to it.
 
 ```toml
 [pages.keys.7.look]
@@ -120,6 +120,44 @@ plugin = "ha"
 action = "set_level"
 params = { entity_id = "light.desk", op = "up", step = 10 }
 ```
+
+## Picking entities
+
+Every `entity_id` field and the `entities` setting open a list of your entities, grouped by domain ("Lights",
+"Switches", "Sensors", …), with each entity's name and current state. Each action only lists what it can
+work on:
+
+| Picker | Used by | Lists |
+|---|---|---|
+| `entities` | the `entities` setting (several at once) | every entity |
+| `toggleable` | `toggle`, `turn_on`, `turn_off` | light, switch, fan, input_boolean, automation, script, cover, media_player, siren, humidifier, remote, group |
+| `runnable` | `run` | scene, script, automation, button, input_button |
+| `levels` | `set_level` | light, media_player, fan, cover |
+| `any` | `call_service` | every entity |
+
+`ulanzictl plugin items ha toggleable kitchen` shows the same list in a terminal. While Home Assistant is not
+connected the list says "Not connected to Home Assistant"; right after connecting it can be empty for a moment.
+You can always type an entity id instead ("Enter manually…").
+
+How the list is fetched: after signing in, the plugin subscribes once to a `render_template` whose template
+writes one short line per entity (`entity_id`, name, state). The list is kept only in the plugin's memory: it
+is never published as `{ha.…}` state and does not use the state key budget. Other ways were ruled out:
+
+- `get_states` and an unfiltered `subscribe_entities` send every attribute of every entity; on a big install
+  that is several megabytes, over the host's 1 MiB message limit, and the connection would be closed.
+- `config/entity_registry/list_for_display` has no states and no composed friendly names, and misses entities
+  without a unique id.
+
+Limits:
+
+- Home Assistant renders a template that goes through all states at most once a minute, so new entities and
+  states in the list can be up to a minute old. Key labels are not affected: they use the regular entity
+  subscription.
+- Names are cut to 60 characters and states to 24; control characters become spaces.
+- The answer is kept under 1 MiB: on very large installs the list stops after about 200 000 characters
+  (fewer with many non-Latin names) and the log says so once. Lights, switches, fans, covers, media players,
+  scenes, scripts, automations and buttons come first, so what keys can control is listed before sensors.
+- If Home Assistant refuses the template, the picker shows its error and you can type the id.
 
 ## Live state
 
@@ -151,15 +189,15 @@ updating, new ones get no value and the plugin logs one warning. Disable and ena
 
 | Item | Why / when |
 |---|---|
-| Discovery (`homeassistant.local` probe, mDNS) | no discovery interface in contract 1.0; a later 1.x |
+| Discovery (`homeassistant.local` probe, mDNS) | no discovery interface in contract 1.1; a later 1.x |
 | Browser sign-in (OAuth), token refresh | needs the `auth` and `listener` interfaces (later contract) |
-| Item picker with areas, icons and pictures; "What should this key do?" dialog | GUI building blocks (plugin milestone 2) and a `list-items` export |
-| Entity registry, areas, device names, following renames | would need the large `config/entity_registry/list` and pickers; only the friendly name is used |
+| Areas, icons and pictures in the picker; "What should this key do?" dialog | later; the picker shows name, domain and state |
+| Entity registry, areas, device names, following renames | would need the large `config/entity_registry/list`; only the friendly name is used |
 | State-driven key colours and icons, key faces, widgets (tile, climate, group), sparkline | key faces and widget templates are later contract versions |
-| Dial adjust | contract 1.0 only has `on-action`; a dial turn works as `set_level` with `op = up` / `down` |
+| Dial adjust | no dial event in contract 1.1; a dial turn works as `set_level` with `op = up` / `down` |
 | Nabu Casa and other HTTPS remote URLs | `wss` to a public host needs a `network` entry you cannot edit yet; only `lan = true` ships. HTTPS on your LAN works if the certificate is valid for the name you use |
 | Home Assistant's error as the key's error | the action returns before Home Assistant answers: see `{ha.last_error}` and the log |
-| Service responses, `get_states`, `fire_event`, templates | not needed for control and live labels |
+| Service responses, `get_states`, `fire_event`, your own templates | not needed for control and live labels (one fixed template feeds the pickers) |
 | Camera pictures, entity images | need `http` and a canvas |
 | Marketplace listing, screenshots, polish | marketplace milestone |
 

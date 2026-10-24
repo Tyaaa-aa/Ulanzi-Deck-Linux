@@ -1,7 +1,7 @@
 id = "ha"
 name = "Home Assistant"
 version = "1.0.0"
-contract = "1.0"
+contract = "1.1"
 description = "Toggle, run and set Home Assistant entities and call any service, with live entity state on key labels."
 categories = ["smart-home"]
 background = true
@@ -26,9 +26,10 @@ help = "HA: your Profile → Security → Long-lived access tokens"
 
 [[settings]]
 key = "entities"
-kind = "text"
+kind = "item"
+picker = "entities"
 label = "Entities to show on keys (up to 40)"
-help = "Separate with commas"
+help = "Pick them from the list"
 
 [[settings]]
 key = "attributes"
@@ -36,39 +37,70 @@ kind = "text"
 label = "Extra attributes to show (entity:attribute, optional)"
 help = "Separate with commas"
 
+# Every entity, for the entities setting.
+[[pickers]]
+id = "entities"
+style = "list"
+groups = true
+multi = true
+
+# What toggle, turn on and turn off handle well.
+[[pickers]]
+id = "toggleable"
+style = "list"
+groups = true
+
+# Scenes, scripts, automations and buttons, for run.
+[[pickers]]
+id = "runnable"
+style = "list"
+groups = true
+
+# Lights, media players, fans and covers, for set_level.
+[[pickers]]
+id = "levels"
+style = "list"
+groups = true
+
+# Every entity, one at a time, for call_service.
+[[pickers]]
+id = "any"
+style = "list"
+groups = true
+
 [[actions]]
 id = "toggle"
 name = "Toggle an entity"
 params = [
-  { key = "entity_id", kind = "text", label = "Entity" },
+  { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
 
 [[actions]]
 id = "turn_on"
 name = "Turn an entity on"
 params = [
-  { key = "entity_id", kind = "text", label = "Entity" },
+  { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
 
 [[actions]]
 id = "turn_off"
 name = "Turn an entity off"
 params = [
-  { key = "entity_id", kind = "text", label = "Entity" },
+  { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
 
 [[actions]]
 id = "run"
 name = "Run a scene, script, automation or button"
 params = [
-  { key = "entity_id", kind = "text", label = "Entity" },
+  { key = "entity_id", kind = "item", picker = "runnable", label = "Entity" },
 ]
 
 [[actions]]
 id = "set_level"
 name = "Set or change a level (light, volume, fan, cover)"
 params = [
-  { key = "entity_id", kind = "text", label = "Entity" },
+  { key = "entity_id", kind = "item", picker = "levels", label = "Entity" },
   { key = "op", kind = "choice", label = "Change", choices = ["set", "up", "down"] },
   { key = "percent", kind = "number", label = "Level (percent, for Set)", min = 0, max = 100 },
   { key = "step", kind = "number", label = "Step (percent)", min = 1, max = 50, default = 5 },
@@ -80,7 +112,7 @@ name = "Call a service"
 params = [
   { key = "domain", kind = "text", label = "Domain (for example notify)" },
   { key = "service", kind = "text", label = "Service" },
-  { key = "entity_id", kind = "text", label = "Entity (optional)" },
+  { key = "entity_id", kind = "item", picker = "any", label = "Entity (optional)" },
   { key = "data", kind = "json", label = "JSON data" },
 ]
 

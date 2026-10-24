@@ -3,17 +3,20 @@
 //!
 //! One WebSocket to `/api/websocket`. Every handler only sends and returns (the host allows 500 ms
 //! per call); answers arrive as `message` events and are matched to what was asked by command id.
-//! Only the entities named in the settings are subscribed to, never the whole install.
+//! Only the entities named in the settings are subscribed to, never the whole install. For the
+//! pickers one `render_template` subscription keeps a bounded list of every entity (id, name and
+//! state) in memory; it is never published as state.
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use serde_json::Value;
-use ulanzi_plugin::{Cx, Level, Payload, Plugin, Socket, Status, Timer};
+use ulanzi_plugin::{Cx, Item, Level, Payload, Plugin, Socket, Status, Timer};
 
 use crate::actions::{Plan, ServiceCall, plan};
 use crate::protocol::{
-    Config, HOST_KEY_BYTES, HOST_STATE_KEYS, HOST_VALUE_BYTES, LiveInfo, MAX_ENTITIES, Tracked, auth_msg,
-    call_service_msg, offline_pairs, parse_settings, ping_msg, state_pairs, subscribe_msg, valid_entity_id,
+    Config, EntityList, HOST_KEY_BYTES, HOST_STATE_KEYS, HOST_VALUE_BYTES, LiveInfo, MAX_ENTITIES, Tracked,
+    auth_msg, call_service_msg, offline_pairs, parse_entity_list, parse_settings, picker_items, ping_msg,
+    render_template_msg, state_pairs, subscribe_msg, valid_entity_id,
 };
 
 pub mod actions;
@@ -29,6 +32,9 @@ const PENDING_TICKS: u64 = 5;
 /// A ping is sent every this many ticks; two unanswered ones mean the socket is dead.
 const PING_EVERY_TICKS: u64 = 15;
 const MAX_MISSED_PINGS: u32 = 2;
+/// Longest error text from Home Assistant kept for the pickers.
+const LIST_ERROR_BYTES: usize = 500;
+const NOT_CONNECTED: &str = "Not connected to Home Assistant";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -107,7 +113,11 @@ impl Down {
 #[derive(Debug, Clone)]
 enum Kind {
     Subscribe,
-    Service { label: String },
+    /// The entity list (`render_template`).
+    List,
+    Service {
+        label: String,
+    },
     Ping,
 }
 
@@ -115,6 +125,17 @@ enum Kind {
 struct Pending {
     kind: Kind,
     sent_tick: u64,
+}
+
+/// The entity list of the current connection, for the pickers.
+#[derive(Debug, Clone, Default)]
+enum Listing {
+    /// Asked for (or not yet), nothing rendered yet.
+    #[default]
+    Waiting,
+    Ready(EntityList),
+    /// Home Assistant's error text.
+    Failed(String),
 }
 
 pub struct Ha {
@@ -131,6 +152,10 @@ pub struct Ha {
     tracked: Tracked,
     live: LiveInfo,
     missed_pings: u32,
+    /// The id of this connection's `render_template` subscription.
+    list_id: Option<u64>,
+    listing: Listing,
+    truncation_logged: bool,
     /// Values last sent to the host, by key.
     sent: BTreeMap<String, String>,
     /// Keys currently holding a value (and entity states), so going offline can blank them.
@@ -160,6 +185,9 @@ impl Default for Ha {
             tracked: Tracked::default(),
             live: LiveInfo::default(),
             missed_pings: 0,
+            list_id: None,
+            listing: Listing::Waiting,
+            truncation_logged: false,
             sent: BTreeMap::new(),
             published: BTreeSet::new(),
             ever_published: BTreeSet::new(),
@@ -288,6 +316,9 @@ impl Ha {
         self.next_id = 0;
         self.ticks = 0;
         self.missed_pings = 0;
+        // The list belongs to the connection, like the tracked entities.
+        self.list_id = None;
+        self.listing = Listing::Waiting;
         self.publish(cx);
     }
 
@@ -500,6 +531,11 @@ impl Ha {
                             self.pending.remove(&id);
                         }
                     }
+                    "event"
+                        if self.list_id.is_some() && v.get("id").and_then(Value::as_u64) == self.list_id =>
+                    {
+                        self.handle_list_event(cx, &v);
+                    }
                     "event" if v.get("id").and_then(Value::as_u64) == Some(sub_id) => {
                         self.handle_event(cx, socket, sub_id, &v);
                     }
@@ -516,6 +552,7 @@ impl Ha {
             // An empty `entity_ids` would mean every entity on the install: do not ask at all.
             self.go_live(cx, socket, 0);
             self.refresh(cx);
+            self.subscribe_list(cx, socket);
             return;
         }
         let id = self.next_id + 1;
@@ -529,7 +566,72 @@ impl Ha {
             .is_ok()
         {
             self.phase = Phase::Subscribing { socket, sub_id: id };
+            self.subscribe_list(cx, socket);
         }
+    }
+
+    /// Ask once per connection for the entity list the pickers show.
+    fn subscribe_list(&mut self, cx: &mut Cx, socket: Socket) {
+        if self.phase.socket() != Some(socket) || self.list_id.is_some() {
+            return;
+        }
+        let id = self.next_id + 1;
+        if self
+            .send_command(cx, socket, render_template_msg, Kind::List)
+            .is_ok()
+        {
+            self.list_id = Some(id);
+        }
+    }
+
+    /// A render of the entity list: `{"result": "<lines>"}`, or an error.
+    fn handle_list_event(&mut self, cx: &mut Cx, v: &Value) {
+        let event = v.get("event").unwrap_or(&Value::Null);
+        let error = event
+            .get("error")
+            .or_else(|| event.get("result").and_then(|r| r.get("error")));
+        if let Some(e) = error {
+            let text = match e {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            self.list_failed(cx, &text);
+            return;
+        }
+        let list = match event.get("result") {
+            Some(Value::String(text)) => parse_entity_list(text),
+            // Home Assistant turns output that looks like a number or a list into one; ours never
+            // does, except an install with nothing to list.
+            Some(_) => EntityList::default(),
+            None => return,
+        };
+        if list.truncated && !self.truncation_logged {
+            self.truncation_logged = true;
+            cx.log(
+                Level::Info,
+                &format!(
+                    "Home Assistant has more entities than the entity list holds: it was cut after {} (lights, switches and other controllable ones come first)",
+                    list.rows.len()
+                ),
+            );
+        }
+        self.listing = Listing::Ready(list);
+    }
+
+    fn list_failed(&mut self, cx: &mut Cx, text: &str) {
+        let text = truncate_at_boundary(text.trim().to_string(), LIST_ERROR_BYTES);
+        let text = if text.is_empty() {
+            "Home Assistant could not list its entities".to_string()
+        } else {
+            text
+        };
+        if !matches!(&self.listing, Listing::Failed(t) if *t == text) {
+            cx.log(
+                Level::Warn,
+                &format!("Home Assistant could not list its entities: {text}"),
+            );
+        }
+        self.listing = Listing::Failed(text);
     }
 
     fn go_live(&mut self, cx: &mut Cx, socket: Socket, sub_id: u64) {
@@ -598,6 +700,12 @@ impl Ha {
                     self.refresh(cx);
                 }
             }
+            Kind::List => {
+                if !ok {
+                    let why = text("message").unwrap_or_default();
+                    self.list_failed(cx, &why);
+                }
+            }
             Kind::Service { label } => {
                 if ok {
                     self.set_last_error(cx, "");
@@ -630,7 +738,7 @@ impl Ha {
                     cx.log(Level::Warn, &format!("Home Assistant didn’t answer {label}"));
                 }
                 Some(Kind::Ping) => self.missed_pings += 1,
-                Some(Kind::Subscribe) | None => {}
+                Some(Kind::Subscribe | Kind::List) | None => {}
             }
         }
         if self.missed_pings >= MAX_MISSED_PINGS {
@@ -736,6 +844,24 @@ impl Plugin for Ha {
                 Ok(())
             }
             Plan::Call(call) => self.call_service(cx, &call),
+        }
+    }
+
+    fn list_items(
+        &mut self,
+        _cx: &mut Cx,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<Item>, String> {
+        // Signed in: the entity subscription may still be on its way, the list may already be in.
+        if !matches!(self.phase, Phase::Subscribing { .. } | Phase::Live { .. }) {
+            return Err(NOT_CONNECTED.to_string());
+        }
+        match &self.listing {
+            Listing::Waiting => picker_items(&EntityList::default(), picker, query, group),
+            Listing::Failed(e) => Err(e.clone()),
+            Listing::Ready(list) => picker_items(list, picker, query, group),
         }
     }
 

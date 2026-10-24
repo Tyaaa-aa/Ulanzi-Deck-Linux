@@ -3,6 +3,10 @@
 //! It also holds a large fake registry (3000 entities) that it only returns to `get_states`:
 //! the answer is about 3 MB, so a plugin that ever asked for it would see the host close the socket
 //! (1 MiB per message) and its test would fail.
+//!
+//! `render_template` is answered like Home Assistant does (a success `result`, then an `event` with
+//! `{"result": "<text>", "listeners": {...}}`), with a fixed text in the format of the plugin's entity
+//! list template: the mock does not run Jinja.
 
 use std::sync::{Arc, Mutex};
 
@@ -103,6 +107,10 @@ fn registry() -> Value {
     )
 }
 
+/// What the plugin's entity list template would render for the mock's install.
+const ENTITY_LINES: &str = "light.desk\tDesk lamp\ton\nswitch.kettle\tKettle\toff\nscene.movie\tMovie time\tunknown\n\
+    lock.door\tFront door\tlocked\nsensor.temp\tTemperature\t21.5\n";
+
 fn result(id: &Value, ok: bool, body: Value, error: Option<&str>) -> Value {
     let mut m = json!({"id": id, "type": "result", "success": ok, "result": body});
     if let Some(e) = error {
@@ -187,6 +195,14 @@ pub async fn mock(mode: Mode) -> Mock {
                                     "call_service" => out.push(result(id, true, json!({"context": {}}), None)),
                                     "ping" => out.push(json!({"id": id, "type": "pong"})),
                                     "get_states" => out.push(result(id, true, registry(), None)),
+                                    // The mock does not run Jinja: a fixed list in the template's format.
+                                    "render_template" => {
+                                        out.push(result(id, true, Value::Null, None));
+                                        out.push(json!({"id": id, "type": "event", "event": {
+                                            "result": ENTITY_LINES,
+                                            "listeners": {"all": true, "entities": [], "domains": [], "time": false},
+                                        }}));
+                                    }
                                     _ => out.push(result(id, true, Value::Null, None)),
                                 }
                                 for m in out {

@@ -75,6 +75,10 @@ fn ha_manifest_is_valid() {
     assert_eq!(m.name, "Home Assistant");
     assert!(m.background);
     assert_eq!(m.actions.len(), 8);
+    let pickers: Vec<&str> = m.pickers.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(pickers, ["entities", "toggleable", "runnable", "levels", "any"]);
+    assert!(m.pickers[0].multi && m.pickers[0].groups);
+    assert!(m.pickers[1..].iter().all(|p| !p.multi && p.groups));
     assert!(m.permissions.lan);
     assert!(m.permissions.network.is_empty());
 }
@@ -153,6 +157,13 @@ async fn ha_plugin_end_to_end() {
         "back online with fresh values"
     );
     assert_eq!(mock.connections(), 2);
+    // The entity list is subscribed again on the new connection.
+    assert_eq!(
+        mock.requests().iter().filter(|t| *t == "render_template").count(),
+        2,
+        "{:?}",
+        mock.requests()
+    );
     assert!(
         !mock.requests().iter().any(|t| t == "get_states"),
         "the whole install is never requested: {:?}",
@@ -236,4 +247,56 @@ async fn ha_plugin_bad_token_and_foreign_host() {
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(mock.connections(), 1, "no connection to a foreign host");
+}
+
+/// Ask `picker` until the plugin has the mock's list (it arrives right after sign-in).
+async fn items(p: &Running, picker: &str, query: &str, group: &str) -> Vec<ulanzi_core::plugin::PickItem> {
+    let deadline = tokio::time::Instant::now() + SOON;
+    loop {
+        match p.list(picker, query, group).await {
+            Ok(items) if !items.is_empty() => return items,
+            _ if tokio::time::Instant::now() > deadline => panic!("no {picker} list"),
+            _ => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+#[tokio::test]
+async fn ha_plugin_lists_entities_for_pickers() {
+    let mock = mock(Mode::Token(TOKEN)).await;
+    let mut p = start(PACKAGE, MANIFEST, BTreeMap::new());
+    assert_eq!(
+        p.list("entities", "", "").await,
+        Err("Not connected to Home Assistant".to_string())
+    );
+    p.send(Event::Init {
+        settings: settings(mock.port),
+    });
+    let mut seen = Seen::default();
+    assert!(seen.wait(&mut p, |s| s.state("connected") == "yes").await);
+
+    let toggleable = items(&p, "toggleable", "", "").await;
+    let mut ids: Vec<&str> = toggleable.iter().map(|i| i.id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["light.desk", "switch.kettle"]);
+    let desk = toggleable.iter().find(|i| i.id == "light.desk").expect("desk");
+    assert_eq!(desk.label, "Desk lamp");
+    assert_eq!(desk.subtitle.as_deref(), Some("light.desk"));
+    assert_eq!(desk.group.as_deref(), Some("Lights"));
+    assert_eq!(desk.state.as_deref(), Some("on"));
+
+    let all = items(&p, "entities", "", "").await;
+    assert_eq!(all.len(), 5);
+    let sensors = items(&p, "any", "", "Sensors").await;
+    assert_eq!(sensors.len(), 1);
+    assert_eq!(sensors[0].id, "sensor.temp");
+    let runnable = items(&p, "runnable", "movie", "").await;
+    assert_eq!(runnable.len(), 1);
+    assert_eq!(runnable[0].id, "scene.movie");
+    // The list never becomes state.
+    assert!(
+        seen.states
+            .keys()
+            .all(|k| !k.contains("kettle") && !k.contains("movie"))
+    );
 }

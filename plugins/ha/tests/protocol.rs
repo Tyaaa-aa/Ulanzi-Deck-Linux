@@ -643,3 +643,170 @@ fn hardening_of_inputs() {
     assert!(keys.contains(&id));
     assert!(!keys.contains(&format!("{id}.name")));
 }
+
+#[test]
+fn the_entity_list_template_is_bounded_and_ordered() {
+    let t = ENTITY_LIST_TEMPLATE;
+    // Stops at the budget and says so with the marker the parser knows.
+    assert_eq!(LIST_BUDGET, 200_000);
+    assert!(t.contains("> 200000"), "{t}");
+    // A second budget bounds the JSON bytes whatever the encoder: 2 per ASCII, 12 per other character.
+    assert_eq!(LIST_WEIGHT_BUDGET, 900_000);
+    assert!(t.contains("ns.w + w > 900000"), "{t}");
+    assert!(
+        t.contains(r"(line | length) * 2 + (line | regex_replace('[\\x00-\\x7f]', '') | length) * 10"),
+        "{t}"
+    );
+    assert!(t.contains(TRUNCATED_MARKER));
+    // Control characters (tab and newline included) are replaced in names and states.
+    assert!(
+        t.contains(r"regex_replace('[\\x00-\\x1f\\x7f-\\x9f]', ' ')"),
+        "{t}"
+    );
+    assert!(t.contains("[:60]") && t.contains("[:24]"), "{t}");
+    // One line per entity: id, name, state.
+    assert!(t.contains(r"s.entity_id ~ '\t' ~"), "{t}");
+    // Preferred domains first: every domain a picker filters on is in the preferred list.
+    let pref = format!(
+        "set pref = [{}]",
+        PREFERRED_DOMAINS
+            .iter()
+            .map(|d| format!("'{d}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(t.contains(&pref), "{t}");
+    for d in TOGGLEABLE.iter().chain(RUNNABLE).chain(LEVELS) {
+        assert!(PREFERRED_DOMAINS.contains(d), "{d} not preferred");
+    }
+    let first = t
+        .find("selectattr('domain', 'in', pref)")
+        .expect("preferred loop");
+    let rest = t.find("rejectattr('domain', 'in', pref)").expect("rest loop");
+    assert!(first < rest);
+    let m = render_template_msg(7);
+    assert_eq!(m["id"], 7);
+    assert_eq!(m["type"], "render_template");
+    assert_eq!(m["template"], t);
+}
+
+#[test]
+fn entity_list_lines_parse() {
+    let l = parse_entity_list("light.a\tKitchen\ton\nsensor.t\tTemp\t21.5\n");
+    assert!(!l.truncated);
+    assert_eq!(
+        l.rows,
+        [
+            ListedEntity {
+                entity_id: "light.a".into(),
+                name: "Kitchen".into(),
+                state: "on".into()
+            },
+            ListedEntity {
+                entity_id: "sensor.t".into(),
+                name: "Temp".into(),
+                state: "21.5".into()
+            },
+        ]
+    );
+    // Malformed lines are skipped; an empty name or state is kept as empty.
+    let l =
+        parse_entity_list("garbage\nBad Id\tx\ton\nlight.b\t\toff\n\nswitch.c\tPlug\t\nlight.d\tonly two\n");
+    let ids: Vec<&str> = l.rows.iter().map(|r| r.entity_id.as_str()).collect();
+    assert_eq!(ids, ["light.b", "switch.c"]);
+    assert_eq!(l.rows[0].name, "");
+    assert_eq!(l.rows[1].state, "");
+    // The marker line ends the list.
+    let l = parse_entity_list(&format!("light.a\tA\ton\n{TRUNCATED_MARKER}"));
+    assert!(l.truncated);
+    assert_eq!(l.rows.len(), 1);
+    // Defensive cuts even if Home Assistant sends more than the template allows.
+    let l = parse_entity_list(&format!(
+        "light.a\t{}\t{}\u{7}x\n",
+        "n".repeat(100),
+        "s".repeat(10)
+    ));
+    assert_eq!(l.rows[0].name.chars().count(), 60);
+    assert_eq!(l.rows[0].state, "ssssssssss x");
+    assert!(parse_entity_list("").rows.is_empty());
+}
+
+#[test]
+fn domains_have_plural_group_labels() {
+    assert_eq!(group_label("light"), "Lights");
+    assert_eq!(group_label("switch"), "Switches");
+    assert_eq!(group_label("sensor"), "Sensors");
+    assert_eq!(group_label("binary_sensor"), "Binary sensors");
+    assert_eq!(group_label("media_player"), "Media players");
+    assert_eq!(group_label("climate"), "Climate");
+    assert_eq!(group_label("input_boolean"), "Input booleans");
+    assert_eq!(group_label("my_custom_thing"), "My custom thing");
+}
+
+fn sample_list() -> EntityList {
+    parse_entity_list(
+        "light.kitchen\tKitchen lamp\ton\nswitch.kettle\tKettle\toff\nsensor.kitchen_temp\tKitchen temperature\t21.5\n\
+         scene.movie\tMovie time\tunknown\nmedia_player.tv\tTV\tplaying\nlock.door\tFront door\tlocked\nlight.bare\t\toff\n",
+    )
+}
+
+#[test]
+fn picker_items_filter_by_picker_query_and_group() {
+    let l = sample_list();
+    let ids = |items: Vec<ulanzi_plugin::Item>| items.into_iter().map(|i| i.id).collect::<Vec<_>>();
+    let all = picker_items(&l, "entities", "", "").expect("entities");
+    assert_eq!(all.len(), 7);
+    let k = all.iter().find(|i| i.id == "light.kitchen").expect("kitchen");
+    assert_eq!(k.label, "Kitchen lamp");
+    assert_eq!(k.subtitle.as_deref(), Some("light.kitchen"));
+    assert_eq!(k.group.as_deref(), Some("Lights"));
+    assert_eq!(k.state.as_deref(), Some("on"));
+    let bare = all.iter().find(|i| i.id == "light.bare").expect("bare");
+    assert_eq!(bare.label, "light.bare");
+    // Query: case-insensitive on label or id.
+    let mut got = ids(picker_items(&l, "entities", "KIT", "").expect("q"));
+    got.sort();
+    assert_eq!(got, ["light.kitchen", "sensor.kitchen_temp"]);
+    // Group: the label the GUI saw, or the raw domain.
+    assert_eq!(
+        ids(picker_items(&l, "any", "", "Sensors").expect("g")),
+        ["sensor.kitchen_temp"]
+    );
+    assert_eq!(
+        ids(picker_items(&l, "any", "", "sensor").expect("g")),
+        ["sensor.kitchen_temp"]
+    );
+    // Per-action pickers keep only what the action accepts.
+    let mut t = ids(picker_items(&l, "toggleable", "", "").expect("t"));
+    t.sort();
+    assert_eq!(
+        t,
+        ["light.bare", "light.kitchen", "media_player.tv", "switch.kettle"]
+    );
+    assert_eq!(
+        ids(picker_items(&l, "runnable", "", "").expect("r")),
+        ["scene.movie"]
+    );
+    let mut lv = ids(picker_items(&l, "levels", "", "").expect("l"));
+    lv.sort();
+    assert_eq!(lv, ["light.bare", "light.kitchen", "media_player.tv"]);
+    assert!(picker_items(&l, "nope", "", "").is_err());
+}
+
+#[test]
+fn picker_domains_match_what_the_actions_accept() {
+    let tracked = Tracked::default();
+    for d in RUNNABLE {
+        let p = json!({"entity_id": format!("{d}.x")});
+        assert!(plan("run", &p, &tracked).is_ok(), "run {d}");
+    }
+    for d in LEVELS {
+        let p = json!({"entity_id": format!("{d}.x"), "op": "set", "percent": 10});
+        assert!(plan("set_level", &p, &tracked).is_ok(), "set_level {d}");
+    }
+    assert!(!TOGGLEABLE.contains(&"lock"));
+    for d in TOGGLEABLE {
+        let p = json!({"entity_id": format!("{d}.x")});
+        assert!(plan("toggle", &p, &tracked).is_ok(), "toggle {d}");
+    }
+}

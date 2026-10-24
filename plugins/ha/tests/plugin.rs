@@ -163,8 +163,9 @@ fn connects_authenticates_and_subscribes() {
     assert_eq!(texts(&h, s), vec![json!({"type": "auth", "access_token": TOKEN})]);
     h.message(s, auth_ok());
     let msgs = sent_msgs(&h, s);
-    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs.len(), 2);
     assert_eq!((msgs[0].0, msgs[0].1.as_str()), (1, "subscribe_entities"));
+    assert_eq!((msgs[1].0, msgs[1].1.as_str()), (2, "render_template"));
     assert_eq!(msgs[0].2["entity_ids"], json!(["light.desk", "sensor.temp"]));
     assert_ne!(h.state("connected"), Some("yes"));
     result(&mut h, s, 1, true, None);
@@ -708,7 +709,8 @@ fn no_entities_means_no_subscription() {
     h.message(s, auth_required());
     h.message(s, auth_ok());
     // An empty entity filter would mean every entity of the install.
-    assert!(sent_msgs(&h, s).is_empty());
+    let types: Vec<String> = sent_msgs(&h, s).into_iter().map(|m| m.1).collect();
+    assert_eq!(types, ["render_template"]);
     assert_eq!(h.state("connected"), Some("yes"));
     assert_eq!(status_msg(&h).0, Status::Ok);
 }
@@ -881,4 +883,211 @@ fn last_error_clears_when_the_subscription_succeeds() {
     h.message(s, auth_ok());
     result(&mut h, s, 1, true, None);
     assert_eq!(h.state("last_error"), Some(""));
+}
+
+/// The `render_template` command sent on `s`: (id, message).
+fn list_sub(h: &Harness<Ha>, s: Socket) -> (u64, Value) {
+    let subs: Vec<_> = sent_msgs(h, s)
+        .into_iter()
+        .filter(|m| m.1 == "render_template")
+        .collect();
+    assert_eq!(subs.len(), 1, "exactly one entity list subscription");
+    (subs[0].0, subs[0].2.clone())
+}
+
+fn list_event(h: &mut Harness<Ha>, s: Socket, id: u64, lines: &str) {
+    h.message(
+        s,
+        text(json!({"id": id, "type": "event",
+            "event": {"result": lines, "listeners": {"all": true, "entities": [], "domains": [], "time": false}}})),
+    );
+}
+
+const LINES: &str = "light.kitchen\tKitchen lamp\ton\nswitch.kettle\tKettle\toff\nsensor.kitchen_temp\tKitchen temperature\t21.5\nscene.movie\tMovie\tunknown\n";
+
+#[test]
+fn the_entity_list_is_subscribed_once_after_auth() {
+    let mut h = Harness::<Ha>::new();
+    h.init(settings()).expect("init");
+    let s = current(&h);
+    h.open(s);
+    h.message(s, auth_required());
+    assert!(sent_msgs(&h, s).iter().all(|m| m.1 != "render_template"));
+    h.message(s, auth_ok());
+    let (id, m) = list_sub(&h, s);
+    assert_eq!(m["template"], ulanzi_plugin_ha::protocol::ENTITY_LIST_TEMPLATE);
+    // Nothing else of the install is asked for.
+    assert!(sent_msgs(&h, s).iter().all(|m| m.1 != "get_states"));
+    result(&mut h, s, 1, true, None);
+    snapshot(&mut h, s, 1, desk_snapshot());
+    result(&mut h, s, id, true, None);
+    list_event(&mut h, s, id, LINES);
+    // Still one, also after more events and ticks.
+    list_event(&mut h, s, id, LINES);
+    let t = tick(&h);
+    for _ in 0..20 {
+        h.fire(t);
+    }
+    list_sub(&h, s);
+    // Without listed entities the list is still subscribed.
+    let mut h = Harness::<Ha>::new();
+    h.init(json!({"url": "homeassistant.local", "token": TOKEN}))
+        .expect("init");
+    let s = current(&h);
+    h.open(s);
+    h.message(s, auth_required());
+    h.message(s, auth_ok());
+    let (id, _) = list_sub(&h, s);
+    list_event(&mut h, s, id, LINES);
+    assert_eq!(h.list_items("entities", "", "").expect("items").len(), 4);
+}
+
+#[test]
+fn list_items_answers_from_the_live_list() {
+    let mut h = Harness::<Ha>::new();
+    // Offline: an error the dialog shows with Retry.
+    assert_eq!(
+        h.list_items("entities", "", ""),
+        Err("Not connected to Home Assistant".to_string())
+    );
+    h.init(settings()).expect("init");
+    assert_eq!(
+        h.list_items("entities", "", ""),
+        Err("Not connected to Home Assistant".to_string())
+    );
+    let s = live(&mut h);
+    // Connected, list not here yet: empty, not an error.
+    assert_eq!(h.list_items("entities", "", ""), Ok(vec![]));
+    let (id, _) = list_sub(&h, s);
+    result(&mut h, s, id, true, None);
+    assert_eq!(h.list_items("entities", "", ""), Ok(vec![]));
+    list_event(&mut h, s, id, LINES);
+    let items = h.list_items("entities", "kit", "").expect("items");
+    let mut ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["light.kitchen", "sensor.kitchen_temp"]);
+    let lamp = items.iter().find(|i| i.id == "light.kitchen").expect("lamp");
+    assert_eq!(lamp.label, "Kitchen lamp");
+    assert_eq!(lamp.group.as_deref(), Some("Lights"));
+    assert_eq!(lamp.state.as_deref(), Some("on"));
+    let lights = h.list_items("entities", "", "Lights").expect("group");
+    assert_eq!(lights.len(), 1);
+    assert_eq!(h.list_items("entities", "", "light").expect("domain").len(), 1);
+    let run: Vec<String> = h
+        .list_items("runnable", "", "")
+        .expect("runnable")
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(run, ["scene.movie"]);
+    // A newer render replaces the list.
+    list_event(&mut h, s, id, "light.kitchen\tKitchen lamp\toff\n");
+    let items = h.list_items("entities", "", "").expect("items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].state.as_deref(), Some("off"));
+    // The list is never published as state.
+    assert!(h.states().keys().all(|k| !k.contains("kettle")));
+    assert!(h.states().values().all(|v| !v.contains("Kettle")));
+    // Dropped on disconnect.
+    h.closed(s, "gone");
+    assert_eq!(
+        h.list_items("entities", "", ""),
+        Err("Not connected to Home Assistant".to_string())
+    );
+    // Reconnect: subscribed again on the new socket, the old socket's events are ignored.
+    let (t, _) = retry_timer(&h);
+    h.fire(t);
+    let s2 = handshake(&mut h, desk_snapshot());
+    let (id2, _) = list_sub(&h, s2);
+    assert_eq!(h.list_items("entities", "", ""), Ok(vec![]));
+    list_event(&mut h, s, id, LINES);
+    assert_eq!(h.list_items("entities", "", ""), Ok(vec![]));
+    list_event(&mut h, s2, id2, LINES);
+    assert_eq!(h.list_items("entities", "", "").expect("items").len(), 4);
+    assert!(h.list_items("nope", "", "").is_err());
+    assert_no_token(&h);
+}
+
+#[test]
+fn a_refused_entity_list_is_the_list_error() {
+    let mut h = Harness::<Ha>::new();
+    let s = live(&mut h);
+    let (id, _) = list_sub(&h, s);
+    result(
+        &mut h,
+        s,
+        id,
+        false,
+        Some(json!({"code": "template_error", "message": "UndefinedError: 'states' is undefined"})),
+    );
+    let e = h.list_items("entities", "", "").expect_err("error");
+    assert_eq!(e, "UndefinedError: 'states' is undefined");
+    assert!(!e.contains(TOKEN));
+    // The connection and labels are unaffected.
+    assert_eq!(h.state("connected"), Some("yes"));
+    assert_eq!(h.state("light.desk"), Some("on"));
+    // An error reported as an event later.
+    let mut h = Harness::<Ha>::new();
+    let s = live(&mut h);
+    let (id, _) = list_sub(&h, s);
+    result(&mut h, s, id, true, None);
+    list_event(&mut h, s, id, LINES);
+    h.message(
+        s,
+        text(json!({"id": id, "type": "event", "event": {"result": {"error": "TemplateError: boom"}}})),
+    );
+    assert_eq!(
+        h.list_items("toggleable", "", ""),
+        Err("TemplateError: boom".to_string())
+    );
+    h.message(
+        s,
+        text(json!({"id": id, "type": "event", "event": {"error": "TemplateError: bang", "level": "ERROR"}})),
+    );
+    assert_eq!(
+        h.list_items("toggleable", "", ""),
+        Err("TemplateError: bang".to_string())
+    );
+    // A good render clears it.
+    list_event(&mut h, s, id, LINES);
+    assert!(h.list_items("toggleable", "", "").is_ok());
+    assert_eq!(h.state("connected"), Some("yes"));
+    assert_no_token(&h);
+}
+
+#[test]
+fn a_truncated_list_is_logged_once() {
+    let mut h = Harness::<Ha>::new();
+    let s = live(&mut h);
+    let (id, _) = list_sub(&h, s);
+    let lines = format!("light.a\tA\ton\n{}", ulanzi_plugin_ha::protocol::TRUNCATED_MARKER);
+    list_event(&mut h, s, id, &lines);
+    list_event(&mut h, s, id, &lines);
+    assert_eq!(h.list_items("entities", "", "").expect("items").len(), 1);
+    let n = h
+        .logs()
+        .iter()
+        .filter(|(_, m)| m.contains("entity list") && m.contains("cut"))
+        .count();
+    assert_eq!(n, 1, "{:?}", h.logs());
+}
+
+#[test]
+fn the_entities_setting_takes_a_list_or_legacy_text() {
+    for entities in [
+        json!(["light.desk", "sensor.temp"]),
+        json!("light.desk, sensor.temp"),
+    ] {
+        let mut h = Harness::<Ha>::new();
+        h.init(json!({"url": "homeassistant.local", "token": TOKEN, "entities": entities}))
+            .expect("init");
+        let s = current(&h);
+        h.open(s);
+        h.message(s, auth_required());
+        h.message(s, auth_ok());
+        assert_eq!(
+            sent_msgs(&h, s)[0].2["entity_ids"],
+            json!(["light.desk", "sensor.temp"])
+        );
+    }
 }

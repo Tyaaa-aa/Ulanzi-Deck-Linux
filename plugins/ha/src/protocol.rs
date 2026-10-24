@@ -452,3 +452,277 @@ pub fn offline_pairs(published: &BTreeSet<String>) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+/// The most characters the entity list template writes before it stops (see [`ENTITY_LIST_TEMPLATE`]).
+pub const LIST_BUDGET: usize = 200_000;
+/// The most weight units (an upper bound of JSON bytes) it writes.
+pub const LIST_WEIGHT_BUDGET: usize = 900_000;
+/// The last line of a list that the template cut short.
+pub const TRUNCATED_MARKER: &str = "…truncated";
+/// Longest name and state kept per entity, in characters.
+const NAME_CHARS: usize = 60;
+const STATE_CHARS: usize = 24;
+
+/// What `homeassistant.toggle`, `turn_on` and `turn_off` (the toggle, turn on and turn off
+/// actions) handle well. Not lock (no turn_on/turn_off), not climate or vacuum (only some support it).
+pub const TOGGLEABLE: &[&str] = &[
+    "light",
+    "switch",
+    "fan",
+    "input_boolean",
+    "automation",
+    "script",
+    "cover",
+    "media_player",
+    "siren",
+    "humidifier",
+    "remote",
+    "group",
+];
+/// What the run action accepts.
+pub const RUNNABLE: &[&str] = &["scene", "script", "automation", "button", "input_button"];
+/// What the set_level action accepts.
+pub const LEVELS: &[&str] = &["light", "media_player", "fan", "cover"];
+/// Listed first by the template, so a cut list keeps what keys can control.
+pub const PREFERRED_DOMAINS: &[&str] = &[
+    "light",
+    "switch",
+    "fan",
+    "cover",
+    "media_player",
+    "input_boolean",
+    "scene",
+    "script",
+    "automation",
+    "button",
+    "input_button",
+    "siren",
+    "humidifier",
+    "remote",
+    "group",
+];
+
+/// Every entity as one `entity_id \t name \t state` line, preferred domains first.
+///
+/// Control characters (tab and newline included) in names and states become spaces, names are cut
+/// to 60 and states to 24 characters, and it writes the [`TRUNCATED_MARKER`] line instead of the
+/// next entity once that would pass 200 000 characters, or 900 000 weight units counting 2 per
+/// ASCII and 12 per other character. After the replacement an ASCII character takes at most 2
+/// bytes in JSON (`"`, `\`, and the tab and newline separators are escaped), any other at most 4
+/// as UTF-8 (orjson, current Home Assistant) or 12 as `\uXXXX\uXXXX` (`ensure_ascii`, as older
+/// releases sent): an answer stays under 900 000 bytes plus its small envelope, below the host's
+/// 1 MiB message limit, whichever encoder Home Assistant uses.
+///
+/// Iterating `states` makes Home Assistant render it at most once a minute.
+pub const ENTITY_LIST_TEMPLATE: &str = r#"{%- set ns = namespace(n=0, w=0, full=false) -%}
+{%- set pref = ['light', 'switch', 'fan', 'cover', 'media_player', 'input_boolean', 'scene', 'script', 'automation', 'button', 'input_button', 'siren', 'humidifier', 'remote', 'group'] -%}
+{%- for s in (states | selectattr('domain', 'in', pref) | list) + (states | rejectattr('domain', 'in', pref) | list) -%}
+{%- if not ns.full -%}
+{%- set line = s.entity_id ~ '\t' ~ ((s.name | string | regex_replace('[\\x00-\\x1f\\x7f-\\x9f]', ' '))[:60]) ~ '\t' ~ ((s.state | string | regex_replace('[\\x00-\\x1f\\x7f-\\x9f]', ' '))[:24]) ~ '\n' -%}
+{%- set w = (line | length) * 2 + (line | regex_replace('[\\x00-\\x7f]', '') | length) * 10 -%}
+{%- if ns.n + (line | length) > 200000 or ns.w + w > 900000 -%}
+{%- set ns.full = true -%}
+…truncated
+{%- else -%}
+{%- set ns.n = ns.n + (line | length) -%}
+{%- set ns.w = ns.w + w -%}
+{{ line }}
+{%- endif -%}
+{%- endif -%}
+{%- endfor -%}"#;
+
+/// Subscribe to the entity list. Home Assistant answers with a `result`, then an `event` with
+/// `{"result": "<lines>"}` now and after changes.
+pub fn render_template_msg(id: u64) -> Value {
+    json!({"id": id, "type": "render_template", "template": ENTITY_LIST_TEMPLATE})
+}
+
+/// One entity of the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedEntity {
+    pub entity_id: String,
+    pub name: String,
+    pub state: String,
+}
+
+impl ListedEntity {
+    pub fn domain(&self) -> &str {
+        self.entity_id.split('.').next().unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntityList {
+    pub rows: Vec<ListedEntity>,
+    /// The template stopped at its budget: some entities are missing.
+    pub truncated: bool,
+}
+
+/// Control characters as spaces, at most `max` characters.
+fn clean_field(s: &str, max: usize) -> String {
+    s.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(max)
+        .collect()
+}
+
+/// Read what the template rendered. Lines that are not `entity_id \t name \t state` with a valid
+/// entity id are skipped.
+pub fn parse_entity_list(text: &str) -> EntityList {
+    let mut list = EntityList::default();
+    for line in text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim() == TRUNCATED_MARKER {
+            list.truncated = true;
+            break;
+        }
+        let mut parts = line.splitn(3, '\t');
+        let (Some(id), Some(name), Some(state)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if !valid_entity_id(id) {
+            continue;
+        }
+        list.rows.push(ListedEntity {
+            entity_id: id.to_string(),
+            name: clean_field(name, NAME_CHARS),
+            state: clean_field(state, STATE_CHARS),
+        });
+    }
+    let rank = |d: &str| {
+        PREFERRED_DOMAINS
+            .iter()
+            .position(|p| *p == d)
+            .unwrap_or(PREFERRED_DOMAINS.len())
+    };
+    list.rows.sort_by_cached_key(|r| {
+        (
+            rank(r.domain()),
+            r.domain().to_string(),
+            r.name.to_lowercase(),
+            r.entity_id.clone(),
+        )
+    });
+    list
+}
+
+/// A domain as a group heading: "Lights", "Binary sensors"; an unknown one as "My domain".
+pub fn group_label(domain: &str) -> String {
+    let known = match domain {
+        "light" => "Lights",
+        "switch" => "Switches",
+        "sensor" => "Sensors",
+        "binary_sensor" => "Binary sensors",
+        "scene" => "Scenes",
+        "script" => "Scripts",
+        "automation" => "Automations",
+        "button" => "Buttons",
+        "input_button" => "Input buttons",
+        "media_player" => "Media players",
+        "cover" => "Covers",
+        "fan" => "Fans",
+        "climate" => "Climate",
+        "input_boolean" => "Input booleans",
+        "input_number" => "Input numbers",
+        "input_select" => "Input selects",
+        "input_text" => "Input texts",
+        "input_datetime" => "Input dates and times",
+        "lock" => "Locks",
+        "siren" => "Sirens",
+        "humidifier" => "Humidifiers",
+        "remote" => "Remotes",
+        "group" => "Groups",
+        "vacuum" => "Vacuums",
+        "water_heater" => "Water heaters",
+        "valve" => "Valves",
+        "lawn_mower" => "Lawn mowers",
+        "camera" => "Cameras",
+        "person" => "People",
+        "device_tracker" => "Device trackers",
+        "zone" => "Zones",
+        "sun" => "Sun",
+        "weather" => "Weather",
+        "update" => "Updates",
+        "number" => "Numbers",
+        "select" => "Selects",
+        "text" => "Texts",
+        "timer" => "Timers",
+        "counter" => "Counters",
+        "alarm_control_panel" => "Alarm panels",
+        "calendar" => "Calendars",
+        "event" => "Events",
+        "image" => "Images",
+        "todo" => "To-do lists",
+        "notify" => "Notifiers",
+        "tts" => "Text to speech",
+        _ => "",
+    };
+    if !known.is_empty() {
+        return known.to_string();
+    }
+    let spaced = domain.replace('_', " ");
+    let mut chars = spaced.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The most entries one answer carries (the host keeps no more either).
+const MAX_ITEMS: usize = 5000;
+
+/// The domains a picker offers; `None` for every domain.
+fn picker_domains(picker: &str) -> Result<Option<&'static [&'static str]>, String> {
+    match picker {
+        "entities" | "any" => Ok(None),
+        "toggleable" => Ok(Some(TOGGLEABLE)),
+        "runnable" => Ok(Some(RUNNABLE)),
+        "levels" => Ok(Some(LEVELS)),
+        other => Err(format!(
+            "unknown picker \"{}\"",
+            other.chars().take(60).collect::<String>()
+        )),
+    }
+}
+
+/// The entries of `picker` matching `query` (case-insensitive, on the name or the id), only those
+/// in `group` (a heading from [`group_label`] or a raw domain) unless it is empty.
+pub fn picker_items(
+    list: &EntityList,
+    picker: &str,
+    query: &str,
+    group: &str,
+) -> Result<Vec<ulanzi_plugin::Item>, String> {
+    let domains = picker_domains(picker)?;
+    let query = query.trim().to_lowercase();
+    let group = group.trim();
+    let mut out = Vec::new();
+    for row in &list.rows {
+        let domain = row.domain();
+        if domains.is_some_and(|d| !d.contains(&domain)) {
+            continue;
+        }
+        let label = if row.name.trim().is_empty() {
+            row.entity_id.clone()
+        } else {
+            row.name.clone()
+        };
+        let heading = group_label(domain);
+        if !group.is_empty() && group != heading && group != domain {
+            continue;
+        }
+        if !query.is_empty() && !label.to_lowercase().contains(&query) && !row.entity_id.contains(&query) {
+            continue;
+        }
+        out.push(
+            ulanzi_plugin::Item::new(row.entity_id.clone(), label)
+                .subtitle(row.entity_id.clone())
+                .group(heading)
+                .state(row.state.clone()),
+        );
+        if out.len() >= MAX_ITEMS {
+            break;
+        }
+    }
+    Ok(out)
+}
