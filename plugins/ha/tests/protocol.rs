@@ -535,7 +535,13 @@ fn actions_reject_bad_input() {
     for d in ["light", "media_player", "fan", "cover"] {
         assert!(e.contains(d), "{e}");
     }
-    assert!(err("set_level", json!({"entity_id": "light.a", "op": "set"})).contains("percent"));
+    assert!(
+        err(
+            "set_level",
+            json!({"entity_id": "light.a", "op": "set", "percent": "x"})
+        )
+        .contains("percent")
+    );
     assert!(err("set_level", json!({"entity_id": "light.a", "op": "wiggle"})).contains("op"));
 
     for bad in [
@@ -810,9 +816,14 @@ fn picker_domains_match_what_the_actions_accept() {
         let p = json!({"entity_id": format!("{d}.x"), "op": "set", "percent": 10});
         assert!(plan("set_level", &p, &tracked).is_ok(), "set_level {d}");
     }
+    // TOGGLEABLE is a curated list (toggle accepts any domain), so there is nothing to derive it from.
     assert!(!TOGGLEABLE.contains(&"lock"));
-    for d in TOGGLEABLE {
-        let p = json!({"entity_id": format!("{d}.x")});
-        assert!(plan("toggle", &p, &tracked).is_ok(), "toggle {d}");
-    }
+}
+
+#[test]
+fn set_without_a_percent_uses_the_manifest_default() {
+    let tracked = Tracked::default();
+    let p = json!({"entity_id": "light.x", "op": "set"});
+    let plan = plan("set_level", &p, &tracked).expect("plan");
+    assert!(format!("{plan:?}").contains("100"), "{plan:?}");
 }

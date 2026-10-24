@@ -159,7 +159,7 @@ Limits:
 - The answer is kept under 1 MiB: on very large installs the list stops after about 200 000 characters
   (fewer with many non-Latin names) and the log says so once. Lights, switches, fans, covers, media players,
   scenes, scripts, automations and buttons come first, so what keys can control is listed before sensors.
-- If Home Assistant refuses the template, the picker shows its error and you can type the id.
+- If Home Assistant refuses the first render of the template, the picker shows that error and you can type the id. Errors in later renders are dropped by Home Assistant, so the list then just keeps its last content.
 
 ## Live state
 

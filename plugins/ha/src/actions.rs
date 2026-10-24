@@ -6,6 +6,8 @@ use crate::protocol::{Tracked, valid_entity_id};
 /// Largest `data` text for the "Call a service" action.
 const MAX_DATA_BYTES: usize = 4096;
 const DEFAULT_STEP: f64 = 5.0;
+/// The level a "set" key uses when `percent` is missing (the manifest default).
+const DEFAULT_PERCENT: f64 = 100.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServiceCall {
@@ -110,6 +112,10 @@ fn set_level(params: &Value, tracked: &Tracked) -> Result<Plan, String> {
         .round()
         .clamp(1.0, 50.0) as i64;
     let percent = || {
+        // Missing (or null) means the manifest default; present but unusable is an error.
+        if params.get("percent").is_none_or(Value::is_null) {
+            return Ok(DEFAULT_PERCENT as i64);
+        }
         number(params, "percent")
             .map(|p| p.round().clamp(0.0, 100.0) as i64)
             .ok_or_else(|| "set needs a percent from 0 to 100".to_string())
