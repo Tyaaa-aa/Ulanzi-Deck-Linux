@@ -128,7 +128,7 @@ Building it yourself is a `cargo build --release` away; see the [technical guide
 
 ## Templates
 
-Any profile can become a template: right-click it → **Save as Template…**. Templates are plain
+Any profile can become a template: right-click it → **Save as Template**. Templates are plain
 `.ulanzideck` files, so a layout for your editor, design tool, DAW or game is easy to keep and to
 share. Show yours in [Discussions](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/discussions).
 

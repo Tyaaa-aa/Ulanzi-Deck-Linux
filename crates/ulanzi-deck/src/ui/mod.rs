@@ -179,6 +179,30 @@ pub(crate) fn with_gtk(f: impl FnOnce() + Send + 'static) {
     });
 }
 
+/// Assert that no item of a menu model (sections and submenus included) has a label
+/// ending in an ellipsis; menu items never carry one. Needs no display.
+#[cfg(test)]
+pub(crate) fn assert_menu_labels(model: &impl gtk::gio::prelude::IsA<gtk::gio::MenuModel>) {
+    use gtk::gio::prelude::*;
+    let model = model.upcast_ref::<gtk::gio::MenuModel>();
+    for i in 0..model.n_items() {
+        if let Some(label) = model
+            .item_attribute_value(i, "label", None)
+            .and_then(|v| v.str().map(str::to_owned))
+        {
+            assert!(
+                !label.ends_with('…') && !label.ends_with("..."),
+                "menu item {label:?} ends in an ellipsis"
+            );
+        }
+        for link in ["section", "submenu"] {
+            if let Some(sub) = model.item_link(i, link) {
+                assert_menu_labels(&sub);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

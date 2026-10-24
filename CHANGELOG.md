@@ -38,6 +38,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   plugin secrets stay in the sandbox and the keyring is never asked.
 
 ### Fixed
+- Menu items no longer end in "…" (Rename, Delete, Export, Import, Set Up Deck and the like); the guides use the same names.
 - The sandbox script keeps the app's own icons visible: your real data folder is added to `XDG_DATA_DIRS`, so they no longer show as broken images.
 - Text fields keep their own shortcuts: Ctrl+A, copy, paste, undo, redo and Delete edit the text while
   you type, instead of selecting, copying or clearing keys on the deck. The deck shortcuts work as before

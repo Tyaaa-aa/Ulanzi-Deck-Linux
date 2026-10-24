@@ -34,7 +34,7 @@ No technical knowledge needed. If something doesn't work, see [Troubleshooting](
 3. You're done. Changes reach the deck as you make them. There is no Save button.
 
 > [!TIP]
-> You can reopen the setup any time from the menu (☰) → **Set Up Deck…**.
+> You can reopen the setup any time from the menu (☰) → **Set Up Deck**.
 
 ## The window
 
@@ -152,7 +152,7 @@ or device's name. Turn it off in Preferences → Device → **Show Volume Change
 Ulanzi Deck can change the profile when you switch apps: your editing keys appear when the editor
 is in front, your streaming keys when OBS is.
 
-1. Right-click a profile → **Auto-Switch…** and add one or more apps.
+1. Right-click a profile → **Auto-Switch** and add one or more apps.
 2. Make sure **Auto-Switch** at the top of the sidebar is on.
 3. When none of those apps is in front, the deck goes back to your default profile.
 
@@ -175,11 +175,11 @@ keys follow the new name.
 
 ## Templates, sharing and backups
 
-- **Templates**: Profiles **+** → **From Template…** starts from Streaming, Media Desk, Video Editing or
-  Productivity, or from one of your own (**Save as Template…** on any profile). A layout for the apps
+- **Templates**: Profiles **+** → **From Template** starts from Streaming, Media Desk, Video Editing or
+  Productivity, or from one of your own (**Save as Template** on any profile). A layout for the apps
   you use every day makes a great template.
-- **Sharing**: right-click a profile → **Export…** saves a `.ulanzideck` file. Open one (double-click,
-  drag it onto the window, or menu → **Import…**) to add it. If you already have a profile with that
+- **Sharing**: right-click a profile → **Export** saves a `.ulanzideck` file. Open one (double-click,
+  drag it onto the window, or menu → **Import**) to add it. If you already have a profile with that
   name you choose: keep both, replace or skip. Your OBS password is never included.
 - **Backups**: Ulanzi Deck backs everything up once a day and before any import, delete or restore
   (the newest 20 are kept). **Preferences → Backups** lists them; **Restore…** brings one back, and the

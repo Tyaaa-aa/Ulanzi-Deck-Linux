@@ -21,7 +21,7 @@ and include the output of `ulanzictl diagnostics`.
 
 1. Unplug the deck, wait two seconds, plug it in again (directly, not through a hub, if you can).
 2. *This computer needs permission to use the deck*: press **Fix…** on that bar (or menu ☰ →
-   **Set Up Deck…** → **Grant Access…**), type your password, then unplug and replug the deck.
+   **Set Up Deck** → **Grant Access…**), type your password, then unplug and replug the deck.
 3. *Another program is using the deck*: close Ulanzi Studio (in Wine) or any other program using it.
    `ulanzictl status` names it.
 4. Check that Linux sees it: `lsusb | grep -i 2207` should list a device `2207:0019`.
@@ -49,7 +49,7 @@ copy is already running (for example one started from an AppImage): quit that on
 ## Shortcuts or Type Text do nothing
 
 - These need permission to create a virtual keyboard (`/dev/uinput`). **Preferences → Integrations →
-  Shortcuts and Typing** says whether it's allowed; **Set Up Deck… → Grant Access…** fixes it.
+  Shortcuts and Typing** says whether it's allowed; **Set Up Deck → Grant Access…** fixes it.
 - Type Text with letters a US keyboard lacks (é, ß, emoji…) pastes through the clipboard and needs
   `wl-clipboard` (Wayland) or `xclip` (X11).
 - If your keyboard layout isn't US, Type Text may produce different symbols for punctuation. Letters
@@ -57,7 +57,7 @@ copy is already running (for example one started from an AppImage): quit that on
 
 ## Auto-switch doesn't work
 
-Right-click a profile → **Auto-Switch…**: the top line says what your desktop supports.
+Right-click a profile → **Auto-Switch**: the top line says what your desktop supports.
 
 - **KDE Plasma**: built in. If it says *waiting*, switch windows once.
 - **GNOME**: enable the extension that comes with Ulanzi Deck, then log out and in:

@@ -819,29 +819,7 @@ pub fn build(state: &State) -> Canvas {
     }
 
     // Right-click a key: copy, paste and clear, with their shortcuts shown.
-    let key_menu = {
-        // The shortcuts aren't application accelerators (see key_routing), so name them here.
-        let item = |section: &gio::Menu, label: &str, action: &str| {
-            let it = gio::MenuItem::new(Some(label), Some(&format!("win.{action}")));
-            if let Some(accel) = crate::ui::key_routing::accel_for(action) {
-                it.set_attribute_value("accel", Some(&accel.to_variant()));
-            }
-            section.append_item(&it);
-        };
-        let m = gio::Menu::new();
-        let keys_section = gio::Menu::new();
-        item(&keys_section, "Copy Key", "copy");
-        item(&keys_section, "Paste Key", "paste");
-        m.append_section(None, &keys_section);
-        let style = gio::Menu::new();
-        item(&style, "Copy Style", "copy-style");
-        item(&style, "Paste Style", "paste-style");
-        m.append_section(Some("Colours, image and label only"), &style);
-        let clear = gio::Menu::new();
-        item(&clear, "Clear Key", "clear");
-        m.append_section(None, &clear);
-        m
-    };
+    let key_menu = key_menu();
     for (n, k) in keys.iter().enumerate() {
         let pop = gtk::PopoverMenu::from_model(Some(&key_menu));
         pop.set_has_arrow(true);
@@ -1108,9 +1086,39 @@ fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     }
 }
 
+/// The right-click menu of a key: copy, paste and clear, with their shortcuts shown.
+fn key_menu() -> gio::Menu {
+    // The shortcuts aren't application accelerators (see key_routing), so name them here.
+    let item = |section: &gio::Menu, label: &str, action: &str| {
+        let it = gio::MenuItem::new(Some(label), Some(&format!("win.{action}")));
+        if let Some(accel) = crate::ui::key_routing::accel_for(action) {
+            it.set_attribute_value("accel", Some(&accel.to_variant()));
+        }
+        section.append_item(&it);
+    };
+    let m = gio::Menu::new();
+    let keys_section = gio::Menu::new();
+    item(&keys_section, "Copy Key", "copy");
+    item(&keys_section, "Paste Key", "paste");
+    m.append_section(None, &keys_section);
+    let style = gio::Menu::new();
+    item(&style, "Copy Style", "copy-style");
+    item(&style, "Paste Style", "paste-style");
+    m.append_section(Some("Colours, image and label only"), &style);
+    let clear = gio::Menu::new();
+    item(&clear, "Clear Key", "clear");
+    m.append_section(None, &clear);
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_menu_labels_have_no_ellipsis() {
+        crate::ui::assert_menu_labels(&key_menu());
+    }
 
     #[test]
     fn dial_hit_zones() {

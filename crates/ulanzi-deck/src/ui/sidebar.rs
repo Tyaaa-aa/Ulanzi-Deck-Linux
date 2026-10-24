@@ -6,6 +6,20 @@ use gtk::glib;
 use crate::runtime;
 use crate::state::{Change, State};
 
+/// Labels of the "+" menu, the profile right-click menu and the page right-click menu.
+/// Menu items never end in an ellipsis (the menu_labels test enforces it).
+pub(crate) const NEW_PROFILE_MENU: [&str; 3] = ["Empty Profile", "From Template", "Import File"];
+pub(crate) const PROFILE_MENU: [&str; 7] = [
+    "Move Up",
+    "Move Down",
+    "Auto-Switch",
+    "Export",
+    "Save as Template",
+    "Rename",
+    "Delete",
+];
+pub(crate) const PAGE_MENU: [&str; 4] = ["Move Up", "Move Down", "Rename", "Delete"];
+
 fn heading(text: &str, add_tooltip: &str, on_add: impl Fn() + 'static) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     let label = gtk::Label::builder()
@@ -51,19 +65,19 @@ fn profiles_heading(state: &State) -> gtk::Box {
     };
     {
         let state = state.clone();
-        item("Empty Profile", Box::new(move |_| new_profile(&state)));
+        item(NEW_PROFILE_MENU[0], Box::new(move |_| new_profile(&state)));
     }
     {
         let state = state.clone();
         item(
-            "From Template…",
+            NEW_PROFILE_MENU[1],
             Box::new(move |b| crate::ui::templates::open(&state, b)),
         );
     }
     {
         let state = state.clone();
         item(
-            "Import File…",
+            NEW_PROFILE_MENU[2],
             Box::new(move |b| crate::ui::bundle_dialogs::choose_and_import(&state, b)),
         );
     }
@@ -355,7 +369,7 @@ fn attach_profile_menu(
         add_move_buttons(&menu, index, count, move |from, to| move_profile(&st, from, to));
     }
     let auto = gtk::Button::builder()
-        .label("Auto-Switch…")
+        .label(PROFILE_MENU[2])
         .css_classes(["flat"])
         .build();
     menu.append(&auto);
@@ -372,7 +386,7 @@ fn attach_profile_menu(
         });
     }
     let export = gtk::Button::builder()
-        .label("Export…")
+        .label(PROFILE_MENU[3])
         .css_classes(["flat"])
         .build();
     menu.append(&export);
@@ -389,7 +403,7 @@ fn attach_profile_menu(
         });
     }
     let save_template = gtk::Button::builder()
-        .label("Save as Template…")
+        .label(PROFILE_MENU[4])
         .css_classes(["flat"])
         .build();
     menu.append(&save_template);
@@ -406,11 +420,11 @@ fn attach_profile_menu(
         });
     }
     let rename = gtk::Button::builder()
-        .label("Rename…")
+        .label(PROFILE_MENU[5])
         .css_classes(["flat"])
         .build();
     let delete = gtk::Button::builder()
-        .label("Delete…")
+        .label(PROFILE_MENU[6])
         .css_classes(["flat", "error"])
         .build();
     menu.append(&rename);
@@ -674,11 +688,11 @@ fn attach_page_menu(state: &State, row: &gtk::ListBoxRow, index: usize, count: u
         add_move_buttons(&menu, index, count, move |from, to| move_page(&st, from, to));
     }
     let rename = gtk::Button::builder()
-        .label("Rename…")
+        .label(PAGE_MENU[2])
         .css_classes(["flat"])
         .build();
     let delete = gtk::Button::builder()
-        .label("Delete")
+        .label(PAGE_MENU[3])
         .css_classes(["flat", "error"])
         .sensitive(count > 1)
         .build();
@@ -800,4 +814,16 @@ fn auto_switch_row(state: &State) -> gtk::Box {
         });
     }
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_labels_have_no_ellipsis() {
+        for l in NEW_PROFILE_MENU.iter().chain(&PROFILE_MENU).chain(&PAGE_MENU) {
+            assert!(!l.ends_with('…') && !l.ends_with("..."), "menu item {l:?}");
+        }
+    }
 }

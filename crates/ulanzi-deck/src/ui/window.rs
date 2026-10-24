@@ -140,12 +140,12 @@ fn banner(state: &State) -> adw::Banner {
 fn main_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     let file = gio::Menu::new();
-    file.append(Some("Import…"), Some("app.import"));
-    file.append(Some("Export…"), Some("app.export"));
+    file.append(Some("Import"), Some("app.import"));
+    file.append(Some("Export"), Some("app.export"));
     menu.append_section(None, &file);
     let app = gio::Menu::new();
     app.append(Some("Preferences"), Some("app.preferences"));
-    app.append(Some("Set Up Deck…"), Some("app.onboarding"));
+    app.append(Some("Set Up Deck"), Some("app.onboarding"));
     app.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
     app.append(Some("About Ulanzi Deck"), Some("app.about"));
     menu.append_section(None, &app);
@@ -698,6 +698,11 @@ fn follow_events(state: &State, c: &Client) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn main_menu_labels_have_no_ellipsis() {
+        crate::ui::assert_menu_labels(&main_menu());
+    }
 
     #[test]
     fn app_accelerators_leave_text_keys_alone() {
