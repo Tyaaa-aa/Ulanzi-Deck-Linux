@@ -1,11 +1,13 @@
 mod common;
 
+use common::plugins::{Running, start, state_of};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -17,8 +19,8 @@ use ulanzi_core::model::{PluginEntry, Settings};
 use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::deck::DeckMsg;
 use ulanzi_deckd::plugins::{
-    Event, Exit, FileSecrets, InstanceHandle, LazySecrets, Output, PluginEngine, PluginError, PluginHost,
-    PluginSlot, PluginStatus, SecretStore, spawn_instance,
+    Event, Exit, FileSecrets, LazySecrets, Output, PluginEngine, PluginError, PluginHost, PluginSlot,
+    PluginStatus, SecretStore,
 };
 
 const HELLO_PACKAGE: &str = "ulanzi-plugin-hello";
@@ -88,85 +90,8 @@ async fn refuses_garbage_wasm() {
     assert!(matches!(err, PluginError::Load(_)), "{err:?}");
 }
 
-/// A running instance plus everything that must outlive it.
-struct Running {
-    handle: InstanceHandle,
-    out: mpsc::UnboundedReceiver<Output>,
-    _engine: PluginEngine,
-    _dir: tempfile::TempDir,
-    _cache: tempfile::TempDir,
-}
-
-fn start(package: &str, manifest: &str, secrets: BTreeMap<String, String>) -> Running {
-    let cache = tempfile::tempdir().expect("cache");
-    let dir = common::plugins::fixture(package, manifest);
-    let engine = PluginEngine::new(cache.path()).expect("engine");
-    let manifest = Manifest::parse(manifest).expect("manifest");
-    let loaded = engine
-        .load(&manifest, &dir.path().join("plugin.wasm"))
-        .expect("load");
-    let (tx, out) = mpsc::unbounded_channel();
-    let handle =
-        spawn_instance(&loaded, &engine, secrets, tx, tokio::runtime::Handle::current()).expect("spawn");
-    Running {
-        handle,
-        out,
-        _engine: engine,
-        _dir: dir,
-        _cache: cache,
-    }
-}
-
 fn probe() -> Running {
     start(PROBE_PACKAGE, PROBE_MANIFEST, BTreeMap::new())
-}
-
-impl Running {
-    fn send(&self, event: Event) {
-        // The queue holds 1024 events and tests send a handful: try_send never blocks the runtime.
-        if self.handle.events.try_send(event).is_err() {
-            panic!("event queue refused an event");
-        }
-    }
-
-    /// Queue an action; the receiver resolves with the plugin's reply.
-    fn queue(&self, action: &str, params: Value) -> oneshot::Receiver<Result<(), String>> {
-        let (reply, rx) = oneshot::channel();
-        self.send(Event::Action {
-            action: action.into(),
-            params,
-            reply,
-        });
-        rx
-    }
-
-    async fn act(&self, action: &str, params: Value) -> Result<(), String> {
-        let rx = self.queue(action, params);
-        tokio::time::timeout(PROMPTLY, rx)
-            .await
-            .expect("action reply in time")
-            .expect("reply sent")
-    }
-
-    /// Read outputs until `want` shows up; false when `within` runs out first.
-    async fn saw(&mut self, want: &Output, within: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + within;
-        loop {
-            match tokio::time::timeout_at(deadline, self.out.recv()).await {
-                Ok(Some(o)) if &o == want => return true,
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => return false,
-            }
-        }
-    }
-
-    async fn exit(mut self) -> Exit {
-        // The handle stops the instance when dropped, so `exited` is awaited by reference.
-        tokio::time::timeout(PROMPTLY, &mut self.handle.exited)
-            .await
-            .expect("instance exits in time")
-            .expect("exit reported")
-    }
 }
 
 fn state(key: &str, value: &str) -> Output {
@@ -534,18 +459,6 @@ async fn http_server(response: Vec<u8>) -> String {
         }
     });
     format!("http://127.0.0.1:{port}")
-}
-
-/// Read outputs until a state for `key` shows up; its value, or None when `within` runs out.
-async fn state_of(p: &mut Running, key: &str, within: Duration) -> Option<String> {
-    let deadline = tokio::time::Instant::now() + within;
-    loop {
-        match tokio::time::timeout_at(deadline, p.out.recv()).await {
-            Ok(Some(Output::State { key: k, value })) if k == key => return Some(value),
-            Ok(Some(_)) => {}
-            Ok(None) | Err(_) => return None,
-        }
-    }
 }
 
 async fn echo(mut ws: WebSocketStream<TcpStream>) {
