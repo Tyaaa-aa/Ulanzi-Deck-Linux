@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use common::obs_mock::{Mode, mock};
-use common::plugins::{Running, start, state_of};
+use common::plugins::{Running, start};
 use serde_json::json;
 use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::plugins::ulanzi::plugin::types::Status;
@@ -16,16 +16,31 @@ const PACKAGE: &str = "ulanzi-plugin-obs";
 const MANIFEST: &str = include_str!("../../../plugins/obs/plugin.toml");
 const SOON: Duration = Duration::from_secs(20);
 
-/// Wait until `key` is `value` (any earlier values are skipped).
-async fn until(p: &mut Running, key: &str, value: &str, within: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + within;
-    loop {
-        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-        match state_of(p, key, left).await {
-            Some(v) if v == value => return true,
-            Some(_) => {}
-            None => return false,
+/// The latest value of every state key, plus every other output, seen so far.
+#[derive(Default)]
+struct Seen {
+    states: BTreeMap<String, String>,
+    others: Vec<Output>,
+}
+
+impl Seen {
+    fn state(&self, key: &str) -> &str {
+        self.states.get(key).map_or("", String::as_str)
+    }
+
+    /// Read outputs until `done` holds for what has been seen; false when `SOON` runs out.
+    async fn wait(&mut self, p: &mut Running, done: impl Fn(&Seen) -> bool) -> bool {
+        let deadline = tokio::time::Instant::now() + SOON;
+        while !done(self) {
+            match tokio::time::timeout_at(deadline, p.out.recv()).await {
+                Ok(Some(Output::State { key, value })) => {
+                    self.states.insert(key, value);
+                }
+                Ok(Some(other)) => self.others.push(other),
+                Ok(None) | Err(_) => return false,
+            }
         }
+        true
     }
 }
 
@@ -58,40 +73,53 @@ async fn obs_plugin_end_to_end() {
     p.send(Event::Init {
         settings: json!({"host": "127.0.0.1", "port": mock.port, "password": "supersecretpassword"}),
     });
-    // Outputs arrive in order: the password is saved at init, the status comes before the first state.
-    let saved = Output::SecretsChanged(BTreeMap::from([(
-        "password".to_string(),
-        "supersecretpassword".to_string(),
-    )]));
-    assert!(p.saw(&saved, SOON).await, "password saved");
-
+    let mut seen = Seen::default();
+    assert!(
+        seen.wait(&mut p, |s| s.state("connected") == "yes"
+            && s.state("scene") == "A")
+            .await,
+        "connected on scene A"
+    );
     let ok = Output::Status {
         status: Status::Ok,
         message: "OBS 31.0.2 · WebSocket 5.5.4 · 2 scenes".into(),
     };
-    assert!(p.saw(&ok, SOON).await, "ok status");
-    assert!(until(&mut p, "connected", "yes", SOON).await, "connected");
-    assert!(until(&mut p, "scene", "A", SOON).await, "scene");
+    assert!(seen.others.contains(&ok), "ok status");
+    let saved = Output::SecretsChanged(BTreeMap::from([(
+        "password".to_string(),
+        "supersecretpassword".to_string(),
+    )]));
+    assert!(seen.others.contains(&saved), "password saved");
+
     assert_eq!(p.act("set_scene", json!({"scene": "B"})).await, Ok(()));
-    let mut seen = None;
+    let mut sent = None;
     for _ in 0..200 {
-        seen = mock.last("SetCurrentProgramScene");
-        if seen.is_some() {
+        sent = mock.last("SetCurrentProgramScene");
+        if sent.is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(seen, Some(json!({"sceneName": "B"})));
+    assert_eq!(sent, Some(json!({"sceneName": "B"})));
 
     mock.event(
         "RecordStateChanged",
         json!({"outputActive": true, "outputState": "OBS_WEBSOCKET_OUTPUT_STARTED"}),
     );
-    assert!(until(&mut p, "recording", "yes", SOON).await, "recording");
+    assert!(
+        seen.wait(&mut p, |s| s.state("recording") == "yes").await,
+        "recording"
+    );
 
     mock.drop_all();
-    assert!(until(&mut p, "connected", "no", SOON).await, "offline after drop");
-    assert!(until(&mut p, "connected", "yes", SOON).await, "back online");
+    assert!(
+        seen.wait(&mut p, |s| s.state("connected") == "no").await,
+        "offline after drop"
+    );
+    assert!(
+        seen.wait(&mut p, |s| s.state("connected") == "yes").await,
+        "back online"
+    );
     assert_eq!(mock.connections(), 2);
 }
 

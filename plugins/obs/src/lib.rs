@@ -743,15 +743,15 @@ impl Plugin for Obs {
         }
     }
 
-    fn closed(&mut self, cx: &mut Cx, socket: Socket, reason: &str) {
+    fn closed(&mut self, cx: &mut Cx, socket: Socket, _reason: &str) {
         let why = match self.phase {
             Phase::Opening(s) if s == socket => Down::Refused,
             Phase::Hello(s) if s == socket => Down::Dropped,
             Phase::Identifying { socket: s, with_auth } if s == socket => {
+                // The host passes only the close reason text, never the code, so a refused
+                // password (4009) cannot be told from other closes: infer it from the phase.
                 if with_auth {
                     Down::AuthFailed
-                } else if reason.contains("4010") || reason.contains("Unsupported") {
-                    Down::TooOld
                 } else {
                     Down::Dropped
                 }

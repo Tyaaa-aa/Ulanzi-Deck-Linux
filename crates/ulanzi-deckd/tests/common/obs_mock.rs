@@ -118,6 +118,10 @@ pub async fn mock(mode: Mode) -> Mock {
                 }
                 let (requests, events_rx) = (requests.clone(), events_rx.clone());
                 let mut gen_rx = generation.subscribe();
+                // Events sent while no client was connected must not reach a later one.
+                if let Ok(mut rx) = events_rx.try_lock() {
+                    while rx.try_recv().is_ok() {}
+                }
                 tokio::spawn(async move {
                     let Ok(mut ws) = tokio_tungstenite::accept_async(tcp).await else {
                         return;

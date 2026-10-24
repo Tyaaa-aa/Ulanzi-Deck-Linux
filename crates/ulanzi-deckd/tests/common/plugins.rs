@@ -12,7 +12,7 @@ use ulanzi_core::plugin::Manifest;
 use ulanzi_deckd::plugins::{Event, Exit, InstanceHandle, Output, PluginEngine, spawn_instance};
 
 /// Generous bound for anything that should happen "promptly"; tests never sleep unbounded.
-const PROMPTLY: Duration = Duration::from_secs(5);
+pub const PROMPTLY: Duration = Duration::from_secs(5);
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

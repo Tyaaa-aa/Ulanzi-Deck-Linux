@@ -1,11 +1,10 @@
 mod common;
 
-use common::plugins::{Running, start, state_of};
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use common::plugins::{PROMPTLY, Running, start, state_of};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -27,8 +26,6 @@ const HELLO_PACKAGE: &str = "ulanzi-plugin-hello";
 const HELLO_MANIFEST: &str = include_str!("../../../examples/plugins/hello/plugin.toml");
 const PROBE_PACKAGE: &str = "ulanzi-plugin-probe";
 const PROBE_MANIFEST: &str = include_str!("plugins/probe/plugin.toml");
-/// Generous bound for anything that should happen "promptly"; tests never sleep unbounded.
-const PROMPTLY: Duration = Duration::from_secs(5);
 
 fn hello_manifest() -> Manifest {
     let text = include_str!("../../../examples/plugins/hello/plugin.toml");
