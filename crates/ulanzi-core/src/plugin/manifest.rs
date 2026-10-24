@@ -139,8 +139,22 @@ pub enum ManifestError {
 
 impl Manifest {
     /// Parse and validate: id, version, contract compatibility and unique action ids.
+    ///
+    /// Pickers are contract 1.1: a `contract = "1.0"` manifest keeps the 1.0 promise, so its
+    /// `[[pickers]]` (whatever their shape) are accepted and ignored, and so is a field's
+    /// `picker`. Picker checks apply from 1.1 on.
     pub fn parse(text: &str) -> Result<Manifest, ManifestError> {
-        let m: Manifest = toml::from_str(text).map_err(|e| ManifestError::Parse(e.to_string()))?;
+        let parse_err = |e: toml::de::Error| ManifestError::Parse(e.to_string());
+        let mut table: toml::Table = toml::from_str(text).map_err(parse_err)?;
+        let has_pickers = table
+            .get("contract")
+            .and_then(toml::Value::as_str)
+            .and_then(contract_version)
+            .is_none_or(|v| v >= (1, 1));
+        if !has_pickers {
+            table.remove("pickers");
+        }
+        let m: Manifest = table.try_into().map_err(parse_err)?;
         if !valid_id(&m.id) {
             return Err(ManifestError::BadId(m.id));
         }
@@ -166,7 +180,9 @@ impl Manifest {
             }
         }
         check_fields("the settings".into(), &m.settings)?;
-        m.check_pickers("the settings".into(), &m.settings)?;
+        if has_pickers {
+            m.check_pickers("the settings".into(), &m.settings)?;
+        }
         for a in &m.actions {
             let scope = format!("action \"{}\"", a.id);
             check_fields(scope.clone(), &a.params)?;
@@ -175,6 +191,9 @@ impl Manifest {
                     action: a.id.clone(),
                     key: f.key.clone(),
                 });
+            }
+            if !has_pickers {
+                continue;
             }
             m.check_pickers(scope, &a.params)?;
             let multi = |f: &&Field| {
@@ -268,15 +287,15 @@ fn valid_semver(v: &str) -> bool {
             .all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()))
 }
 
+/// `MAJOR.MINOR` as numbers.
+fn contract_version(c: &str) -> Option<(u32, u32)> {
+    let (major, minor) = c.split_once('.')?;
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
 /// `MAJOR.MINOR` with the same major as the host and a minor the host has.
 fn contract_ok(c: &str) -> bool {
-    let Some((major, minor)) = c.split_once('.') else {
-        return false;
-    };
-    match (major.parse::<u32>(), minor.parse::<u32>()) {
-        (Ok(major), Ok(minor)) => major == CONTRACT.0 && minor <= CONTRACT.1,
-        _ => false,
-    }
+    contract_version(c).is_some_and(|(major, minor)| major == CONTRACT.0 && minor <= CONTRACT.1)
 }
 
 /// Why a `network` entry cannot match anything useful (empty, or a wildcard that is too wide).

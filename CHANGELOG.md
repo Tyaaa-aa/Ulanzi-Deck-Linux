@@ -15,7 +15,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   plugin SDK (`ulanzi-plugin`), a hello example and the [plugin guide](docs/plugins.md).
 - Plugin contract 1.1: `list-items` and `[[pickers]]`, so plugins offer lists to pick from (entries with
   label, subtitle, group, icon and live state, bounded by the service). Plugins built for 1.0 keep
-  working. `ulanzictl plugin items <id> <picker> [query] [--group G]` and the D-Bus method
+  working; a 1.0 manifest's `[[pickers]]` tables are still accepted and ignored. `ulanzictl plugin items <id> <picker> [query] [--group G]` and the D-Bus method
   `PluginListItems` show a list from the command line.
 - Plugins as one file: `<id>-<version>.ulanziplugin`, a ZIP with `plugin.toml`, `plugin.wasm` and optional
   `assets/`. `scripts/package-plugin.sh <plugin-dir>` builds one, `ulanzictl plugin install` takes a file

@@ -669,3 +669,50 @@ fn pick_items_skip_empty_fields_in_json() {
     let back: PickItem = serde_json::from_str(&json).expect("parse");
     assert_eq!(back, item);
 }
+
+// ---- Contract 1.0 keeps its promise: [[pickers]] accepted and ignored ----
+
+#[test]
+fn contract_1_0_ignores_pickers_and_their_checks() {
+    // A picker that is not declared, a multi picker on a param, a duplicate and an odd-shaped
+    // table: all refused for 1.1 (above), all accepted and ignored for 1.0.
+    let text = manifest(
+        "obs",
+        "1.0.0",
+        "1.0",
+        "[[pickers]]\nid = \"sources\"\nmulti = true\n\
+         [[pickers]]\nid = \"sources\"\n\
+         [[pickers]]\nstyle = \"carousel\"\nwhatever = 3\n\
+         [[settings]]\nkey = \"room\"\nkind = \"item\"\npicker = \"rooms\"\n\
+         [[actions]]\nid = \"go\"\nname = \"Go\"\nparams = [{ key = \"src\", kind = \"item\", picker = \"sources\" }]\n",
+    );
+    let m = Manifest::parse(&text).expect("a 1.0 manifest keeps loading");
+    assert!(m.pickers.is_empty(), "{:?}", m.pickers);
+    assert!(m.picker("sources").is_none());
+    assert_eq!(m.settings[0].picker, Some("rooms".into()));
+}
+
+#[test]
+fn contract_1_0_accepts_a_pickers_value_of_any_shape() {
+    for extra in ["pickers = 5\n", "pickers = [\"a\", 2]\n", "[pickers]\nid = 1\n"] {
+        let text = manifest("obs", "1.0.0", "1.0", extra);
+        let m = Manifest::parse(&text).unwrap_or_else(|e| panic!("{extra}: {e}"));
+        assert!(m.pickers.is_empty());
+    }
+}
+
+#[test]
+fn contract_1_1_still_checks_pickers() {
+    let text = manifest("obs", "1.0.0", "1.1", "[[pickers]]\nstyle = \"list\"\n");
+    assert!(matches!(Manifest::parse(&text), Err(ManifestError::Parse(_))));
+    let text = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        "[[settings]]\nkey = \"room\"\nkind = \"item\"\npicker = \"rooms\"\n",
+    );
+    assert!(matches!(
+        Manifest::parse(&text),
+        Err(ManifestError::UnknownPicker { .. })
+    ));
+}

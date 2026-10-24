@@ -189,9 +189,11 @@ minor version is not newer than the service's (1 today). A plugin that asks for 
 written for 1.0 keeps working on every later 1.x.
 
 The manifest may also contain tables this version does not read yet (key faces, widgets, variables,
-detection, sign-in). They are accepted and ignored. A manifest is refused when a picker is declared
-twice, when an `item` field names a picker that is not declared, or when an action param uses a `multi`
-picker.
+detection, sign-in). They are accepted and ignored. From contract 1.1 on, a manifest is refused when a
+picker is declared twice, when an `item` field names a picker that is not declared, or when an action
+param uses a `multi` picker. A `contract = "1.0"` manifest keeps the 1.0 rules: its `[[pickers]]` tables
+(whatever their shape) and a field's `picker` are accepted and ignored, so its `item` fields are text
+entries.
 
 ### Settings and parameters
 
