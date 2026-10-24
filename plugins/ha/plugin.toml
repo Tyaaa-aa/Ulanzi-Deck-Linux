@@ -19,14 +19,22 @@ label = "Home Assistant address"
 default = "homeassistant.local:8123"
 
 [[settings]]
+key = "token"
+kind = "secret"
+label = "Access token"
+help = "HA: your Profile → Security → Long-lived access tokens"
+
+[[settings]]
 key = "entities"
 kind = "text"
 label = "Entities to show on keys (up to 40)"
+help = "Separate with commas"
 
 [[settings]]
 key = "attributes"
 kind = "text"
 label = "Extra attributes to show (entity:attribute, optional)"
+help = "Separate with commas"
 
 [[actions]]
 id = "toggle"
@@ -73,7 +81,7 @@ params = [
   { key = "domain", kind = "text", label = "Domain (for example notify)" },
   { key = "service", kind = "text", label = "Service" },
   { key = "entity_id", kind = "text", label = "Entity (optional)" },
-  { key = "data", kind = "text", label = "JSON data" },
+  { key = "data", kind = "json", label = "JSON data" },
 ]
 
 [[actions]]

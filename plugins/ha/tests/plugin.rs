@@ -799,7 +799,7 @@ fn settings_problem_text_has_one_full_stop() {
     h.init(json!({"url": "", "token": TOKEN})).expect("init");
     let (st, msg) = status_msg(&h);
     assert_eq!(st, Status::Problem);
-    assert!(msg.starts_with("Check [plugins.ha.settings]: "), "{msg}");
+    assert!(msg.starts_with("Check the Home Assistant settings: "), "{msg}");
     assert!(!msg.ends_with(".."), "{msg}");
 }
 

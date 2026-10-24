@@ -24,6 +24,11 @@ port and password.
 
 ## Settings
 
+Open Settings → Integrations → OBS Studio in the app and fill in the address, port and password. The password
+goes straight into the plugin's secret store.
+
+### Without the app
+
 Edit `~/.config/ulanzi-deck/settings.toml`, then run `systemctl --user reload ulanzi-deckd`:
 
 ```toml

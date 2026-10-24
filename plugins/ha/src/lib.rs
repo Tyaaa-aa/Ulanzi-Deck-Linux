@@ -73,11 +73,11 @@ impl Down {
             Down::Dropped => (Status::Connecting, "Connection lost. Reconnecting…".to_string()),
             Down::NoToken => (
                 Status::Problem,
-                "Access token needed. Add token = \"…\" to [plugins.ha.settings].".to_string(),
+                "Access token needed. Enter it in Settings → Integrations → Home Assistant.".to_string(),
             ),
             Down::BadToken => (
                 Status::Problem,
-                "Home Assistant rejected the access token. Create a long-lived access token (HA: your Profile → Security → Long-lived access tokens) and put it in [plugins.ha.settings] token.".to_string(),
+                "Home Assistant rejected the access token. Create a long-lived access token (HA: your Profile → Security → Long-lived access tokens) and enter it in Settings → Integrations → Home Assistant.".to_string(),
             ),
             Down::TooOld => (
                 Status::Problem,
@@ -680,7 +680,10 @@ impl Plugin for Ha {
                 self.set_status(
                     cx,
                     Status::Problem,
-                    &format!("Check [plugins.ha.settings]: {}.", msg.trim_end_matches('.')),
+                    &format!(
+                        "Check the Home Assistant settings: {}.",
+                        msg.trim_end_matches('.')
+                    ),
                 );
                 return Ok(());
             }

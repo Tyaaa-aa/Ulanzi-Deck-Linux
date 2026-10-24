@@ -234,6 +234,7 @@ fn no_password_reports_auth_missing() {
     let (st, msg) = status_msg(&h);
     assert_eq!(st, Status::Problem);
     assert!(msg.starts_with("Password needed"), "{msg}");
+    assert!(msg.contains("Settings → Integrations → OBS Studio"), "{msg}");
     assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
 }
 

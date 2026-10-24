@@ -490,13 +490,13 @@ mod typed_fields {
 
     #[test]
     fn shipped_manifests_parse() {
-        for text in [
-            include_str!("../../../plugins/obs/plugin.toml"),
-            include_str!("../../../plugins/ha/plugin.toml"),
-            include_str!("../../../examples/plugins/hello/plugin.toml"),
-            include_str!("../../ulanzi-deckd/tests/plugins/probe/plugin.toml"),
-        ] {
-            Manifest::parse(text).expect("shipped manifest parses");
-        }
+        let parse = |text: &str| Manifest::parse(text).expect("shipped manifest parses");
+        let obs = parse(include_str!("../../../plugins/obs/plugin.toml"));
+        let ha = parse(include_str!("../../../plugins/ha/plugin.toml"));
+        parse(include_str!("../../../examples/plugins/hello/plugin.toml"));
+        parse(include_str!("../../ulanzi-deckd/tests/plugins/probe/plugin.toml"));
+        assert_eq!(obs.secret_keys(), ["password"]);
+        assert_eq!(ha.secret_keys(), ["token"]);
+        assert!(obs.settings[1].is_integer());
     }
 }

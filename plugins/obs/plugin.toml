@@ -21,12 +21,21 @@ key = "host"
 kind = "text"
 label = "Address"
 default = "localhost"
+help = "OBS must run on this computer"
 
 [[settings]]
 key = "port"
 kind = "number"
 label = "Port"
+min = 1
+max = 65535
 default = 4455
+
+[[settings]]
+key = "password"
+kind = "secret"
+label = "Password"
+help = "OBS: Tools → WebSocket Server Settings → Show Connect Info"
 
 [[actions]]
 id = "set_scene"

@@ -29,6 +29,11 @@ to the bottom, "Long-lived access tokens", Create token, and copy it. Home Assis
 
 ## Settings
 
+Open Settings → Integrations → Home Assistant in the app and fill in the address and access token. The token
+goes straight into the plugin's secret store.
+
+### Without the app
+
 Edit `~/.config/ulanzi-deck/settings.toml`, then run `systemctl --user reload ulanzi-deckd`:
 
 ```toml
