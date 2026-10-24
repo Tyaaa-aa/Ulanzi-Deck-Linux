@@ -283,7 +283,7 @@ fn every_manifest_action_is_known() {
 #[test]
 fn state_pairs_offline_and_live() {
     let has = |v: &[(String, String)], k: &str, val: &str| v.contains(&(k.to_string(), val.to_string()));
-    let off = state_pairs(&Live::default());
+    let off = state_pairs(&Live::default(), &BTreeSet::new());
     assert!(has(&off, "connected", "no"));
     assert!(has(&off, "scene", ""));
     assert!(has(&off, "rec_time", ""));
@@ -305,7 +305,10 @@ fn state_pairs_offline_and_live() {
         ..Live::default()
     };
     l.scenes = vec!["A".into(), "B".into()];
-    let on = state_pairs(&l);
+    l.inputs = BTreeSet::from(["Desk".to_string()]);
+    l.sources = BTreeSet::from([("A".to_string(), "Logo".to_string())]);
+    l.last_error = "boom".into();
+    let on = state_pairs(&l, &BTreeSet::new());
     for (k, v) in [
         ("connected", "yes"),
         ("scene", "A"),
@@ -317,9 +320,13 @@ fn state_pairs_offline_and_live() {
         ("fps", "60"),
         ("cpu", "3"),
         ("dropped", "0.4%"),
+        ("mute.Desk", "no"),
+        ("visible.A/Logo", "yes"),
+        ("last_error", "boom"),
     ] {
         assert!(has(&on, k, v), "{k}={v} in {on:?}");
     }
+    assert_eq!(on.len(), 16 + 4);
 }
 
 #[test]
@@ -330,8 +337,78 @@ fn dynamic_keys_are_capped() {
         hidden: BTreeSet::from([("A".to_string(), "Cam".to_string())]),
         ..Live::default()
     };
-    let pairs = state_pairs(&l);
+    let pairs = state_pairs(&l, &BTreeSet::new());
     assert_eq!(pairs.iter().filter(|(k, _)| k.starts_with("mute.")).count(), 200);
     assert_eq!(pairs.iter().filter(|(k, _)| k.starts_with("visible.")).count(), 0);
     assert_eq!(pairs.len(), 216);
+}
+
+#[test]
+fn offline_clears_published_dynamic_keys() {
+    let l = Live {
+        connected: true,
+        muted: BTreeSet::from(["Mic".to_string()]),
+        hidden: BTreeSet::from([("A".to_string(), "Cam".to_string())]),
+        ..Live::default()
+    };
+    let published: BTreeSet<String> = state_pairs(&l, &BTreeSet::new())
+        .into_iter()
+        .map(|(k, _)| k)
+        .filter(|k| k.contains('.'))
+        .collect();
+    assert_eq!(published.len(), 2);
+    let off = state_pairs(&Live::default(), &published);
+    for k in &published {
+        assert!(off.contains(&(k.clone(), String::new())), "{k}");
+    }
+    // A key still present keeps its value; only absent ones are blanked.
+    let again = state_pairs(&l, &published);
+    assert!(again.contains(&("mute.Mic".to_string(), "yes".to_string())));
+    assert_eq!(again.len(), 18);
+}
+
+#[test]
+fn input_events_track_known_inputs() {
+    let mut t = live();
+    apply_event(
+        &mut t,
+        "InputMuteStateChanged",
+        &json!({"inputName": "Mic", "inputMuted": false}),
+    );
+    assert!(t.live.inputs.contains("Mic") && !t.live.muted.contains("Mic"));
+    apply_event(
+        &mut t,
+        "InputNameChanged",
+        &json!({"oldInputName": "Mic", "inputName": "Voice"}),
+    );
+    assert!(t.live.inputs.contains("Voice") && !t.live.inputs.contains("Mic"));
+    let e = apply_event(&mut t, "InputRemoved", &json!({"inputName": "Voice"}));
+    assert!(e.reload && t.live.inputs.is_empty());
+    // Scene items feed the known sources.
+    t.sync_hidden();
+    assert!(t.live.sources.contains(&("Gaming".into(), "Cam".into())));
+}
+
+#[test]
+fn volume_params_are_strict() {
+    assert_eq!(
+        parse_action("input_volume", &json!({"input": "Mic", "op": "set"})),
+        Err("Choose a volume".to_string())
+    );
+    match parse_action("input_volume", &json!({"input": "Mic", "op": "up", "step": 0})) {
+        Ok(ObsAction::InputVolume { step, .. }) => assert_eq!(step, 1),
+        other => panic!("{other:?}"),
+    }
+    match parse_action("input_volume", &json!({"input": "Mic", "op": "up", "step": 99})) {
+        Ok(ObsAction::InputVolume { step, .. }) => assert_eq!(step, 20),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn manifest_is_valid_for_the_host() {
+    let m = ulanzi_core::plugin::Manifest::parse(include_str!("../plugin.toml")).expect("valid");
+    assert_eq!(m.id, "obs");
+    assert_eq!(m.actions.len(), 22);
+    assert!(m.background);
 }

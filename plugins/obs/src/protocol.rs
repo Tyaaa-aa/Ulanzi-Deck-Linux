@@ -133,11 +133,6 @@ impl Tracked {
             .iter()
             .map(|((scene, _), (source, _))| (scene.clone(), source.clone()))
             .collect();
-        self.live.sources = self
-            .items
-            .iter()
-            .map(|((scene, _), (source, _))| (scene.clone(), source.clone()))
-            .collect();
         self.live.hidden = self
             .items
             .iter()
@@ -197,6 +192,7 @@ pub fn apply_event(t: &mut Tracked, ty: &str, d: &Value) -> EventEffect {
         }
         "InputMuteStateChanged" => {
             let name = s(d, "inputName").to_string();
+            live.inputs.insert(name.clone());
             if b(d, "inputMuted") {
                 live.muted.insert(name);
             } else {
@@ -274,6 +270,9 @@ pub fn apply_event(t: &mut Tracked, ty: &str, d: &Value) -> EventEffect {
             if live.muted.remove(&old) {
                 live.muted.insert(new.clone());
             }
+            if live.inputs.remove(&old) {
+                live.inputs.insert(new.clone());
+            }
             for (name, _) in t.items.values_mut() {
                 if *name == old {
                     *name = new.clone();
@@ -288,8 +287,14 @@ pub fn apply_event(t: &mut Tracked, ty: &str, d: &Value) -> EventEffect {
         | "SceneItemRemoved"
         | "SceneListChanged"
         | "CurrentSceneCollectionChanged"
-        | "InputCreated"
-        | "InputRemoved" => e.reload = true,
+        | "InputCreated" => e.reload = true,
+        "InputRemoved" => {
+            // Forget it at once; the reload (which refills `inputs` from scratch) confirms.
+            let name = s(d, "inputName");
+            live.inputs.remove(name);
+            live.muted.remove(name);
+            e.reload = true;
+        }
         _ => e.changed = false,
     }
     e
@@ -358,7 +363,10 @@ fn yes(b: bool) -> String {
 
 /// Every key value to publish (the host adds the plugin id): the fixed ones, then `mute.*` and
 /// `visible.*` in name order, at most [`MAX_DYNAMIC_KEYS`] of those. Offline gives the offline values.
-pub fn state_pairs(live: &Live) -> Vec<(String, String)> {
+///
+/// `previously` holds the dynamic keys published before; any of them no longer present (offline,
+/// removed input, past the cap) comes out as `""` so stale values never linger.
+pub fn state_pairs(live: &Live, previously: &BTreeSet<String>) -> Vec<(String, String)> {
     let on = live.connected;
     let when = |v: String| if on { v } else { String::new() };
     let flag = |b: bool| yes(on && b);
@@ -416,5 +424,12 @@ pub fn state_pairs(live: &Live) -> Vec<(String, String)> {
         dynamic.truncate(MAX_DYNAMIC_KEYS);
         out.extend(dynamic);
     }
+    let present: BTreeSet<&str> = out.iter().map(|(k, _)| k.as_str()).collect();
+    let gone: Vec<(String, String)> = previously
+        .iter()
+        .filter(|k| !present.contains(k.as_str()))
+        .map(|k| (k.clone(), String::new()))
+        .collect();
+    out.extend(gone);
     out
 }

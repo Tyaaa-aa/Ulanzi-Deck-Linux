@@ -135,14 +135,15 @@ pub fn parse_action(action: &str, params: &Value) -> Result<ObsAction, String> {
                     percent: params
                         .get("percent")
                         .and_then(Value::as_f64)
-                        .map_or(100, |p| p.round().clamp(0.0, 100.0) as u8),
+                        .map(|p| p.round().clamp(0.0, 100.0) as u8)
+                        .ok_or("Choose a volume")?,
                 },
                 _ => return Err("op must be up, down, mute or set".to_string()),
             };
             let step = params
                 .get("step")
                 .and_then(Value::as_f64)
-                .map_or(2, |s| s.round().clamp(0.0, 255.0) as u8);
+                .map_or(2, |s| s.round().clamp(1.0, 20.0) as u8);
             InputVolume { input, op, step }
         }
         "toggle_filter" => {
