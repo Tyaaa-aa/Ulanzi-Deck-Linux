@@ -79,6 +79,8 @@ pub enum ManifestError {
     DuplicateField { scope: String, key: String },
     #[error("action \"{action}\": \"{key}\" cannot be a secret; secrets belong in [[settings]]")]
     SecretParam { action: String, key: String },
+    #[error("a field in {scope} has an empty key")]
+    EmptyFieldKey { scope: String },
 }
 
 impl Manifest {
@@ -184,6 +186,9 @@ fn bad_network_entry(entry: &str) -> Option<&'static str> {
 
 fn check_fields(scope: String, fields: &[Field]) -> Result<(), ManifestError> {
     for (i, f) in fields.iter().enumerate() {
+        if f.key.trim().is_empty() {
+            return Err(ManifestError::EmptyFieldKey { scope });
+        }
         if fields[..i].iter().any(|g| g.key == f.key) {
             return Err(ManifestError::DuplicateField {
                 scope,

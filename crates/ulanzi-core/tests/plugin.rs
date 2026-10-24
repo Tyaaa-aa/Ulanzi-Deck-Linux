@@ -401,6 +401,33 @@ mod typed_fields {
     }
 
     #[test]
+    fn kinds_match_case_insensitively() {
+        assert_eq!(field("kind = \"Secret\"").kind, FieldKind::Secret);
+        assert_eq!(field("kind = \"KEY_COMBO\"").kind, FieldKind::KeyCombo);
+        assert_eq!(field("kind = \"Gizmo\"").kind, FieldKind::Other("Gizmo".into()));
+        let s = "[[actions]]\nid = \"x\"\nname = \"X\"\nparams = [{ key = \"a\", kind = \"Secret\" }]\n";
+        assert!(matches!(
+            Manifest::parse(&manifest("x1", "1.0.0", "1.0", s)),
+            Err(ManifestError::SecretParam { .. })
+        ));
+    }
+
+    #[test]
+    fn empty_field_keys_refused() {
+        for key in ["", "  "] {
+            let s = format!("[[settings]]\nkey = \"{key}\"\n");
+            let err = Manifest::parse(&manifest("x1", "1.0.0", "1.0", &s)).expect_err("refused");
+            assert_eq!(
+                err,
+                ManifestError::EmptyFieldKey {
+                    scope: "the settings".into()
+                }
+            );
+            assert_eq!(err.to_string(), "a field in the settings has an empty key");
+        }
+    }
+
+    #[test]
     fn secret_param_refused() {
         let s = "[[actions]]\nid = \"x\"\nname = \"X\"\nparams = [{ key = \"a\", kind = \"secret\" }]\n";
         let err = Manifest::parse(&manifest("x1", "1.0.0", "1.0", s)).expect_err("refused");

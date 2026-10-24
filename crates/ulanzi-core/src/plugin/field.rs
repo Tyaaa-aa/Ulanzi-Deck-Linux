@@ -21,7 +21,7 @@ pub enum FieldKind {
 
 impl From<String> for FieldKind {
     fn from(s: String) -> Self {
-        match s.as_str() {
+        match s.to_ascii_lowercase().as_str() {
             "text" => Self::Text,
             "number" => Self::Number,
             "toggle" => Self::Toggle,
