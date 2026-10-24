@@ -53,18 +53,34 @@ fn change(state: &State, f: impl FnOnce(&mut Settings)) {
         let state = state.clone();
         let id = glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
             PENDING.with(|p| p.borrow_mut().take());
-            let s = state.settings.borrow().clone();
-            if let Some(c) = state.client.borrow().clone() {
-                let st = state.clone();
-                runtime::run(async move { c.apply_settings(&s).await }, move |r| {
-                    if let Err(e) = r {
-                        crate::ui::toast(&st, &format!("Settings not saved: {e}"));
-                    }
-                });
-            }
+            send_settings(&state);
         });
         *p.borrow_mut() = Some(id);
     });
+}
+
+/// Change a setting and send the settings at once (dropping a pending debounced send, which the
+/// same settings include).
+pub fn change_now(state: &State, f: impl FnOnce(&mut Settings)) {
+    f(&mut state.settings.borrow_mut());
+    PENDING.with(|p| {
+        if let Some(id) = p.borrow_mut().take() {
+            id.remove();
+        }
+    });
+    send_settings(state);
+}
+
+fn send_settings(state: &State) {
+    let s = state.settings.borrow().clone();
+    if let Some(c) = state.client.borrow().clone() {
+        let st = state.clone();
+        runtime::run(async move { c.apply_settings(&s).await }, move |r| {
+            if let Err(e) = r {
+                crate::ui::toast(&st, &format!("Settings not saved: {e}"));
+            }
+        });
+    }
 }
 
 fn spin(title: &str, subtitle: &str, (min, max, step): (f64, f64, f64), value: f64) -> adw::SpinRow {
@@ -191,7 +207,7 @@ fn general_page(state: &State) -> adw::PreferencesPage {
     page
 }
 
-fn rgb_u32(c: &gdk::RGBA) -> u32 {
+pub(crate) fn rgb_u32(c: &gdk::RGBA) -> u32 {
     let v = |f: f32| (f.clamp(0.0, 1.0) * 255.0).round() as u32;
     (v(c.red()) << 16) | (v(c.green()) << 8) | v(c.blue())
 }
@@ -334,14 +350,18 @@ fn device_page(state: &State) -> adw::PreferencesPage {
     page
 }
 
-fn integrations_page(state: &State) -> adw::PreferencesPage {
+fn integrations_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .name("integrations")
         .title("Integrations")
         .icon_name("application-x-addon-symbolic")
         .build();
 
-    page.add(&crate::ui::obs_setup::group(state, |st, f| change_boxed(st, f)));
+    page.add(&crate::ui::integrations::plugins_group(state, dialog));
+    page.add(&crate::ui::integrations::developer_group(state, dialog));
+    let obs = crate::ui::obs_setup::group(state, |st, f| change_boxed(st, f));
+    obs.set_title("OBS Studio (built in)");
+    page.add(&obs);
 
     let input = adw::PreferencesGroup::builder().title("Keyboard").build();
     let ok = std::fs::OpenOptions::new()
@@ -554,7 +574,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
     let dialog = adw::PreferencesDialog::builder().search_enabled(true).build();
     dialog.add(&general_page(state));
     dialog.add(&device_page(state));
-    dialog.add(&integrations_page(state));
+    dialog.add(&integrations_page(state, &dialog));
     dialog.add(&backups_page(state));
     dialog.present(Some(parent));
 }

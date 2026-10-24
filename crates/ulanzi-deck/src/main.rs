@@ -24,7 +24,7 @@ struct Shot {
     size: (i32, i32),
     dark: Option<bool>,
     select: Option<String>,
-    /// `library` or `picker:<tab>`.
+    /// `library`, `picker:<tab>`, `integrations` or `integrations:<plugin id>`, ….
     open: Option<String>,
     /// 1-based page to show.
     page: Option<usize>,
@@ -288,6 +288,14 @@ fn main() -> glib::ExitCode {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
+                Some(o) if o.starts_with("integrations:") => {
+                    ui::preferences::open(&state2, &window);
+                    if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {
+                        d.set_visible_page_name("integrations");
+                        let id = &o["integrations:".len()..];
+                        d.push_subpage(&ui::integrations::subpage(&state2, &d, id));
+                    }
+                }
                 Some("integrations") => {
                     ui::preferences::open(&state2, &window);
                     if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {
