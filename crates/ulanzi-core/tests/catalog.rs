@@ -249,6 +249,7 @@ fn problems_name_what_is_missing() {
         pages: &[page],
         profiles: &[],
         obs_scenes: Some(&["Live".to_string()]),
+        plugin: &|_, _| None,
     };
     let app = |id: &str| Action::LaunchApp {
         desktop_id: Some(id.into()),
@@ -305,4 +306,30 @@ fn problems_name_what_is_missing() {
         )
         .is_some()
     );
+}
+
+#[test]
+fn plugin_problem_comes_from_the_callback() {
+    use ulanzi_core::catalog::{Problems, problem};
+    let ctx = Problems {
+        app_installed: &|_| true,
+        file_exists: &|_| true,
+        pages: &[],
+        profiles: &[],
+        obs_scenes: None,
+        plugin: &|p, a| Some(format!("{p}/{a}")),
+    };
+    let act = Action::Plugin {
+        plugin: "obs".into(),
+        action: "x".into(),
+        params: Default::default(),
+    };
+    assert_eq!(problem(&act, &ctx).as_deref(), Some("obs/x"));
+    let multi = Action::Multi {
+        steps: vec![Step {
+            action: act,
+            delay_ms: 0,
+        }],
+    };
+    assert_eq!(problem(&multi, &ctx).as_deref(), Some("obs/x"));
 }

@@ -317,3 +317,159 @@ fn plugins_used_finds_every_place() {
             .collect();
     assert_eq!(p.plugins_used(), want);
 }
+
+mod typed_fields {
+    use super::*;
+    use ulanzi_core::plugin::{Field, FieldKind, Inspected, permission};
+
+    fn field(extra: &str) -> Field {
+        toml::from_str(&format!("key = \"k\"\n{extra}")).expect("field parses")
+    }
+
+    #[test]
+    fn settings_and_params_parse() {
+        let m = Manifest::parse(OBS).expect("parses");
+        assert_eq!(m.settings[0].key, "host");
+        assert_eq!(m.settings[0].kind, FieldKind::Text);
+        assert_eq!(
+            m.settings[0].default,
+            Some(toml::Value::String("localhost:4455".into()))
+        );
+        let p = &m.action("set_scene").expect("action").params[0];
+        assert_eq!(p.kind, FieldKind::Item);
+        assert_eq!(p.picker, Some("scenes".into()));
+    }
+
+    #[test]
+    fn unknown_kinds_are_kept() {
+        let m = Manifest::parse(&manifest(
+            "x1",
+            "1.0.0",
+            "1.0",
+            "[[actions]]\nid = \"a\"\nname = \"A\"\nparams = [{ key = \"p\", kind = \"slider3d\" }]\n",
+        ))
+        .expect("parses");
+        assert_eq!(m.actions[0].params[0].kind, FieldKind::Other("slider3d".into()));
+        let json = serde_json::to_string(&m).expect("json");
+        assert_eq!(serde_json::from_str::<Manifest>(&json).expect("back"), m);
+        let i = Inspected {
+            manifest: m,
+            installed_version: Some("0.9.0".into()),
+        };
+        let back: Inspected = serde_json::from_str(&serde_json::to_string(&i).expect("json")).expect("back");
+        assert_eq!(back.installed_version.as_deref(), Some("0.9.0"));
+    }
+
+    #[test]
+    fn choices_plain_and_labelled() {
+        let f = field("kind = \"choice\"\nchoices = [\"up\", { value = \"set\", label = \"Set to\" }]");
+        let values: Vec<&str> = f.choices.iter().map(|c| c.value()).collect();
+        let labels: Vec<String> = f.choices.iter().map(|c| c.label()).collect();
+        assert_eq!(values, ["up", "set"]);
+        assert_eq!(labels, ["Up", "Set to"]);
+    }
+
+    #[test]
+    fn number_integer_rule() {
+        assert!(field("min = 0\nmax = 100").is_integer());
+        assert!(field("default = 4455").is_integer());
+        assert!(!field("step = 0.5").is_integer());
+        assert!(!field("default = 1.5").is_integer());
+        assert!(!field("").is_integer());
+    }
+
+    #[test]
+    fn duplicate_fields_refused() {
+        let dup = "[[settings]]\nkey = \"host\"\n[[settings]]\nkey = \"host\"\n";
+        assert_eq!(
+            Manifest::parse(&manifest("x1", "1.0.0", "1.0", dup)),
+            Err(ManifestError::DuplicateField {
+                scope: "the settings".into(),
+                key: "host".into()
+            })
+        );
+        let dup = "[[actions]]\nid = \"x\"\nname = \"X\"\nparams = [{ key = \"a\" }, { key = \"a\" }]\n";
+        let err = Manifest::parse(&manifest("x1", "1.0.0", "1.0", dup)).expect_err("refused");
+        assert_eq!(
+            err,
+            ManifestError::DuplicateField {
+                scope: "action \"x\"".into(),
+                key: "a".into()
+            }
+        );
+        assert_eq!(err.to_string(), "\"a\" is declared twice in action \"x\"");
+    }
+
+    #[test]
+    fn secret_param_refused() {
+        let s = "[[actions]]\nid = \"x\"\nname = \"X\"\nparams = [{ key = \"a\", kind = \"secret\" }]\n";
+        let err = Manifest::parse(&manifest("x1", "1.0.0", "1.0", s)).expect_err("refused");
+        assert_eq!(
+            err,
+            ManifestError::SecretParam {
+                action: "x".into(),
+                key: "a".into()
+            }
+        );
+        assert_eq!(
+            err.to_string(),
+            "action \"x\": \"a\" cannot be a secret; secrets belong in [[settings]]"
+        );
+    }
+
+    #[test]
+    fn secret_keys_listed() {
+        let s = "[[settings]]\nkey = \"password\"\nkind = \"secret\"\n[[settings]]\nkey = \"host\"\n";
+        let m = Manifest::parse(&manifest("x1", "1.0.0", "1.0", s)).expect("parses");
+        assert_eq!(m.secret_keys(), vec!["password"]);
+    }
+
+    #[test]
+    fn permissions_in_plain_words() {
+        let d = permission::describe;
+        assert_eq!(
+            d(&Permissions {
+                network: vec!["127.0.0.1".into(), "localhost".into()],
+                ..Default::default()
+            }),
+            ["Connect to 127.0.0.1, localhost"]
+        );
+        assert_eq!(
+            d(&Permissions {
+                programs: vec!["easyeffects".into()],
+                ..Default::default()
+            }),
+            ["Run the program `easyeffects`"]
+        );
+        assert_eq!(
+            d(&Permissions::default()),
+            ["Nothing outside the app: no network, no programs"]
+        );
+        assert_eq!(
+            d(&Permissions {
+                lan: true,
+                browser: true,
+                dbus: vec!["org.a".into(), "org.b".into()],
+                ..Default::default()
+            }),
+            [
+                "Connect to devices on your local network",
+                "Open your web browser to sign in",
+                "Talk to org.a over D-Bus",
+                "Talk to org.b over D-Bus"
+            ]
+        );
+    }
+
+    #[test]
+    fn shipped_manifests_parse() {
+        for text in [
+            include_str!("../../../plugins/obs/plugin.toml"),
+            include_str!("../../../plugins/ha/plugin.toml"),
+            include_str!("../../../examples/plugins/hello/plugin.toml"),
+            include_str!("../../ulanzi-deckd/tests/plugins/probe/plugin.toml"),
+        ] {
+            Manifest::parse(text).expect("shipped manifest parses");
+        }
+    }
+}

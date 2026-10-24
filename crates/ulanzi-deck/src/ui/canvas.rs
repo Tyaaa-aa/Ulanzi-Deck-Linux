@@ -395,6 +395,7 @@ pub fn key_problem(state: &State, key: &ulanzi_core::model::Key) -> Option<Strin
         pages: &pages,
         profiles: &profiles,
         obs_scenes: scenes,
+        plugin: &|_, _| None,
     };
     [&key.tap, &key.hold]
         .into_iter()

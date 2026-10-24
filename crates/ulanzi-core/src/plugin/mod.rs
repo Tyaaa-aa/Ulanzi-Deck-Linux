@@ -1,7 +1,9 @@
 //! WebAssembly plugins: the manifest (`plugin.toml`) and the permissions it asks for.
 
+mod field;
 mod manifest;
-mod permission;
+pub mod permission;
 
-pub use manifest::{CONTRACT, Manifest, ManifestAction, ManifestError, Permissions};
-pub use permission::{host_allowed, is_lan};
+pub use field::{Choice, Field, FieldKind};
+pub use manifest::{CONTRACT, Inspected, Manifest, ManifestAction, ManifestError, Permissions};
+pub use permission::{describe, host_allowed, is_lan};

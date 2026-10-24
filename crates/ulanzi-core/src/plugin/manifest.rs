@@ -1,11 +1,13 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use super::{Field, FieldKind};
 
 /// The plugin contract this host implements (major, minor).
 pub const CONTRACT: (u32, u32) = (1, 0);
 
-/// A plugin's `plugin.toml`. Tables the host does not read yet (settings, pickers, faces, widgets,
+/// A plugin's `plugin.toml`. Tables the host does not read yet (pickers, faces, widgets,
 /// variables, detect, auth) are accepted and ignored.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub id: String,
     pub name: String,
@@ -26,10 +28,13 @@ pub struct Manifest {
     pub permissions: Permissions,
     #[serde(default)]
     pub actions: Vec<ManifestAction>,
+    /// Settings the GUI renders as the plugin's settings page.
+    #[serde(default)]
+    pub settings: Vec<Field>,
 }
 
 /// What a plugin may reach outside its sandbox.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Permissions {
     /// Host names the plugin may connect to (`*.example.com` matches subdomains).
@@ -41,15 +46,21 @@ pub struct Permissions {
     pub programs: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ManifestAction {
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub icon: Option<String>,
-    /// Parameter descriptions, kept as written until the editor reads them.
     #[serde(default)]
-    pub params: Vec<toml::Value>,
+    pub params: Vec<Field>,
+}
+
+/// What the daemon returns when asked about a plugin folder before installing it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Inspected {
+    pub manifest: Manifest,
+    pub installed_version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -64,6 +75,10 @@ pub enum ManifestError {
     Incompatible { needs: String },
     #[error("action \"{0}\" is declared twice")]
     DuplicateAction(String),
+    #[error("\"{key}\" is declared twice in {scope}")]
+    DuplicateField { scope: String, key: String },
+    #[error("action \"{action}\": \"{key}\" cannot be a secret; secrets belong in [[settings]]")]
+    SecretParam { action: String, key: String },
 }
 
 impl Manifest {
@@ -89,7 +104,30 @@ impl Manifest {
                 return Err(ManifestError::DuplicateAction(a.id.clone()));
             }
         }
+        check_fields("the settings".into(), &m.settings)?;
+        for a in &m.actions {
+            check_fields(format!("action \"{}\"", a.id), &a.params)?;
+            if let Some(f) = a.params.iter().find(|f| f.kind == FieldKind::Secret) {
+                return Err(ManifestError::SecretParam {
+                    action: a.id.clone(),
+                    key: f.key.clone(),
+                });
+            }
+        }
         Ok(m)
+    }
+
+    /// Keys of the settings declared as secrets.
+    pub fn secret_keys(&self) -> Vec<&str> {
+        self.settings
+            .iter()
+            .filter(|f| f.kind == FieldKind::Secret)
+            .map(|f| f.key.as_str())
+            .collect()
+    }
+
+    pub fn action(&self, id: &str) -> Option<&ManifestAction> {
+        self.actions.iter().find(|a| a.id == id)
     }
 
     /// Does the plugin ask to talk to the network at all?
@@ -142,4 +180,16 @@ fn bad_network_entry(entry: &str) -> Option<&'static str> {
         return Some("\"*\" is only allowed as a leading \"*.\"");
     }
     None
+}
+
+fn check_fields(scope: String, fields: &[Field]) -> Result<(), ManifestError> {
+    for (i, f) in fields.iter().enumerate() {
+        if fields[..i].iter().any(|g| g.key == f.key) {
+            return Err(ManifestError::DuplicateField {
+                scope,
+                key: f.key.clone(),
+            });
+        }
+    }
+    Ok(())
 }

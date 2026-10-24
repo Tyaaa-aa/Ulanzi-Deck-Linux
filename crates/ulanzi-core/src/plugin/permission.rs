@@ -29,6 +29,26 @@ pub fn host_allowed(p: &Permissions, host: &str, resolved: &[IpAddr]) -> bool {
     !resolved.is_empty() && resolved.iter().all(|ip| is_lan(*ip))
 }
 
+/// The permissions in plain words, one line each (network, lan, browser, dbus, programs).
+pub fn describe(p: &Permissions) -> Vec<String> {
+    let mut out = Vec::new();
+    if !p.network.is_empty() {
+        out.push(format!("Connect to {}", p.network.join(", ")));
+    }
+    if p.lan {
+        out.push("Connect to devices on your local network".into());
+    }
+    if p.browser {
+        out.push("Open your web browser to sign in".into());
+    }
+    out.extend(p.dbus.iter().map(|n| format!("Talk to {n} over D-Bus")));
+    out.extend(p.programs.iter().map(|n| format!("Run the program `{n}`")));
+    if out.is_empty() {
+        out.push("Nothing outside the app: no network, no programs".into());
+    }
+    out
+}
+
 /// Lowercase and drop one trailing dot (`localhost.` is `localhost`).
 fn norm(s: &str) -> String {
     let s = s.to_ascii_lowercase();

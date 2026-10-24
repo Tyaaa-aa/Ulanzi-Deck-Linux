@@ -802,6 +802,8 @@ pub struct Problems<'a> {
     pub profiles: &'a [Uuid],
     /// Scenes in OBS while connected; `None` when OBS can't be asked.
     pub obs_scenes: Option<&'a [String]>,
+    /// Why a plugin action can't work (plugin id, action id); `None` when it looks fine.
+    pub plugin: &'a dyn Fn(&str, &str) -> Option<String>,
 }
 
 /// Why this action can't work as it is, in words for a warning badge; `None` when it looks fine.
@@ -837,6 +839,7 @@ pub fn problem(a: &Action, c: &Problems) -> Option<String> {
             Some("That profile no longer exists".into())
         }
         Action::Multi { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
+        Action::Plugin { plugin, action, .. } => (c.plugin)(plugin, action),
         Action::Obs(o) => match o {
             ObsAction::SetScene { scene: s, .. } => scene(s),
             ObsAction::ToggleScenes { a, b } => scene(a).or_else(|| scene(b)),
