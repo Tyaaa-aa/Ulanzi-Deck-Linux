@@ -1,0 +1,148 @@
+id = "obs"
+name = "OBS Studio"
+version = "1.0.0"
+contract = "1.0"
+description = "Scenes, recording, streaming, replay buffer, virtual camera and audio, with live state on key labels."
+categories = ["streaming"]
+background = true
+
+[permissions]
+network = ["127.0.0.1", "localhost"]
+
+[detect]                            # read from milestone 4 on
+programs = ["obs"]
+desktop_ids = ["com.obsproject.Studio"]
+
+[auth]                              # read from milestone 2 on; until then: settings `password`
+kind = "password"
+
+[[settings]]
+key = "host"
+kind = "text"
+label = "Address"
+default = "localhost"
+
+[[settings]]
+key = "port"
+kind = "number"
+label = "Port"
+default = 4455
+
+[[actions]]
+id = "set_scene"
+name = "Switch scene"
+params = [
+  { key = "scene", kind = "text", label = "Scene" },
+  { key = "preview", kind = "toggle", label = "Set the preview scene instead" },
+]
+
+[[actions]]
+id = "toggle_scenes"
+name = "Toggle between two scenes"
+params = [
+  { key = "a", kind = "text", label = "First scene" },
+  { key = "b", kind = "text", label = "Second scene" },
+]
+
+[[actions]]
+id = "toggle_source"
+name = "Show or hide a source"
+params = [
+  { key = "scene", kind = "text", label = "Scene" },
+  { key = "source", kind = "text", label = "Source" },
+]
+
+[[actions]]
+id = "toggle_record"
+name = "Toggle recording"
+
+[[actions]]
+id = "start_record"
+name = "Start recording"
+
+[[actions]]
+id = "stop_record"
+name = "Stop recording"
+
+[[actions]]
+id = "pause_record"
+name = "Pause or resume recording"
+
+[[actions]]
+id = "toggle_stream"
+name = "Toggle streaming"
+
+[[actions]]
+id = "start_stream"
+name = "Start streaming"
+
+[[actions]]
+id = "stop_stream"
+name = "Stop streaming"
+
+[[actions]]
+id = "toggle_replay"
+name = "Toggle replay buffer"
+
+[[actions]]
+id = "save_replay"
+name = "Save replay"
+
+[[actions]]
+id = "toggle_virtual_cam"
+name = "Toggle virtual camera"
+
+[[actions]]
+id = "toggle_mute"
+name = "Mute or unmute an input"
+params = [
+  { key = "input", kind = "text", label = "Audio input" },
+]
+
+[[actions]]
+id = "input_volume"
+name = "Change an input's volume"
+params = [
+  { key = "input", kind = "text", label = "Audio input" },
+  { key = "op", kind = "choice", label = "Change", choices = ["up", "down", "mute", "set"] },
+  { key = "percent", kind = "number", label = "Volume (percent, for Set)", min = 0, max = 100 },
+  { key = "step", kind = "number", label = "Step (dB)", min = 1, max = 20, default = 2 },
+]
+
+[[actions]]
+id = "toggle_filter"
+name = "Turn a filter on or off"
+params = [
+  { key = "source", kind = "text", label = "Source" },
+  { key = "filter", kind = "text", label = "Filter" },
+]
+
+[[actions]]
+id = "studio_transition"
+name = "Studio mode: transition"
+
+[[actions]]
+id = "set_collection"
+name = "Switch scene collection"
+params = [
+  { key = "name", kind = "text", label = "Scene collection" },
+]
+
+[[actions]]
+id = "set_profile"
+name = "Switch OBS profile"
+params = [
+  { key = "name", kind = "text", label = "OBS profile" },
+]
+
+[[actions]]
+id = "screenshot"
+name = "Take a screenshot"
+
+[[actions]]
+id = "reconnect"
+name = "Reconnect to OBS"
+
+[[actions]]
+id = "forget_password"
+name = "Forget the OBS password"

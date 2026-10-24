@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ulanzi-proto", "crates/ulanzi-core", "crates/ulanzi-plugin", "crates/ulanzi-deckd", "crates/ulanzictl", "crates/ulanzi-deck", "examples/plugins/hello", "crates/ulanzi-deckd/tests/plugins/probe"]
+members = ["crates/ulanzi-proto", "crates/ulanzi-core", "crates/ulanzi-plugin", "crates/ulanzi-deckd", "crates/ulanzictl", "crates/ulanzi-deck", "examples/plugins/hello", "plugins/obs", "crates/ulanzi-deckd/tests/plugins/probe"]
 
 [workspace.package]
 version = "2.0.0"

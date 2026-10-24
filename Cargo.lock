@@ -3817,6 +3817,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulanzi-plugin-obs"
+version = "1.0.0"
+dependencies = [
+ "base64 0.23.1",
+ "serde_json",
+ "sha2 0.11.1",
+ "ulanzi-plugin",
+]
+
+[[package]]
 name = "ulanzi-plugin-probe"
 version = "1.0.0"
 dependencies = [
