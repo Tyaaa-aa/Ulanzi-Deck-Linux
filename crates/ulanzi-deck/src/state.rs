@@ -97,6 +97,8 @@ pub struct AppState {
     pub obs: RefCell<ObsInfo>,
     /// The daemon's plugins and their manifests.
     pub plugins: RefCell<crate::plugins::Plugins>,
+    /// Counts plugin list fetches (and service losses), so only the newest fetch is stored.
+    plugins_gen: Cell<u64>,
     /// What the service sees playing (for the Now Playing preview); `None` when nothing plays.
     pub now_playing: RefCell<Option<ulanzi_core::render::screen::MediaData>>,
     /// Weather for the preview, by (place, fahrenheit): the reading and when it was asked for.
@@ -139,6 +141,7 @@ impl AppState {
             expanded: RefCell::new(std::collections::HashSet::new()),
             obs: RefCell::default(),
             plugins: RefCell::default(),
+            plugins_gen: Cell::new(0),
             now_playing: RefCell::default(),
             weather: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
@@ -152,6 +155,37 @@ impl AppState {
             .into_iter()
             .find_map(|w| w.downcast::<adw::ApplicationWindow>().ok())
             .map(|w| w.upcast())
+    }
+
+    /// A plugin list fetch starts; pass the number to [`Self::plugins_fetched`].
+    pub fn plugins_fetch_started(&self) -> u64 {
+        self.plugins_gen.set(self.plugins_gen.get() + 1);
+        self.plugins_gen.get()
+    }
+
+    /// The service went away: the list is no longer known and fetches in flight are dropped.
+    pub fn plugins_lost(&self) {
+        self.plugins_gen.set(self.plugins_gen.get() + 1);
+        self.plugins.borrow_mut().loaded = false;
+    }
+
+    /// Store a fetched list, unless a newer fetch started or the service went away since fetch
+    /// `generation` started. True when stored.
+    pub fn plugins_fetched(
+        &self,
+        generation: u64,
+        list: Vec<crate::plugins::PluginRow>,
+        manifests: std::collections::BTreeMap<String, ulanzi_core::plugin::Manifest>,
+    ) -> bool {
+        if generation != self.plugins_gen.get() {
+            return false;
+        }
+        *self.plugins.borrow_mut() = crate::plugins::Plugins {
+            loaded: true,
+            list,
+            manifests,
+        };
+        true
     }
 
     pub fn on(&self, f: impl Fn(Change) + 'static) {
@@ -273,6 +307,39 @@ pub fn status_text(s: &Status) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plugins_state() -> State {
+        AppState::new(Profile::new_default("Default", ulanzi_core::model::Model::D200X))
+    }
+
+    fn one(id: &str) -> Vec<crate::plugins::PluginRow> {
+        vec![crate::plugins::PluginRow {
+            id: id.into(),
+            ..Default::default()
+        }]
+    }
+
+    #[test]
+    fn a_late_plugin_list_does_not_win() {
+        let s = plugins_state();
+        let old = s.plugins_fetch_started();
+        let new = s.plugins_fetch_started();
+        assert!(s.plugins_fetched(new, one("new"), Default::default()));
+        assert!(!s.plugins_fetched(old, one("old"), Default::default()));
+        let p = s.plugins.borrow();
+        assert!(p.loaded);
+        assert_eq!(p.list[0].id, "new");
+    }
+
+    #[test]
+    fn a_list_arriving_after_the_service_left_is_ignored() {
+        let s = plugins_state();
+        let g = s.plugins_fetch_started();
+        s.plugins_lost();
+        assert!(!s.plugins_fetched(g, one("obs"), Default::default()));
+        assert!(!s.plugins.borrow().loaded);
+        assert!(s.plugins.borrow().list.is_empty());
+    }
 
     #[test]
     fn status_texts() {

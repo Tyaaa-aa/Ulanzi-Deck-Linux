@@ -128,10 +128,17 @@ pub fn status_words(row: &PluginRow) -> StatusWords {
 
 /// The banner on the plugin's settings page: (text, button label).
 pub fn banner(row: &PluginRow) -> Option<(String, Option<&'static str>)> {
+    let detail = |fallback: String| {
+        if row.detail.trim().is_empty() {
+            fallback
+        } else {
+            row.detail.clone()
+        }
+    };
     match row.status.as_str() {
         "failed" => Some((format!("{} stopped working", row.display_name()), Some("Restart"))),
-        "problem" => Some((row.detail.clone(), Some("Restart"))),
-        "incompatible" => Some((row.detail.clone(), None)),
+        "problem" => Some((detail("Needs attention".into()), Some("Restart"))),
+        "incompatible" => Some((detail(format!("{} can’t be loaded", row.display_name())), None)),
         _ => None,
     }
 }
@@ -245,8 +252,12 @@ fn is_colour(s: &str) -> bool {
 }
 
 /// The value to store for the field; `Ok(None)` removes the key (blank text); `Err` is the
-/// message shown under the row.
+/// message shown under the row. Secret fields are refused: they go straight into the plugin's secret store
+/// (`PluginSetSecret`), never into `settings.toml`.
 pub fn value_from(f: &Field, input: Input) -> Result<Option<toml::Value>, String> {
+    if f.kind == FieldKind::Secret {
+        return Err("Secrets are saved separately".into());
+    }
     match input {
         Input::Text(s) if s.trim().is_empty() => Ok(None),
         Input::Text(s) => {
@@ -539,6 +550,35 @@ mod tests {
         assert_eq!(control_for(&field("j", FieldKind::Json), None), Control::Json);
         assert_eq!(shown_text(Some(&toml::Value::Float(3.0))), "3");
         assert_eq!(shown_text(Some(&toml::Value::Integer(4455))), "4455");
+    }
+
+    #[test]
+    fn secrets_never_go_through_the_form() {
+        let f = field("password", FieldKind::Secret);
+        assert_eq!(
+            value_from(&f, Input::Text("hunter2".into())),
+            Err("Secrets are saved separately".to_string())
+        );
+        assert_eq!(
+            value_from(&f, Input::Text("••••".into())),
+            Err("Secrets are saved separately".to_string())
+        );
+        assert_eq!(
+            value_from(&f, Input::Text(String::new())),
+            Err("Secrets are saved separately".to_string())
+        );
+    }
+
+    #[test]
+    fn banners_without_a_detail_still_say_something() {
+        assert_eq!(
+            banner(&row("problem", "")),
+            Some(("Needs attention".to_string(), Some("Restart")))
+        );
+        assert_eq!(
+            banner(&row("incompatible", "  ")),
+            Some(("OBS Studio can’t be loaded".to_string(), None))
+        );
     }
 
     #[test]

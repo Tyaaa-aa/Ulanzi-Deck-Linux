@@ -507,12 +507,14 @@ pub fn set_obs(state: &State, st: String, title: String, detail: String) {
 }
 
 /// Fetch the plugin list and manifests. The list counts as known (key badges show) only once
-/// both arrived; a failure (the plugin host still coming up) leaves it as it was.
+/// both arrived; a failure (the plugin host still coming up) leaves it as it was. Only the newest
+/// fetch is stored, and none that was in flight when the service went away.
 pub fn refresh_plugins(state: &State) {
     let Some(c) = state.client.borrow().clone() else {
         return;
     };
     let s = state.clone();
+    let generation = state.plugins_fetch_started();
     runtime::run(
         async move {
             let list = c.plugin_list().await?;
@@ -521,12 +523,10 @@ pub fn refresh_plugins(state: &State) {
         },
         move |r| match r {
             Ok((list, manifests)) => {
-                *s.plugins.borrow_mut() = crate::plugins::Plugins {
-                    loaded: true,
-                    list,
-                    manifests,
-                };
-                s.notify(Change::Plugins);
+                // An older fetch, or one from before the service went away, is dropped.
+                if s.plugins_fetched(generation, list, manifests) {
+                    s.notify(Change::Plugins);
+                }
             }
             Err(e) => tracing::debug!("plugin list: {e}"),
         },
@@ -625,7 +625,7 @@ fn follow_events(state: &State, c: &Client) {
                 ClientEvent::Disconnected => {
                     *state.status.borrow_mut() = Status::ServiceDown;
                     state.notify(Change::Status);
-                    state.plugins.borrow_mut().loaded = false;
+                    state.plugins_lost();
                     state.notify(Change::Plugins);
                 }
                 ClientEvent::PluginsChanged => refresh_plugins(&state),
