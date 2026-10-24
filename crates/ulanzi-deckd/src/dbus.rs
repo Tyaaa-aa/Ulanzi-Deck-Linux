@@ -275,7 +275,6 @@ fn is_placeholder(v: Option<&toml::Value>) -> bool {
     v.and_then(toml::Value::as_str) == Some(PASSWORD_PLACEHOLDER)
 }
 
-/// A plugin error as a D-Bus error; the message is the sentence shown to the user.
 /// A plugin file path must be absolute: the daemon's working directory means nothing to callers.
 fn absolute_file(path: &str) -> Result<()> {
     if std::path::Path::new(path).is_absolute() {
@@ -287,6 +286,7 @@ fn absolute_file(path: &str) -> Result<()> {
     }
 }
 
+/// A plugin error as a D-Bus error; the message is the sentence shown to the user.
 fn plugin_err(e: PluginError) -> DeckError {
     let msg = e.to_string();
     match e {

@@ -59,6 +59,13 @@ fn check_name(name: &str) -> Result<bool, PluginError> {
 /// `into`; the caller removes it on failure.
 pub(super) fn unpack(file: &Path, into: &Path) -> Result<(), PluginError> {
     let open = |e: io::Error| PluginError::Io(format!("cannot read {}: {e}", file.display()));
+    // Check before opening: opening a FIFO would block this thread forever.
+    if !fs::metadata(file).map_err(open)?.is_file() {
+        return Err(PluginError::Io(format!(
+            "{} is not a regular file",
+            file.display()
+        )));
+    }
     let f = fs::File::open(file).map_err(open)?;
     let meta = f.metadata().map_err(open)?;
     if !meta.is_file() {
@@ -342,5 +349,28 @@ mod tests {
             refused(b"hello, not a zip"),
             "That file is not a valid .ulanziplugin package"
         );
+    }
+
+    #[test]
+    fn refuses_a_fifo_without_blocking() {
+        let dir = tempfile::tempdir().expect("dir");
+        let fifo = dir.path().join("p.ulanziplugin");
+        let ok = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo")
+            .success();
+        assert!(ok);
+        let into = tempfile::tempdir().expect("into");
+        // Run on a thread: a regression would block forever, so bound the wait.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (f, d) = (fifo.clone(), into.path().to_path_buf());
+        std::thread::spawn(move || {
+            let _ = tx.send(unpack(&f, &d));
+        });
+        let r = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("unpack returned promptly");
+        assert!(r.expect_err("refused").to_string().contains("not a regular file"));
     }
 }

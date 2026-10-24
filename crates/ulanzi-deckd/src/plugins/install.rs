@@ -126,8 +126,8 @@ fn swap_in(dir: &Path, id: &str) -> Result<(), PluginError> {
     Ok(())
 }
 
-/// Unpack the package `file` into a fresh hidden folder inside `plugins` (the scan ignores it,
-/// and the later rename stays on one filesystem) and [`validate`] it. The folder is removed when
+/// Unpack the package `file` into a fresh hidden folder inside `plugins` (hidden, so the plugin
+/// scan ignores it, and inside the plugins folder so it is never somewhere unexpected) and [`validate`] it. The folder is removed when
 /// the returned guard drops, whatever happens.
 fn unpack_and_validate(
     file: &Path,
