@@ -50,6 +50,12 @@ and the project uses [Semantic Versioning](https://semver.org).
   deck's copy, paste and Delete shortcuts leave them alone too). While the recorder listens, the
   app's own shortcuts (Ctrl+L, Ctrl+O, Ctrl+E, Ctrl+comma, Ctrl+?) are off, so any combination can be
   recorded. Ctrl+L puts the cursor in the action search (not while a dialog or menu is open).
+- The key editor no longer scrolls as one long column. The key preview stays at the top, with a row
+  of buttons under it: Look, Label, Press and Hold for a key; Left, Right (turning), Press and Hold
+  for a dial; Display and Press for the wide screen; Look, Label and Keys for several keys. Each
+  section fits the panel at the usual window sizes and scrolls on its own only when it has to. The
+  section you pick stays open as you click from key to key (and on to a dial's Press or Hold) while
+  the app runs. Clear Key and Use This Dial on Every Page stay in sight under every section.
 
 ### Fixed
 - Menu items no longer end in "…" (Rename, Delete, Export, Import, Set Up Deck and the like); the guides use the same names.

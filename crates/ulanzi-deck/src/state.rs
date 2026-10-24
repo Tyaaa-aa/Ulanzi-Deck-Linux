@@ -108,6 +108,8 @@ pub struct AppState {
     pub library_memory: RefCell<crate::action_list::Memory>,
     /// The same for the key editor's action picker.
     pub picker_memory: RefCell<crate::action_list::Memory>,
+    /// The key editor's section last picked, kept while switching keys.
+    pub inspector_section: Cell<Option<crate::ui::inspector::Section>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -151,6 +153,7 @@ impl AppState {
             weather: RefCell::default(),
             library_memory: RefCell::default(),
             picker_memory: RefCell::default(),
+            inspector_section: Cell::new(None),
             listeners: RefCell::new(Vec::new()),
         })
     }

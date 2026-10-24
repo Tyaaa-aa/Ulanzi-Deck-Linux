@@ -49,9 +49,13 @@ Narrow window? The sidebar folds away; the button at the top left brings it back
 
 ## Keys
 
-Click a key to edit it. Every key has:
+Click a key to edit it. The editor shows the key's preview at the top and, under it, buttons for
+its sections: **Look**, **Label**, **Press** and **Hold**. The section you pick stays open when you
+click another key. **Clear Key** at the bottom empties the key.
 
-- **Look**: an image, background colour, icon colour, icon size and a label.
+Every key has:
+
+- **Look**: an image, background colour, icon colour and icon size.
   Press **Choose…** next to Image to pick from:
   - **Icons** (thousands of clean line icons, searchable),
   - **Brands** (logos of apps and services),
@@ -60,10 +64,10 @@ Click a key to edit it. Every key has:
 - **Label**: text on the key. It can show live values: insert `{cpu}`, `{ram}`, `{time}`,
   `{media_title}`, `{obs_scene}`, `{obs_rec_time}`, `{timer}` and more with the **{ }** button.
   **Label Position** moves it to the top, middle or bottom of that key.
-- **Show Live State**: lets the key change with what it controls. A play key turns into pause, a
+- **Show Live State** (in Look): lets the key change with what it controls. A play key turns into pause, a
   recording key turns red and shows the time, a muted mic turns red.
-- **Tap** and **Hold**: two actions per key. Hold runs when you keep the key down for half a second
-  (adjustable in Preferences).
+- **Press** and **Hold**: two actions per key. Hold runs when you keep the key down for half a
+  second (adjustable in Preferences).
 
 **Working faster**
 - Drag an action from the action list onto a key: the key gets a matching icon and colour. Type in
@@ -103,15 +107,17 @@ Notes:
 
 ## Dials and small buttons
 
-Each **dial** has four slots: turn left, press, turn right, hold. Dials belong to the page, so each
-page can use them differently (**Use This Dial on Every Page** copies one to all pages).
+Each **dial** has four slots, one section each in its editor: **Left** and **Right** (turning),
+**Press** and **Hold**. Dials belong to the page, so each page can use them differently (**Use This
+Dial on Every Page**, under the sections, copies one to all pages).
 Good dial actions: volume, input volume in OBS, brightness, next/previous page, skip back/forward.
 
 The two **small buttons** beside the dials have one action each.
 
 ## The wide screen
 
-Click the wide screen in the drawing. **Display** offers:
+Click the wide screen in the drawing. Its editor has a **Display** section and, with Widgets, a
+**Press** section (**When Pressed**). **Display** offers:
 
 - **Clock styles** and **System Stats**: drawn by the deck itself.
 - **Widgets**: drawn by Ulanzi Deck, with a live preview in the window.
