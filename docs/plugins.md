@@ -338,7 +338,10 @@ plugin. It shows what the small hello example leaves out:
 - Reconnect with timers (1 s, doubling to 10 s) and `background = true`, so labels stay live without a
   key press. Events from an old socket are ignored.
 - Live labels: 16 fixed keys such as `{obs.scene}` and `{obs.rec_time}` plus `{obs.mute.<input>}`, all
-  set back to empty when the connection drops.
+  set back to `no` or empty when the connection drops. The host's 256-key cap counts every key ever set, so
+  the plugin tracks what it has published and stops adding new `mute.…`/`visible.…` keys at the cap.
+- Bursts of scene or input events are coalesced into one reload per tick, so they cannot flood the host's
+  event queue; a send that fails on a live socket is treated as a lost connection.
 
 Its tests ([`plugins/obs/tests/plugin.rs`](../plugins/obs/tests/plugin.rs)) are a model for `Harness` tests of a
 plugin with a network connection: they open and close sockets, deliver messages and fire timers by hand,

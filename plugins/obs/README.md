@@ -38,7 +38,9 @@ password = "..."        # only for the first start, see below
 
 The password is saved in the system keyring on the first start. After that, delete the `password` line
 and reload again: the plugin logs a warning on every start that still finds it, and
-`ulanzictl export --settings` does not strip it. The `forget_password` action deletes the saved password;
+`ulanzictl export --settings` does not strip it. Until you delete the line, the password sits in plain
+text in `settings.toml`, can be read over D-Bus (`GetSettings`) and appears in settings exports and
+snapshots. The `forget_password` action deletes the saved password;
 `ulanzictl plugin remove obs` does too.
 
 ## Actions
@@ -86,7 +88,8 @@ params = { scene = "Gameplay" }
 ## Live state
 
 Use these in any key label as `{obs.<key>}`. Yes/no values are `yes` or `no`; times are `mm:ss` or
-`h:mm:ss`. When OBS is not connected every value except `connected` is empty.
+`h:mm:ss`. When OBS is not connected the yes/no values are `no` and the names, times, stats, `mute.…` and
+`visible.…` values are empty (`last_error` keeps its last text).
 
 | Key | Value |
 |---|---|
@@ -101,8 +104,16 @@ Use these in any key label as `{obs.<key>}`. Yes/no values are `yes` or `no`; ti
 | `mute.<input>` | `yes` / `no` for each audio input |
 | `visible.<scene>/<source>` | `yes` / `no` for each source in a scene |
 
-There are at most 200 `mute.…` and `visible.…` keys; beyond that the plugin logs one warning and leaves
-the rest out.
+`visible.<scene>/<source>` is ambiguous when a scene or source name contains `/` (`a/b` + `c` and `a` +
+`b/c` give the same key), and a source that appears twice in one scene shares one key (`no` if any copy is
+hidden).
+
+Limits: at most 200 `mute.…` and `visible.…` keys at a time, and the host allows a plugin 256 different
+state keys for as long as it runs, with no way to remove one. Every scene, source or input name the plugin
+has published counts, so renaming things or switching scene collections many times uses keys up, even
+though the old ones go empty. Once all 256 are used, new names get no value and the plugin logs one
+warning; disable and enable the plugin (or restart `ulanzi-deckd`) to start fresh. Keys over 256 bytes
+are skipped and values over 1 KiB are cut.
 
 ## Not in this plugin (yet)
 
