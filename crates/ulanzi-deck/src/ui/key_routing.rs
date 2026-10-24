@@ -155,7 +155,8 @@ impl AccelGuard {
 
 impl Drop for AccelGuard {
     fn drop(&mut self) {
-        PARKED.with(|p| {
+        // try_with: a drop during thread teardown must not panic.
+        let _ = PARKED.try_with(|p| {
             let mut p = p.borrow_mut();
             p.0 = p.0.saturating_sub(1);
             if p.0 > 0 {

@@ -147,6 +147,10 @@ pub(crate) fn on_gtk_thread(f: impl FnOnce(bool) + Send + 'static) {
             .name("gtk-tests".into())
             .spawn(move || {
                 let ok = gtk::init().is_ok();
+                if ok {
+                    // Once, so every test sees the same libadwaita environment.
+                    adw::init().ok();
+                }
                 for job in rx {
                     job(ok);
                 }

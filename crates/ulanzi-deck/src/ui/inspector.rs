@@ -340,10 +340,11 @@ fn add_sections(ctx: &C, content: &gtk::Box, list: &[Section], mut view: View) {
         .transition_type(gtk::StackTransitionType::Crossfade)
         .build();
     let switcher = gtk::Box::builder()
-        .spacing(6)
+        .spacing(4)
         .halign(gtk::Align::Center)
         .css_classes(["section-switcher"])
         .build();
+    switcher.update_property(&[gtk::accessible::Property::Label("Sections")]);
     let open = initial_section(ctx.state.inspector_section.get(), list);
     let mut first: Option<gtk::ToggleButton> = None;
     for &section in list {
@@ -963,7 +964,8 @@ fn multi_view(ctx: &C, content: &gtk::Box, keys: Vec<u8>) -> View {
         let ctx = ctx.clone();
         clear.connect_clicked(move |_| ctx.commit(How::Structure, |e| e.clear(&keys)));
     }
-    page.append(&clear);
+    // Like a single key's Clear Key: under every section.
+    view.footer = Some(clear.upcast());
     view
 }
 
@@ -1564,7 +1566,6 @@ mod tests {
     #[test]
     fn sections_fit_without_scrolling_at_the_default_and_a_small_size() {
         crate::ui::with_gtk(|| {
-            let _ = adw::init();
             let css = gtk::CssProvider::new();
             css.load_from_string(include_str!("../style.css"));
             gtk::style_context_add_provider_for_display(
