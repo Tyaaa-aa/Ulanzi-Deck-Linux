@@ -56,8 +56,18 @@ fn status_icon(w: &StatusWords) -> gtk::Image {
     icon
 }
 
-/// Run a call on the service. An error becomes a toast and the plugin list is fetched again, so
-/// switches flipped by hand show the truth.
+/// Show the plugins as the app knows them again (and fetch the list again), so a switch flipped
+/// by hand shows the truth after a call failed. Deferred: it may run inside that switch's signal.
+fn show_truth(state: &State) {
+    let state = state.clone();
+    glib::idle_add_local_once(move || {
+        state.notify(Change::Plugins);
+        refresh_plugins(&state);
+    });
+}
+
+/// Run a call on the service. An error (or no service) becomes a toast, and the plugins are shown
+/// as they really are again.
 fn call<T, F>(
     state: &State,
     dialog: &adw::PreferencesDialog,
@@ -69,6 +79,7 @@ fn call<T, F>(
 {
     let Some(c) = state.client.borrow().clone() else {
         toast(dialog, &ClientError::NotRunning.to_string());
+        show_truth(state);
         return;
     };
     let (state, dialog) = (state.clone(), dialog.downgrade());
@@ -78,7 +89,7 @@ fn call<T, F>(
             if let Some(d) = dialog.upgrade() {
                 toast(&d, &e.to_string());
             }
-            refresh_plugins(&state);
+            show_truth(&state);
         }
     });
 }
@@ -143,35 +154,38 @@ fn plugin_row(state: &State, dialog: &adw::PreferencesDialog, p: &PluginRow) -> 
 /// The installed plugins: status, on/off, and a settings page each.
 pub fn plugins_group(state: &State, dialog: &adw::PreferencesDialog) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder().title("Plugins").build();
-    let rows: Rc<RefCell<Vec<adw::ActionRow>>> = Rc::default();
+    // Weak: the listener below outlives the dialog until it reports the group gone.
+    let rows: RefCell<Vec<glib::WeakRef<adw::ActionRow>>> = RefCell::default();
     let fill = {
         let (state, group, dialog) = (state.clone(), group.downgrade(), dialog.downgrade());
         move || {
             let (Some(group), Some(dialog)) = (group.upgrade(), dialog.upgrade()) else {
-                return;
+                return false;
             };
             for r in rows.borrow_mut().drain(..) {
-                group.remove(&r);
+                if let Some(r) = r.upgrade() {
+                    group.remove(&r);
+                }
             }
-            let list = state.plugins.borrow().list.clone();
-            if list.is_empty() {
-                let r = adw::ActionRow::builder().title("No plugins installed").build();
+            let add = |r: adw::ActionRow| {
                 group.add(&r);
-                rows.borrow_mut().push(r);
+                rows.borrow_mut().push(r.downgrade());
+            };
+            let plugins = state.plugins.borrow().clone();
+            if !plugins.loaded {
+                add(adw::ActionRow::builder().title("Connecting…").build());
+            } else if plugins.list.is_empty() {
+                add(adw::ActionRow::builder().title("No plugins installed").build());
+            } else {
+                for p in &plugins.list {
+                    add(plugin_row(&state, &dialog, p));
+                }
             }
-            for p in &list {
-                let r = plugin_row(&state, &dialog, p);
-                group.add(&r);
-                rows.borrow_mut().push(r);
-            }
+            true
         }
     };
     fill();
-    state.on(move |c| {
-        if c == Change::Plugins {
-            fill();
-        }
-    });
+    state.on_while(move |c| if c == Change::Plugins { fill() } else { true });
     group
 }
 
@@ -301,21 +315,23 @@ fn confirm_install(state: &State, dialog: &adw::PreferencesDialog, path: PathBuf
 }
 
 /// A password row for one secret setting. Never filled in: the app can't read secrets back.
+/// Widgets are held weakly here and below: the page's widgets hold the [`Page`], not the reverse.
 struct SecretRow {
     key: String,
     label: String,
-    row: adw::PasswordEntryRow,
-    clear: gtk::Button,
+    row: glib::WeakRef<adw::PasswordEntryRow>,
+    clear: glib::WeakRef<gtk::Button>,
 }
 
 /// The status widgets updated in place when the plugin's status changes.
 struct StatusRows {
-    row: adw::ActionRow,
-    icon: gtk::Image,
-    on: adw::SwitchRow,
+    row: glib::WeakRef<adw::ActionRow>,
+    icon: glib::WeakRef<gtk::Image>,
+    on: glib::WeakRef<adw::SwitchRow>,
 }
 
-/// One plugin's settings page.
+/// One plugin's settings page. Lives while its widgets or its listener (until the page is gone)
+/// hold it.
 struct Page {
     state: State,
     dialog: glib::WeakRef<adw::PreferencesDialog>,
@@ -331,6 +347,10 @@ struct Page {
     syncing: Cell<bool>,
     /// Popped (by the user, after removing, or because the plugin went away).
     gone: Cell<bool>,
+    /// On screen (pushed and its transition done): only then may it pop itself.
+    shown: Cell<bool>,
+    /// The plugin was in the list at some point (a page opened for an unknown id never pops).
+    seen: Cell<bool>,
 }
 
 impl Page {
@@ -383,11 +403,19 @@ fn status_group(
         });
     }
     group.add(&again);
-    *p.status.borrow_mut() = Some(StatusRows { row, icon, on });
+    *p.status.borrow_mut() = Some(StatusRows {
+        row: row.downgrade(),
+        icon: icon.downgrade(),
+        on: on.downgrade(),
+    });
     group
 }
 
-fn secret_row(p: &Rc<Page>, dialog: &adw::PreferencesDialog, f: &ulanzi_core::plugin::Field) -> SecretRow {
+fn secret_row(
+    p: &Rc<Page>,
+    dialog: &adw::PreferencesDialog,
+    f: &ulanzi_core::plugin::Field,
+) -> (SecretRow, adw::PasswordEntryRow) {
     let label = f.title().to_string();
     let row = adw::PasswordEntryRow::builder()
         .title(escape(&label))
@@ -434,12 +462,15 @@ fn secret_row(p: &Rc<Page>, dialog: &adw::PreferencesDialog, f: &ulanzi_core::pl
             );
         });
     }
-    SecretRow {
-        key: f.key.clone(),
-        label,
+    (
+        SecretRow {
+            key: f.key.clone(),
+            label,
+            row: row.downgrade(),
+            clear: clear.downgrade(),
+        },
         row,
-        clear,
-    }
+    )
 }
 
 /// Mark the secret rows whose value is saved (`<label> · saved`, with a Clear button).
@@ -454,14 +485,17 @@ fn load_secret_keys(p: &Rc<Page>) {
     runtime::run(async move { c.plugin_secret_keys(&id).await }, move |r| match r {
         Ok(saved) => {
             for s in p.secrets.borrow().iter() {
+                let (Some(row), Some(clear)) = (s.row.upgrade(), s.clear.upgrade()) else {
+                    continue;
+                };
                 let is_saved = saved.contains(&s.key);
                 let title = if is_saved {
                     format!("{} · saved", s.label)
                 } else {
                     s.label.clone()
                 };
-                s.row.set_title(&escape(&title));
-                s.clear.set_visible(is_saved);
+                row.set_title(&escape(&title));
+                clear.set_visible(is_saved);
             }
         }
         Err(e) => tracing::debug!("plugin secret keys: {e}"),
@@ -481,8 +515,8 @@ fn settings_group(p: &Rc<Page>, dialog: &adw::PreferencesDialog, m: &Manifest) -
     let mut secrets = Vec::new();
     for f in &m.settings {
         if f.kind == FieldKind::Secret {
-            let s = secret_row(p, dialog, f);
-            group.add(&s.row);
+            let (s, row) = secret_row(p, dialog, f);
+            group.add(&row);
             secrets.push(s);
             continue;
         }
@@ -594,7 +628,12 @@ fn update(p: &Rc<Page>) {
             plugins.manifests.get(&p.id).cloned(),
         )
     };
-    if loaded && row.is_none() {
+    if row.is_some() {
+        p.seen.set(true);
+    }
+    // The plugin went away while its page is on screen: leave. A page opened for an id that is not
+    // installed shows that instead (and never pops another page).
+    if loaded && row.is_none() && p.seen.get() && p.shown.get() {
         p.gone.set(true);
         if let Some(d) = p.dialog.upgrade() {
             d.pop_subpage();
@@ -607,8 +646,10 @@ fn update(p: &Rc<Page>) {
     if let Some(nav) = p.nav.upgrade() {
         nav.set_title(&p.name());
     }
+    // Before the list arrives (or while the service is away) the last status may be stale.
+    let live = row.filter(|_| loaded);
     if let Some(b) = p.banner.upgrade() {
-        match row.as_ref().and_then(banner) {
+        match live.as_ref().and_then(banner) {
             Some((text, button)) => {
                 b.set_title(&text);
                 b.set_button_label(button);
@@ -617,28 +658,39 @@ fn update(p: &Rc<Page>) {
             None => b.set_revealed(false),
         }
     }
-    if let Some(s) = p.status.borrow().as_ref() {
-        let w = match &row {
-            Some(r) => status_words(r),
-            None => StatusWords {
-                title: "Connecting…".into(),
-                subtitle: String::new(),
-                icon: "content-loading-symbolic",
-                css: "dim-label",
-            },
-        };
-        s.row.set_title(&escape(&w.title));
-        s.row.set_subtitle(&escape(&w.subtitle));
-        s.icon.set_icon_name(Some(w.icon));
-        for c in ["success", "warning", "dim-label"] {
-            s.icon.remove_css_class(c);
-        }
-        s.icon.add_css_class(w.css);
-        p.syncing.set(true);
-        s.on.set_active(row.as_ref().is_none_or(|r| r.status != "off"));
-        s.on.set_sensitive(row.is_some());
-        p.syncing.set(false);
+    let status = p.status.borrow();
+    let Some(s) = status.as_ref() else { return };
+    let (Some(srow), Some(icon), Some(on)) = (s.row.upgrade(), s.icon.upgrade(), s.on.upgrade()) else {
+        return;
+    };
+    let w = match &live {
+        Some(r) => status_words(r),
+        None if loaded => StatusWords {
+            title: "Not installed".into(),
+            subtitle: String::new(),
+            icon: "dialog-information-symbolic",
+            css: "dim-label",
+        },
+        None => StatusWords {
+            title: "Connecting…".into(),
+            subtitle: String::new(),
+            icon: "content-loading-symbolic",
+            css: "dim-label",
+        },
+    };
+    srow.set_title(&escape(&w.title));
+    srow.set_subtitle(&escape(&w.subtitle));
+    icon.set_icon_name(Some(w.icon));
+    for c in ["success", "warning", "dim-label"] {
+        icon.remove_css_class(c);
     }
+    icon.add_css_class(w.css);
+    p.syncing.set(true);
+    if let Some(r) = &live {
+        on.set_active(r.status != "off");
+    }
+    on.set_sensitive(live.is_some());
+    p.syncing.set(false);
 }
 
 /// The settings page of plugin `id`, to push with `dialog.push_subpage`.
@@ -664,6 +716,8 @@ pub fn subpage(state: &State, dialog: &adw::PreferencesDialog, id: &str) -> adw:
         secrets: RefCell::new(Vec::new()),
         syncing: Cell::new(false),
         gone: Cell::new(false),
+        shown: Cell::new(false),
+        seen: Cell::new(false),
     });
     {
         let (p, d) = (p.clone(), dialog.downgrade());
@@ -677,11 +731,20 @@ pub fn subpage(state: &State, dialog: &adw::PreferencesDialog, id: &str) -> adw:
         let p = p.clone();
         nav.connect_hidden(move |_| p.gone.set(true));
     }
+    {
+        let p = p.clone();
+        nav.connect_shown(move |_| {
+            p.shown.set(true);
+            update(&p);
+        });
+    }
     update(&p);
-    state.on(move |c| {
+    // Dropped (with the page) once the page is popped or its widgets are gone.
+    state.on_while(move |c| {
         if c == Change::Plugins {
             update(&p);
         }
+        !p.gone.get() && p.nav.upgrade().is_some()
     });
     nav
 }

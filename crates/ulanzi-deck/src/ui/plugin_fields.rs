@@ -37,6 +37,28 @@ fn set_help(row: &impl IsA<gtk::Widget>, help: &str, tooltip: bool) {
     }
 }
 
+/// A choice row's items and the selected one. A stored value that is not one of the choices is
+/// shown as an extra `(current: <value>)` item, not as the first choice; picking that item writes
+/// nothing (`value_from` refuses it).
+pub fn combo_items(
+    labels: &[String],
+    values: &[String],
+    current: Option<&toml::Value>,
+) -> (Vec<String>, u32) {
+    let mut items = labels.to_vec();
+    let selected = match current {
+        None => 0,
+        Some(v) => match v.as_str().and_then(|s| values.iter().position(|x| x == s)) {
+            Some(i) => i,
+            None => {
+                items.push(format!("(current: {})", shown_text(Some(v))));
+                items.len() - 1
+            }
+        },
+    };
+    (items, selected as u32)
+}
+
 /// The row that edits `f`, showing `current` (the stored value, else the default).
 pub fn row(f: &Field, current: Option<&toml::Value>, on: OnValue) -> gtk::Widget {
     let title = glib::markup_escape_text(f.title()).to_string();
@@ -92,15 +114,12 @@ pub fn row(f: &Field, current: Option<&toml::Value>, on: OnValue) -> gtk::Widget
             row.upcast()
         }
         Control::Combo { labels, values } => {
-            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
-            let selected = match current {
-                Some(toml::Value::String(s)) => values.iter().position(|v| v == s).unwrap_or(0),
-                _ => 0,
-            };
+            let (items, selected) = combo_items(&labels, &values, current);
+            let items: Vec<&str> = items.iter().map(String::as_str).collect();
             let row = adw::ComboRow::builder()
                 .title(&title)
-                .model(&gtk::StringList::new(&labels))
-                .selected(selected as u32)
+                .model(&gtk::StringList::new(&items))
+                .selected(selected)
                 .build();
             set_help(&row, &f.help, false);
             let field = f.clone();
@@ -146,6 +165,22 @@ mod tests {
     fn colours_are_written_as_hex() {
         assert_eq!(hex_of(&gdk::RGBA::new(1.0, 0.0, 0.5, 1.0)), "#ff0080");
         assert_eq!(hex_of(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.3)), "#000000");
+    }
+
+    #[test]
+    fn a_stored_value_that_is_not_a_choice_stays_visible() {
+        let labels = vec!["Up".to_string(), "Down".to_string()];
+        let values = vec!["up".to_string(), "down".to_string()];
+        let s = |v: &str| toml::Value::String(v.into());
+        assert_eq!(combo_items(&labels, &values, None), (labels.clone(), 0));
+        assert_eq!(
+            combo_items(&labels, &values, Some(&s("down"))),
+            (labels.clone(), 1)
+        );
+        assert_eq!(
+            combo_items(&labels, &values, Some(&s("sideways"))),
+            (vec!["Up".into(), "Down".into(), "(current: sideways)".into()], 2)
+        );
     }
 
     #[test]

@@ -64,7 +64,8 @@ pub enum Status {
     },
 }
 
-type Listener = Box<dyn Fn(Change)>;
+/// Returns false once it should be dropped.
+type Listener = Box<dyn Fn(Change) -> bool>;
 
 /// Preview weather by (place, fahrenheit): the reading (none yet) and when it was asked for.
 pub type WeatherCache = std::collections::HashMap<
@@ -188,15 +189,36 @@ impl AppState {
         true
     }
 
+    /// Call `f` on every change, for as long as the app runs.
     pub fn on(&self, f: impl Fn(Change) + 'static) {
+        self.on_while(move |c| {
+            f(c);
+            true
+        });
+    }
+
+    /// Call `f` on every change until it returns false (its widgets are gone); it is then dropped.
+    pub fn on_while(&self, f: impl Fn(Change) -> bool + 'static) {
         self.listeners.borrow_mut().push(Box::new(f));
+    }
+
+    pub fn listener_count(&self) -> usize {
+        self.listeners.borrow().len()
     }
 
     pub fn notify(&self, c: Change) {
         // Listeners may read state but must not register new listeners while notified.
-        let listeners = self.listeners.borrow();
-        for l in listeners.iter() {
-            l(c);
+        let keep: Vec<bool> = {
+            let listeners = self.listeners.borrow();
+            listeners.iter().map(|l| l(c)).collect()
+        };
+        if keep.iter().all(|k| *k) {
+            return;
+        }
+        // A notify from inside a listener leaves the dropping to the outer one.
+        if let Ok(mut listeners) = self.listeners.try_borrow_mut() {
+            let mut keep = keep.into_iter();
+            listeners.retain(|_| keep.next().unwrap_or(true));
         }
     }
 
@@ -317,6 +339,29 @@ mod tests {
             id: id.into(),
             ..Default::default()
         }]
+    }
+
+    #[test]
+    fn listeners_that_report_gone_are_dropped() {
+        let s = plugins_state();
+        let alive = Rc::new(Cell::new(true));
+        let calls = Rc::new(Cell::new(0));
+        {
+            let (alive, calls) = (alive.clone(), calls.clone());
+            s.on_while(move |_| {
+                calls.set(calls.get() + 1);
+                alive.get()
+            });
+        }
+        s.on(|_| {});
+        assert_eq!(s.listener_count(), 2);
+        s.notify(Change::Plugins);
+        assert_eq!((s.listener_count(), calls.get()), (2, 1));
+        alive.set(false);
+        s.notify(Change::Plugins);
+        assert_eq!(s.listener_count(), 1);
+        s.notify(Change::Plugins);
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
