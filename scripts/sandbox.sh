@@ -49,6 +49,11 @@ if [ "$inner" = 0 ]; then
     fi
   fi
   echo "Sandbox: $dir"
+  # The sandbox's own data home hides the app's icons installed in your real one, so add the real
+  # one behind the system folders (the sandbox's data home still comes first).
+  real_data="${ULANZI_REAL_DATA_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}}"
+  export ULANZI_REAL_DATA_HOME="$real_data"
+  export XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:$real_data"
   if [ "$demo" = 1 ]; then
     # Everything the private bus could start sees only the sandbox, never your own folders, and
     # the bus has no service directories at all, so your wallet and desktop portals cannot be

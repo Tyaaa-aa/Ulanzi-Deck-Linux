@@ -38,6 +38,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   plugin secrets stay in the sandbox and the keyring is never asked.
 
 ### Fixed
+- The sandbox script keeps the app's own icons visible: your real data folder is added to `XDG_DATA_DIRS`, so they no longer show as broken images.
+- Text fields keep their own shortcuts: Ctrl+A, copy, paste, undo, redo and Delete edit the text while
+  you type, instead of selecting, copying or clearing keys on the deck. The deck shortcuts work as before
+  when no text field has the focus.
 - OBS Studio plugin: an OBS that accepts the connection but refuses its version or scene list is now
   retried 1 s, 2 s, 4 s … up to every 10 s instead of every second, and the refusal is logged once. Volume
   up on an input at 0 % no longer jumps to full volume. Clearer labels for studio mode and "Mute or unmute".
