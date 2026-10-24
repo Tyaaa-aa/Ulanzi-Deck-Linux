@@ -1980,6 +1980,7 @@ impl Recorder {
             return RecordStep::Wait;
         }
         self.pending = None;
+        let key = sendable_alias(key);
         match combo_from_recording(mods, key) {
             Some(_) if !ulanzi_core::keys::is_sendable(key) => RecordStep::Unsendable,
             Some(combo) => RecordStep::Record(combo),
@@ -2024,10 +2025,20 @@ const MODIFIER_KEYS: &[&str] = &[
     "hyper_r",
 ];
 
+/// The sendable base key for a GDK name that is only an alternate form of it: Shift+Tab arrives as
+/// `ISO_Left_Tab`, which the service presses as `tab` with Shift held. Other names pass through.
+fn sendable_alias(key: &str) -> &str {
+    match key.to_ascii_lowercase().as_str() {
+        "iso_left_tab" => "tab",
+        "sys_req" => "sysrq",
+        _ => key,
+    }
+}
+
 /// The combo string the daemon understands for a recorded key press (`key` is the GDK key name),
 /// or None while only modifiers are held.
 pub fn combo_from_recording(mods: Mods, key: &str) -> Option<String> {
-    let key = key.to_ascii_lowercase();
+    let key = sendable_alias(key).to_ascii_lowercase();
     if key.is_empty() || MODIFIER_KEYS.contains(&key.as_str()) {
         return None;
     }
@@ -2092,6 +2103,32 @@ mod tests {
         assert_eq!(
             combo_from_recording(Mods::default(), "Page_Down").as_deref(),
             Some("page_down")
+        );
+    }
+
+    #[test]
+    fn shift_tab_records() {
+        let shift = Mods {
+            shift: true,
+            ..Mods::default()
+        };
+        let both = Mods {
+            ctrl: true,
+            shift: true,
+            ..Mods::default()
+        };
+        assert_eq!(
+            combo_from_recording(shift, "ISO_Left_Tab").as_deref(),
+            Some("shift+tab")
+        );
+        assert_eq!(
+            combo_from_recording(both, "ISO_Left_Tab").as_deref(),
+            Some("ctrl+shift+tab")
+        );
+        let mut r = Recorder::default();
+        assert_eq!(
+            r.press(shift, "ISO_Left_Tab"),
+            RecordStep::Record("shift+tab".into())
         );
     }
 

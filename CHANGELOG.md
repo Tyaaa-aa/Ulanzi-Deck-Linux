@@ -39,6 +39,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   `[plugins.obs.settings]`.
 
 ### Changed
+- Function keys are written f1 to f24; zero-padded names such as f01 are no longer accepted.
 - The action list (the side panel with nothing selected, and the key editor's Choose / Change list) is
   easier to use with many plugins. One search field finds actions by name, category or plugin name. A
   row of category buttons (All, the built-in categories, then one per plugin) shows one category at a
