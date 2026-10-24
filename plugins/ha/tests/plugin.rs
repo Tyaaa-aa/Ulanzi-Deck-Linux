@@ -802,3 +802,18 @@ fn settings_problem_text_has_one_full_stop() {
     assert!(msg.starts_with("Check [plugins.ha.settings]: "), "{msg}");
     assert!(!msg.ends_with(".."), "{msg}");
 }
+
+#[test]
+fn a_public_host_refused_after_dns_is_not_retried() {
+    let mut h = Harness::<Ha>::new();
+    h.init(settings()).expect("init");
+    let s = current(&h);
+    h.closed(s, "not allowed: example.com");
+    let (st, msg) = status_msg(&h);
+    assert_eq!(st, Status::Problem);
+    assert!(
+        msg.starts_with("Home Assistant must be on your local network"),
+        "{msg}"
+    );
+    no_retry(&h);
+}

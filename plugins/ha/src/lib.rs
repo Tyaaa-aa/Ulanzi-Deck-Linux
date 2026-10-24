@@ -722,8 +722,10 @@ impl Plugin for Ha {
         }
     }
 
-    fn closed(&mut self, cx: &mut Cx, socket: Socket, _reason: &str) {
+    fn closed(&mut self, cx: &mut Cx, socket: Socket, reason: &str) {
         let why = match self.phase {
+            // The host refuses a public name only after DNS, by closing the socket.
+            Phase::Opening(s) if s == socket && reason.starts_with("not allowed") => Down::NotAllowed,
             Phase::Opening(s) if s == socket => Down::Refused,
             p if p.socket() == Some(socket) => Down::Dropped,
             _ => return,

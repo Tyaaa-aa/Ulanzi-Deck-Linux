@@ -217,9 +217,9 @@ async fn ha_plugin_bad_token_and_foreign_host() {
         .await,
         "public address refused"
     );
-    // A public name passes the literal check and is refused after DNS: the socket closes while
-    // opening, which the plugin reports as unreachable (and retries). Either way it is a Problem
-    // and the mock sees nothing.
+    // A public name passes the literal check and is refused after DNS (the socket closes while
+    // opening). Without DNS the host says "cannot find" and the plugin reports it unreachable, so
+    // the message is only checked when the name resolved.
     p.send(Event::Init {
         settings: json!({"url": "example.com", "token": TOKEN}),
     });
@@ -227,11 +227,13 @@ async fn ha_plugin_bad_token_and_foreign_host() {
         status_where(
             &mut p,
             Status::Problem,
-            |m| m.contains("example.com") || m.contains("local network"),
+            |m| m.starts_with("Home Assistant must be on your local network")
+                || m.starts_with("Cannot reach"),
             SOON
         )
         .await,
         "foreign name is a problem"
     );
+    tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(mock.connections(), 1, "no connection to a foreign host");
 }
