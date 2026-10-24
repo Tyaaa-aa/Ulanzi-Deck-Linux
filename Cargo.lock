@@ -3810,6 +3810,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulanzi-plugin-ha"
+version = "1.0.0"
+dependencies = [
+ "serde_json",
+ "ulanzi-core",
+ "ulanzi-plugin",
+]
+
+[[package]]
 name = "ulanzi-plugin-hello"
 version = "1.0.0"
 dependencies = [

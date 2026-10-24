@@ -1,0 +1,85 @@
+id = "ha"
+name = "Home Assistant"
+version = "1.0.0"
+contract = "1.0"
+description = "Toggle, run and set Home Assistant entities and call any service, with live entity state on key labels."
+categories = ["smart-home"]
+background = true
+
+[permissions]
+lan = true
+
+[auth]                              # read from milestone 2 on; until then: settings `token`
+kind = "token"
+
+[[settings]]
+key = "url"
+kind = "text"
+label = "Home Assistant address"
+default = "homeassistant.local:8123"
+
+[[settings]]
+key = "entities"
+kind = "text"
+label = "Entities to show on keys (up to 40)"
+
+[[settings]]
+key = "attributes"
+kind = "text"
+label = "Extra attributes to show (entity:attribute, optional)"
+
+[[actions]]
+id = "toggle"
+name = "Toggle an entity"
+params = [
+  { key = "entity_id", kind = "text", label = "Entity" },
+]
+
+[[actions]]
+id = "turn_on"
+name = "Turn an entity on"
+params = [
+  { key = "entity_id", kind = "text", label = "Entity" },
+]
+
+[[actions]]
+id = "turn_off"
+name = "Turn an entity off"
+params = [
+  { key = "entity_id", kind = "text", label = "Entity" },
+]
+
+[[actions]]
+id = "run"
+name = "Run a scene, script, automation or button"
+params = [
+  { key = "entity_id", kind = "text", label = "Entity" },
+]
+
+[[actions]]
+id = "set_level"
+name = "Set or change a level (light, volume, fan, cover)"
+params = [
+  { key = "entity_id", kind = "text", label = "Entity" },
+  { key = "op", kind = "choice", label = "Change", choices = ["set", "up", "down"] },
+  { key = "percent", kind = "number", label = "Level (percent, for Set)", min = 0, max = 100 },
+  { key = "step", kind = "number", label = "Step (percent)", min = 1, max = 50, default = 5 },
+]
+
+[[actions]]
+id = "call_service"
+name = "Call a service"
+params = [
+  { key = "domain", kind = "text", label = "Domain (for example notify)" },
+  { key = "service", kind = "text", label = "Service" },
+  { key = "entity_id", kind = "text", label = "Entity (optional)" },
+  { key = "data", kind = "text", label = "JSON data" },
+]
+
+[[actions]]
+id = "reconnect"
+name = "Reconnect to Home Assistant"
+
+[[actions]]
+id = "forget_token"
+name = "Forget the Home Assistant token"
