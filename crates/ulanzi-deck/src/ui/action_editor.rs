@@ -296,10 +296,14 @@ fn base_key_name(w: &impl IsA<gtk::Widget>, keyval: gdk::Key, code: u32) -> Stri
     base.name().map(|n| n.to_string()).unwrap_or_default()
 }
 
+/// The shortcut row's subtitle, and what it says after a key the service cannot press.
+const SHORTCUT_HINT: &str = "Click Record, then press the keys";
+const UNSENDABLE_HINT: &str = "This key can’t be sent";
+
 fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
     let row = adw::ActionRow::builder()
         .title("Shortcut")
-        .subtitle("Click Record, then press the keys")
+        .subtitle(SHORTCUT_HINT)
         .build();
     let caps = keycaps(keys);
     let record = gtk::Button::builder()
@@ -312,8 +316,11 @@ fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
     // Handlers on `record` get the button as an argument; none holds it, so nothing leaks.
     let rec = Rc::new(Recording::default());
     {
-        let rec = rec.clone();
+        let (rec, row) = (rec.clone(), row.downgrade());
         record.connect_clicked(move |b| {
+            if let Some(row) = row.upgrade() {
+                row.set_subtitle(SHORTCUT_HINT);
+            }
             if rec.active.get() {
                 rec.stop(b);
             } else {
@@ -344,18 +351,30 @@ fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
         });
     }
     let finish = {
-        let (ed, caps) = (ed.clone(), caps.clone());
-        move |rec: &Recording, b: &gtk::Button, step: RecordStep| match step {
-            RecordStep::Wait => {}
-            RecordStep::Cancel => rec.stop(b),
-            RecordStep::Record(combo) => {
-                fill_keycaps(&caps, &combo);
-                ed.apply(How::Set, |a| {
-                    if let Action::Shortcut { keys } = a {
-                        *keys = combo;
-                    }
-                });
-                rec.stop(b);
+        let (ed, caps, row) = (ed.clone(), caps.clone(), row.downgrade());
+        move |rec: &Recording, b: &gtk::Button, step: RecordStep| {
+            let hint = |text: &str| {
+                if let Some(row) = row.upgrade() {
+                    row.set_subtitle(text);
+                }
+            };
+            match step {
+                RecordStep::Wait => {}
+                RecordStep::Unsendable => hint(UNSENDABLE_HINT),
+                RecordStep::Cancel => {
+                    hint(SHORTCUT_HINT);
+                    rec.stop(b)
+                }
+                RecordStep::Record(combo) => {
+                    hint(SHORTCUT_HINT);
+                    fill_keycaps(&caps, &combo);
+                    ed.apply(How::Set, |a| {
+                        if let Action::Shortcut { keys } = a {
+                            *keys = combo;
+                        }
+                    });
+                    rec.stop(b);
+                }
             }
         }
     };
@@ -1906,6 +1925,8 @@ pub enum RecordStep {
     Cancel,
     /// Store this combo and stop.
     Record(String),
+    /// A key the service cannot press (for example `less`, `udiaeresis`): say so, keep listening.
+    Unsendable,
 }
 
 /// Where the request to pause the desktop's shortcuts stands while recording.
@@ -1960,6 +1981,7 @@ impl Recorder {
         }
         self.pending = None;
         match combo_from_recording(mods, key) {
+            Some(_) if !ulanzi_core::keys::is_sendable(key) => RecordStep::Unsendable,
             Some(combo) => RecordStep::Record(combo),
             None => RecordStep::Wait,
         }
@@ -2215,6 +2237,25 @@ mod tests {
         assert_eq!(r.release("ISO_Level3_Shift"), RecordStep::Wait);
         // A key with no name keeps listening too.
         assert_eq!(r.press(Mods::default(), ""), RecordStep::Wait);
+    }
+
+    #[test]
+    fn keys_the_service_cannot_press_are_not_recorded() {
+        let shift = Mods {
+            shift: true,
+            ..Mods::default()
+        };
+        let mut r = Recorder::default();
+        // "<" on a German keyboard, "ü": the service has no code for them. Keep listening.
+        assert_eq!(r.press(Mods::default(), "less"), RecordStep::Unsendable);
+        assert_eq!(r.press(shift, "udiaeresis"), RecordStep::Unsendable);
+        // A key it can press is still recorded afterwards.
+        assert_eq!(r.press(shift, "a"), RecordStep::Record("shift+a".into()));
+        // Every combo the recorder stores parses in the service.
+        for k in ["Return", "Page_Down", "F12", "KP_Add", "XF86AudioPlay", "grave"] {
+            let mut r = Recorder::default();
+            assert!(matches!(r.press(shift, k), RecordStep::Record(_)), "{k}");
+        }
     }
 
     #[test]

@@ -61,7 +61,9 @@ and the project uses [Semantic Versioning](https://semver.org).
   so on. Press and release modifiers alone to record just them; Escape still cancels. While it listens,
   the desktop's own shortcuts are paused on the window so KDE and GNOME don't swallow Super, and they
   come back as soon as recording ends. The app's own shortcuts are off too, so any combination can be
-  recorded. Caps Lock, Pause and keypad keys now work in shortcuts.
+  recorded. Caps Lock, Pause and keypad keys now work in shortcuts. A key the deck can't send (for
+  example `<` or `ü` on some layouts) is no longer saved: the row says "This key can’t be sent" and
+  keeps listening.
 - Text fields keep their own shortcuts: Ctrl+A, copy, paste, undo, redo and Delete edit the text while
   you type, instead of selecting, copying or clearing keys on the deck. An open dialog or menu keeps its
   Escape. The deck shortcuts work as before when no text field has the focus.

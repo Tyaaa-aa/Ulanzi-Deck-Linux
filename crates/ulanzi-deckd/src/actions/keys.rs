@@ -22,8 +22,13 @@ pub fn parse_combo(s: &str) -> Result<Vec<KeyCode>, ActionError> {
         .collect()
 }
 
+/// The key code for a name [`ulanzi_core::keys::is_sendable`] accepts (the GUI's recorder stores
+/// only those); `None` for any other name.
 fn key_named(name: &str) -> Option<KeyCode> {
     use KeyCode as K;
+    if !ulanzi_core::keys::is_sendable(name) {
+        return None;
+    }
     let n = name.to_ascii_lowercase();
     let letter = |c: char| {
         const LETTERS: [K; 26] = [
@@ -375,5 +380,30 @@ mod tests {
             vec![K::KEY_LEFTMETA, K::KEY_KPPLUS]
         );
         assert_eq!(parse_combo("kp_7").expect("kp7"), vec![K::KEY_KP7]);
+    }
+
+    #[test]
+    fn every_name_the_gui_may_store_has_a_key_code() {
+        for n in ulanzi_core::keys::all_sendable() {
+            assert!(key_named(&n).is_some(), "{n} is sendable but has no key code");
+            assert!(key_named(&n.to_ascii_uppercase()).is_some(), "{n} in capitals");
+        }
+        assert_eq!(key_named("less"), None);
+        assert_eq!(key_named("f01"), None);
+    }
+
+    #[test]
+    fn every_name_key_named_handles_is_shared_with_the_gui() {
+        // The names spelled out in `key_named`'s table must all be in ulanzi-core's list, or the
+        // GUI would refuse a key the service can press.
+        let src = include_str!("keys.rs");
+        let start = src.find("fn key_named").expect("key_named");
+        let end = start + src[start..].find("\n}\n").expect("end of key_named");
+        let names: Vec<&str> = src[start..end].split('"').skip(1).step_by(2).collect();
+        assert!(names.len() > 50, "{names:?}");
+        for n in names {
+            assert!(ulanzi_core::keys::is_sendable(n), "{n} is handled but not shared");
+            assert!(key_named(n).is_some(), "{n}");
+        }
     }
 }
