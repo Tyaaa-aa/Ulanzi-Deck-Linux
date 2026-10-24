@@ -151,6 +151,8 @@ pub struct Obs {
     /// Sources whose filter lists are still to be asked for.
     filter_todo: BTreeSet<String>,
     status: Option<(Status, String)>,
+    /// The last warning about an essential load, so a retry loop logs it once.
+    load_warning: String,
 }
 
 impl Default for Obs {
@@ -182,6 +184,7 @@ impl Default for Obs {
             lists_wanted: false,
             filter_todo: BTreeSet::new(),
             status: None,
+            load_warning: String::new(),
         }
     }
 }
@@ -202,7 +205,8 @@ fn str_of(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
-/// Without these two answers the plugin knows nothing useful about OBS.
+/// Without these two answers the plugin knows nothing useful about OBS; the reconnect backoff
+/// starts over only once both are in.
 fn is_essential(ty: &str) -> bool {
     matches!(ty, "GetVersion" | "GetSceneList")
 }
@@ -485,7 +489,17 @@ impl Obs {
                 if n == 1 { "" } else { "s" }
             );
             self.tracked.live.connected = true;
+            self.backoff = FIRST_BACKOFF;
+            self.load_warning.clear();
             self.set_status(cx, Status::Ok, &msg);
+        }
+    }
+
+    /// Warn about an essential load, once until a connection gets fully loaded.
+    fn warn_load(&mut self, cx: &mut Cx, message: String) {
+        if self.load_warning != message {
+            cx.log(Level::Warn, &message);
+            self.load_warning = message;
         }
     }
 
@@ -699,7 +713,8 @@ impl Obs {
                 if let Some(t) = self.handshake.take() {
                     cx.cancel_timer(t);
                 }
-                self.backoff = FIRST_BACKOFF;
+                // The backoff is reset only once the essential loads are in (update_ok_status):
+                // an OBS that signs in and then refuses them keeps backing off.
                 self.phase = Phase::Live(socket);
                 self.tick = Some(cx.set_timer(TICK, true));
                 self.load(cx);
@@ -758,7 +773,7 @@ impl Obs {
                     if ok {
                         self.apply_load(cx, &p, &data);
                     } else if is_essential(&p.ty) {
-                        cx.log(Level::Warn, &format!("OBS refused {}", p.ty));
+                        self.warn_load(cx, format!("OBS refused {}", p.ty));
                         self.go_down(cx, Down::Dropped, true);
                     } else if p.ty == "GetSourceFilterList" {
                         // Remember "none" so the source is not asked about again and again.
@@ -806,7 +821,12 @@ impl Obs {
     fn follow_up(&mut self, cx: &mut Cx, kind: &Kind, data: &Value) {
         let sent = match kind {
             Kind::VolumeRead { input, op, step } => {
-                let cur = data.get("inputVolumeDb").and_then(Value::as_f64).unwrap_or(0.0);
+                // At 0 % the level is minus infinity, which OBS's JSON writes as null: silence,
+                // not full volume.
+                let cur = data
+                    .get("inputVolumeDb")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(-100.0);
                 let db = volume_db(cur, *op, *step);
                 self.send_request(
                     cx,
@@ -1005,7 +1025,7 @@ impl Obs {
                         cx.log(Level::Warn, &format!("OBS didn’t answer {}", p.ty));
                     }
                     Kind::Load { generation } if generation == self.generation && is_essential(&p.ty) => {
-                        cx.log(Level::Warn, &format!("OBS didn’t answer {}", p.ty));
+                        self.warn_load(cx, format!("OBS didn’t answer {}", p.ty));
                         lost = true;
                     }
                     Kind::Load { generation } => {

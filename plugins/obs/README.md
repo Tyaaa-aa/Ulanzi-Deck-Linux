@@ -6,7 +6,9 @@ built-in integration: obs-websocket accepts several clients, and the label varia
 (`{obs_scene}` is the built-in one, `{obs.scene}` is this plugin's).
 
 The plugin only talks to OBS on this computer (`network = ["127.0.0.1", "localhost"]`). If OBS is not
-running it retries quietly (1 s, doubling to 10 s) and the status says what to do.
+running it retries quietly (1 s, doubling to 10 s) and the status says what to do. The wait goes back to
+1 s only once OBS has answered with its version and scene list, so an OBS that accepts the connection but
+refuses those requests is retried at most every 10 s, not every second.
 
 ## Build and install
 
@@ -62,7 +64,7 @@ Use them in `profile.toml` as `type = "plugin"`, `plugin = "obs"`, `action = "<i
 | `toggle_replay`, `save_replay` | none |
 | `toggle_virtual_cam` | none |
 | `toggle_mute` | `input` |
-| `input_volume` | `input`, `op` = `up` / `down` / `mute` / `set`; `percent` (0-100, for `set`); `step` in dB (1-20, default 2) |
+| `input_volume` | `input`, `op` = `up` / `down` / `mute` (mutes or unmutes) / `set`; `percent` (0-100, for `set`); `step` in dB (1-20, default 2); `up` from 0 % starts at −100 dB |
 | `toggle_filter` | `source`, `filter` |
 | `studio_transition` | none |
 | `set_collection` | `name` |

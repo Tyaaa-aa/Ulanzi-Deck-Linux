@@ -343,6 +343,27 @@ fn actions_send_requests() {
 }
 
 #[test]
+fn volume_up_from_silence_stays_quiet() {
+    // At 0 % OBS's volume in dB is minus infinity, which its JSON writes as null.
+    let mut h = Harness::<Obs>::new();
+    let s = live(&mut h);
+    h.action("input_volume", json!({"input": "Mic", "op": "up", "step": 2}))
+        .expect("ok");
+    let (id, ty, _) = sent_requests(&h, s).pop().expect("request");
+    answer(
+        &mut h,
+        s,
+        &id,
+        &ty,
+        true,
+        json!({"inputVolumeDb": null, "inputVolumeMul": 0.0}),
+    );
+    let (_, ty, data) = sent_requests(&h, s).pop().expect("request");
+    assert_eq!(ty, "SetInputVolume");
+    assert_eq!(data, json!({"inputName": "Mic", "inputVolumeDb": -98.0}));
+}
+
+#[test]
 fn action_while_offline_errors() {
     let mut h = Harness::<Obs>::new();
     h.init(settings()).expect("init");
@@ -703,6 +724,84 @@ fn a_failed_essential_load_goes_down() {
             assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
         }
     }
+}
+
+/// Open the current socket and get through Hello and Identified (no loads answered yet).
+fn identified(h: &mut Harness<Obs>) -> Socket {
+    let s = current(h);
+    h.open(s);
+    h.message(s, hello(false));
+    h.message(
+        s,
+        Payload::Text(json!({"op": 2, "d": {"negotiatedRpcVersion": 1}}).to_string()),
+    );
+    s
+}
+
+#[test]
+fn a_refusing_obs_keeps_backing_off_until_the_loads_succeed() {
+    // OBS signs in every time, then refuses GetVersion: the retries still double to 10 s.
+    let mut h = Harness::<Obs>::new();
+    h.init(settings()).expect("init");
+    for want in [1000, 2000, 4000, 8000, 10000, 10000] {
+        let s = identified(&mut h);
+        let (id, ty, _) = sent_requests(&h, s)
+            .into_iter()
+            .find(|r| r.1 == "GetVersion")
+            .expect("GetVersion");
+        answer(&mut h, s, &id, &ty, false, json!({"comment": "not ready"}));
+        assert_eq!(h.state("connected"), Some("no"));
+        let (t, d) = retry_timer(&h);
+        assert_eq!(d, Duration::from_millis(want));
+        h.fire(t);
+    }
+    // The same refusal is logged once, not on every try.
+    let refused = |h: &Harness<Obs>| {
+        h.logs()
+            .iter()
+            .filter(|(l, m)| *l == Level::Warn && m == "OBS refused GetVersion")
+            .count()
+    };
+    assert_eq!(refused(&h), 1, "{:?}", h.logs());
+    // Identified alone does not reset the backoff either: unanswered loads expire.
+    identified(&mut h);
+    let t = tick(&h);
+    for _ in 0..6 {
+        h.fire(t);
+    }
+    assert_eq!(h.state("connected"), Some("no"));
+    assert_eq!(retry_timer(&h).1, Duration::from_millis(10000));
+}
+
+#[test]
+fn a_good_connection_resets_the_backoff() {
+    let mut h = Harness::<Obs>::new();
+    h.init(settings()).expect("init");
+    for _ in 0..4 {
+        let s = current(&h);
+        h.closed(s, "connection refused");
+        let (t, _) = retry_timer(&h);
+        h.fire(t);
+    }
+    // The next try gets through and loads: a later drop retries after 1 s again.
+    let s = current(&h);
+    h.open(s);
+    h.message(s, hello(false));
+    h.message(
+        s,
+        Payload::Text(json!({"op": 2, "d": {"negotiatedRpcVersion": 1}}).to_string()),
+    );
+    for (id, ty, _) in sent_requests(&h, s) {
+        let body = match ty.as_str() {
+            "GetVersion" => json!({"obsVersion": "32.2.0", "obsWebSocketVersion": "5.7.0"}),
+            "GetSceneList" => json!({"currentProgramSceneName": "A", "scenes": [{"sceneName": "A"}]}),
+            _ => json!({}),
+        };
+        answer(&mut h, s, &id, &ty, true, body);
+    }
+    assert_eq!(h.state("connected"), Some("yes"));
+    h.closed(s, "connection lost");
+    assert_eq!(retry_timer(&h).1, Duration::from_millis(1000));
 }
 
 #[test]

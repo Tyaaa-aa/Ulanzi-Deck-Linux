@@ -30,6 +30,7 @@ label = "Port"
 min = 1
 max = 65535
 default = 4455
+help = "4455 unless you changed it in OBS"
 
 [[settings]]
 key = "password"
@@ -72,7 +73,7 @@ id = "set_scene"
 name = "Switch scene"
 params = [
   { key = "scene", kind = "item", picker = "scenes", label = "Scene" },
-  { key = "preview", kind = "toggle", label = "Set the preview scene instead" },
+  { key = "preview", kind = "toggle", label = "Set the preview scene instead (studio mode)" },
 ]
 
 [[actions]]
@@ -143,7 +144,7 @@ id = "input_volume"
 name = "Change an input's volume"
 params = [
   { key = "input", kind = "item", picker = "audio_inputs", label = "Audio input" },
-  { key = "op", kind = "choice", label = "Change", choices = ["up", "down", "mute", "set"] },
+  { key = "op", kind = "choice", label = "Change", choices = ["up", "down", { value = "mute", label = "Mute or unmute" }, "set"] },
   { key = "percent", kind = "number", label = "Volume (percent, for Set)", min = 0, max = 100 },
   { key = "step", kind = "number", label = "Step (dB)", min = 1, max = 20, default = 2 },
 ]
