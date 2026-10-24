@@ -222,9 +222,13 @@ pub fn auth_msg(token: &str) -> Value {
     json!({"type": "auth", "access_token": token})
 }
 
-/// Only the listed entities, never the whole install.
-pub fn subscribe_msg(id: u64, entities: &[String]) -> Value {
-    json!({"id": id, "type": "subscribe_entities", "entity_ids": entities})
+/// Only the listed entities, never the whole install. `None` for an empty list: Home Assistant
+/// would treat an empty filter as every entity.
+pub fn subscribe_msg(id: u64, entities: &[String]) -> Option<Value> {
+    if entities.is_empty() {
+        return None;
+    }
+    Some(json!({"id": id, "type": "subscribe_entities", "entity_ids": entities}))
 }
 
 pub fn call_service_msg(id: u64, call: &ServiceCall) -> Value {

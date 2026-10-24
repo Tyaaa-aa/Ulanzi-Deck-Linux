@@ -493,7 +493,12 @@ impl Ha {
         }
         let id = self.next_id + 1;
         if self
-            .send_command(cx, socket, |id| subscribe_msg(id, &ids), Kind::Subscribe)
+            .send_command(
+                cx,
+                socket,
+                |id| subscribe_msg(id, &ids).unwrap_or(Value::Null),
+                Kind::Subscribe,
+            )
             .is_ok()
         {
             self.phase = Phase::Subscribing { socket, sub_id: id };
@@ -504,7 +509,7 @@ impl Ha {
         if let Some(t) = self.handshake.take() {
             cx.cancel_timer(t);
         }
-        // Only now is the subscription confirmed: a server that keeps failing before this point
+        // Only now is the subscription confirmed (success result or first snapshot): a server that keeps failing before this point
         // keeps backing off.
         self.backoff = FIRST_BACKOFF;
         self.phase = Phase::Live { socket, sub_id };
@@ -558,6 +563,10 @@ impl Ha {
                         self.set_last_error(cx, &why);
                         self.go_down(cx, Down::Rejected, true);
                     }
+                } else if let Phase::Subscribing { socket, sub_id } = self.phase {
+                    // None of the listed entities may exist, and then no snapshot follows.
+                    self.go_live(cx, socket, sub_id);
+                    self.refresh(cx);
                 }
             }
             Kind::Service { label } => {
@@ -642,7 +651,7 @@ impl Plugin for Ha {
                 self.set_status(
                     cx,
                     Status::Problem,
-                    &format!("Check [plugins.ha.settings]: {msg}."),
+                    &format!("Check [plugins.ha.settings]: {}.", msg.trim_end_matches('.')),
                 );
                 return Ok(());
             }

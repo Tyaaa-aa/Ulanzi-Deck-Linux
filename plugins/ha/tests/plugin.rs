@@ -571,11 +571,9 @@ fn state_keys_stay_under_the_host_cap_for_the_whole_life() {
     // Keys published earlier keep updating; ones past the cap never appear.
     assert_eq!(h.state("sensor.s0_0"), Some("offline"));
     assert_eq!(h.state("sensor.s11_39"), None);
-    let s = current(&h);
     // The first round's keys are known to the host; bring one back through a settings change.
     h.init(json!({"url": "homeassistant.local", "token": TOKEN, "entities": ["sensor.s0_0"]}))
         .expect("init");
-    let _ = s;
     handshake(&mut h, json!({"sensor.s0_0": {"s": "9", "a": {}}}));
     assert_eq!(h.state("sensor.s0_0"), Some("9"));
     assert!(h.states().len() <= 256);
@@ -601,7 +599,7 @@ fn oversize_keys_and_values_are_handled() {
         "entities": [long_id, "light.desk"],
         "attributes": [format!("{long_id}:{long_attr}"), "light.desk:note"]}))
         .expect("init");
-    let big = "é".repeat(3000);
+    let big = "€".repeat(3000);
     handshake(
         &mut h,
         json!({long_id.clone(): {"s": "7", "a": {}},
@@ -611,7 +609,7 @@ fn oversize_keys_and_values_are_handled() {
     assert!(h.states().keys().all(|k| k.len() <= 256));
     let note = h.state("light.desk.attr.note").expect("note");
     assert!(
-        !note.is_empty() && note.len() <= 1024 && note.chars().all(|c| c == 'é'),
+        !note.is_empty() && note.len() <= 1024 && note.chars().all(|c| c == '€'),
         "{}",
         note.len()
     );
@@ -626,9 +624,9 @@ fn oversize_keys_and_values_are_handled() {
     h.action("toggle", json!({"entity_id": "light.desk"}))
         .expect("toggle");
     let (id, _, _) = sent_msgs(&h, s).pop().expect("sent");
-    result(&mut h, s, id, false, Some(json!({"message": "é".repeat(1500)})));
+    result(&mut h, s, id, false, Some(json!({"message": "€".repeat(1500)})));
     let e = h.state("last_error").expect("last_error");
-    assert!(e.len() <= 1024 && e.chars().all(|c| c == 'é') && !e.is_empty());
+    assert!(e.len() <= 1024 && e.chars().all(|c| c == '€') && !e.is_empty());
 }
 
 #[test]
@@ -759,4 +757,48 @@ fn bad_settings_are_a_status_not_a_crash() {
     assert!(h.opened().is_empty());
     assert_eq!(h.secrets()["token"], TOKEN);
     assert_no_token(&h);
+}
+
+#[test]
+fn live_when_the_subscription_succeeds_even_without_a_snapshot() {
+    let mut h = Harness::<Ha>::new();
+    h.init(settings()).expect("init");
+    let mut waits = Vec::new();
+    for _ in 0..2 {
+        let s = current(&h);
+        h.open(s);
+        h.message(s, auth_required());
+        h.message(s, auth_ok());
+        // None of the listed entities exists: HA may send no snapshot at all.
+        result(&mut h, s, 1, true, None);
+        assert_eq!(h.state("connected"), Some("yes"));
+        assert_eq!(h.state("light.desk"), Some("missing"));
+        assert_eq!(h.state("entity_count"), Some("0"));
+        assert_eq!(status_msg(&h).0, Status::Ok);
+        // No handshake timer is left to drop the connection.
+        assert!(
+            h.timers().iter().all(|(_, d, _)| *d != Duration::from_secs(5)),
+            "{:?}",
+            h.timers()
+        );
+        // A late snapshot still fills the values in.
+        snapshot(&mut h, s, 1, desk_snapshot());
+        assert_eq!(h.state("light.desk"), Some("on"));
+        h.closed(s, "gone");
+        let (t, d) = retry_timer(&h);
+        waits.push(d.as_secs());
+        h.fire(t);
+    }
+    // The confirmed subscription reset the backoff each time.
+    assert_eq!(waits, [1, 1]);
+}
+
+#[test]
+fn settings_problem_text_has_one_full_stop() {
+    let mut h = Harness::<Ha>::new();
+    h.init(json!({"url": "", "token": TOKEN})).expect("init");
+    let (st, msg) = status_msg(&h);
+    assert_eq!(st, Status::Problem);
+    assert!(msg.starts_with("Check [plugins.ha.settings]: "), "{msg}");
+    assert!(!msg.ends_with(".."), "{msg}");
 }

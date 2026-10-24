@@ -131,8 +131,10 @@ fn entity_ids_are_validated() {
 fn subscription_is_filtered_to_listed_entities() {
     assert_eq!(
         subscribe_msg(2, &["light.a".into()]),
-        json!({"id": 2, "type": "subscribe_entities", "entity_ids": ["light.a"]})
+        Some(json!({"id": 2, "type": "subscribe_entities", "entity_ids": ["light.a"]}))
     );
+    // An empty filter would mean every entity of the install.
+    assert_eq!(subscribe_msg(2, &[]), None);
     assert_eq!(auth_msg("tok"), json!({"type": "auth", "access_token": "tok"}));
     assert_eq!(ping_msg(9), json!({"id": 9, "type": "ping"}));
     let call = ServiceCall {
@@ -143,7 +145,7 @@ fn subscription_is_filtered_to_listed_entities() {
     };
     let msgs = [
         auth_msg("t"),
-        subscribe_msg(1, &["light.a".into()]),
+        subscribe_msg(1, &["light.a".into()]).expect("message"),
         call_service_msg(3, &call),
         ping_msg(4),
     ];
