@@ -1837,8 +1837,11 @@ async fn list_items_is_bounded() {
         }
         assert!(i.icon.as_ref().is_none_or(|s| s.len() <= 128));
     }
-    // Cut at a character boundary: the labels are "é" repeated.
-    assert!(items[0].label.chars().all(|c| c == 'é'));
+    // Cut at a character boundary: byte 256 falls inside an "é", so the cut backs up one byte.
+    assert!(items[0].label.starts_with('a'));
+    assert!(items[0].label[1..].chars().all(|c| c == 'é'));
+    assert_eq!(items[0].label.len(), 255);
+    assert_eq!(items[1].label.len(), 256);
     assert_eq!(
         items[0].id, "item0",
         "items with an empty or overlong id are dropped"

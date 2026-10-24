@@ -170,10 +170,18 @@ impl Plugin for Probe {
             // Too many, too long: the host keeps 5000 and cuts every field.
             "flood" => {
                 let mut items = vec![Item::new("", "empty id"), Item::new("x".repeat(2000), "long id")];
-                items.extend((0..6000).map(|i| {
-                    Item::new(format!("item{i}"), "é".repeat(1000))
-                        .subtitle("s".repeat(2000))
-                        .icon("i".repeat(500))
+                // Light enough to answer well inside the call budget under load, still over every
+                // limit. Every tenth label is multi-byte with an odd prefix, so the 256-byte cut
+                // falls inside a character.
+                items.extend((0..5200).map(|i| {
+                    let label = if i % 10 == 0 {
+                        format!("a{}", "é".repeat(150))
+                    } else {
+                        "l".repeat(300)
+                    };
+                    Item::new(format!("item{i}"), label)
+                        .subtitle("s".repeat(300))
+                        .icon("i".repeat(150))
                 }));
                 Ok(items)
             }
