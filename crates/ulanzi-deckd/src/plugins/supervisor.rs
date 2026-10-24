@@ -199,6 +199,29 @@ fn restore_interrupted(dir: &Path, entries: &[std::fs::DirEntry]) {
     }
 }
 
+/// Package folders (`.unpack-*`, see `install::unpack_and_validate`) left behind when the
+/// service stopped mid-install: nothing uses them any more, delete them. Runs before any install
+/// can start.
+fn remove_unpack_leftovers(entries: &[std::fs::DirEntry]) {
+    for entry in entries {
+        let name = entry.file_name();
+        if !name.to_str().is_some_and(|n| n.starts_with(".unpack-")) {
+            continue;
+        }
+        // Never follow a link out of the plugins folder.
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        match std::fs::remove_dir_all(entry.path()) {
+            Ok(()) => tracing::info!("deleted the unfinished install {}", entry.path().display()),
+            Err(e) => tracing::warn!(
+                "cannot delete the unfinished install {}: {e}",
+                entry.path().display()
+            ),
+        }
+    }
+}
+
 /// Sets its flag when dropped.
 struct CancelOnDrop(Arc<AtomicBool>);
 
@@ -226,6 +249,7 @@ fn scan(
     };
     let entries: Vec<_> = entries.flatten().collect();
     restore_interrupted(dir, &entries);
+    remove_unpack_leftovers(&entries);
     let entries = std::fs::read_dir(dir)
         .map(|d| d.flatten().collect())
         .unwrap_or(entries);
@@ -1079,6 +1103,24 @@ mod tests {
         let engine = Err("no engine".to_string());
         assert_eq!(scan(dir.path(), &engine, &AtomicBool::new(false)).len(), 2);
         assert!(scan(dir.path(), &engine, &AtomicBool::new(true)).is_empty());
+    }
+
+    #[test]
+    fn unpack_leftovers_are_deleted_at_start() {
+        let dir = tempfile::tempdir().expect("dir");
+        let leftover = dir.path().join(".unpack-AbC123");
+        std::fs::create_dir_all(leftover.join("assets")).expect("leftover");
+        std::fs::write(leftover.join("plugin.toml"), "id = \"x\"").expect("manifest");
+        // Not leftovers: a plugin folder, another hidden folder, a file with the prefix.
+        std::fs::create_dir(dir.path().join("unpack")).expect("plugin");
+        std::fs::create_dir(dir.path().join(".hidden")).expect("hidden");
+        std::fs::write(dir.path().join(".unpack-file"), "x").expect("file");
+        let engine = Err("no engine".to_string());
+        scan(dir.path(), &engine, &AtomicBool::new(false));
+        assert!(!leftover.exists());
+        assert!(dir.path().join("unpack").is_dir());
+        assert!(dir.path().join(".hidden").is_dir());
+        assert!(dir.path().join(".unpack-file").is_file());
     }
 
     #[tokio::test]
