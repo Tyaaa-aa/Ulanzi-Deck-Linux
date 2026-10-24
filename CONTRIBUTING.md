@@ -67,7 +67,9 @@ Please don't open public issues for security problems; see [SECURITY.md](SECURIT
    [Conventional Commits](https://www.conventionalcommits.org) style: `fix(deckd): …`, `feat(gui): …`,
    `docs: …`.
 4. Run `scripts/test.sh`: format, clippy (warnings count as errors), every test and an end-to-end
-   run. New behaviour needs a test that fails without it.
+   run. New behaviour needs a test that fails without it. The key editor's layout test only prints
+   its sizes by default, since they depend on the fonts installed; `ULANZI_LAYOUT_TEST=1
+   scripts/test.sh` makes it fail when a section of the editor would need scrolling.
 5. Try it: `scripts/sandbox.sh --demo` runs the app with a pretend deck on throwaway profiles.
 6. Open a pull request using the template; add screenshots (light and dark) for UI changes and a line
    in [CHANGELOG.md](CHANGELOG.md) under *Unreleased*.
