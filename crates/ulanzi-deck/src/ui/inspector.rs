@@ -132,7 +132,16 @@ impl Panel {
             // The daemon announces the profile list after every save; only a real change to it
             // (the Switch Profile choices) is worth a rebuild that would drop the typing focus.
             let known_profiles = RefCell::new(state.profiles.borrow().clone());
+            // A PluginsChanged that changed nothing (a status flipping back) is not worth a rebuild.
+            let known_plugins = RefCell::new(state.plugins.borrow().clone());
             state.on(move |c| match c {
+                Change::Plugins => {
+                    let now = ctx.state.plugins.borrow().clone();
+                    if *known_plugins.borrow() != now {
+                        *known_plugins.borrow_mut() = now;
+                        ctx.schedule_rebuild();
+                    }
+                }
                 Change::Profiles => {
                     let now = ctx.state.profiles.borrow().clone();
                     if *known_profiles.borrow() != now {

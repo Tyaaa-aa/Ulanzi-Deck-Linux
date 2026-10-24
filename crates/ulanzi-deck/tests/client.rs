@@ -1,16 +1,18 @@
 //! Client tests against a real daemon service on a private bus (skipped without `dbus-daemon`).
 
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ulanzi_core::model::{Model, Profile, Settings};
 use ulanzi_core::store::Store;
-use ulanzi_deck::client::{Client, ClientEvent, ImportChoice};
+use ulanzi_deck::client::{Client, ClientError, ClientEvent, ImportChoice};
 use ulanzi_deckd::actions::Executor;
-use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals};
+use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_plugins, forward_signals};
 use ulanzi_deckd::deck::spawn_deck;
+use ulanzi_deckd::plugins::{FileSecrets, PluginHost};
 use zbus::Connection;
 
 struct Bus {
@@ -40,20 +42,36 @@ fn bus() -> Option<Bus> {
     })
 }
 
-/// Start the daemon's D-Bus service (with a deck but no device) on `addr`.
-async fn serve(addr: &str, store: &Store) -> Connection {
+/// Start the daemon's D-Bus service (with a deck but no device, and a plugin host on the
+/// `plugins` folder under `dir`) on `addr`.
+async fn serve(addr: &str, store: &Store, dir: &Path) -> Connection {
     let settings = store.load_settings().unwrap_or_default();
-    let (tx, events) = spawn_deck(store.clone(), settings, Arc::new(Executor::new(None)));
+    let (tx, events) = spawn_deck(store.clone(), settings.clone(), Arc::new(Executor::new(None)));
+    let plugins = PluginHost::start(
+        dir.join("plugins"),
+        dir.join("k/plugins"),
+        Arc::new(FileSecrets::new(dir.join("c/plugin-secrets.toml"))),
+        &settings,
+        &Default::default(),
+        tx.clone(),
+    )
+    .await;
     let conn = zbus::connection::Builder::address(addr)
         .expect("addr")
         .name(BUS_NAME)
         .expect("name")
-        .serve_at(OBJECT_PATH, DeckService::new(tx, store.clone()))
+        .serve_at(
+            OBJECT_PATH,
+            DeckService::new(tx, store.clone())
+                .with_plugins_dir(dir.join("plugins"))
+                .with_plugins(plugins.clone()),
+        )
         .expect("serve")
         .build()
         .await
         .expect("server");
     tokio::spawn(forward_signals(conn.clone(), events));
+    tokio::spawn(forward_plugins(conn.clone(), plugins));
     conn
 }
 
@@ -66,6 +84,11 @@ struct Rig {
 }
 
 async fn rig() -> Option<Rig> {
+    rig_with(|_| {}).await
+}
+
+/// A rig whose plugins folder `setup` fills first.
+async fn rig_with(setup: impl FnOnce(&Path)) -> Option<Rig> {
     let Some(bus) = bus() else {
         eprintln!("dbus-daemon not found; skipping");
         return None;
@@ -80,7 +103,9 @@ async fn rig() -> Option<Rig> {
             ..Settings::default()
         })
         .expect("settings");
-    let server = Some(serve(&bus.addr, &store).await);
+    std::fs::create_dir_all(dir.path().join("plugins")).expect("plugins dir");
+    setup(&dir.path().join("plugins"));
+    let server = Some(serve(&bus.addr, &store, dir.path()).await);
     Some(Rig {
         bus,
         _dir: dir,
@@ -160,7 +185,7 @@ async fn client_reconnects_and_resends_pending_edit() {
         r.store.load_profile(r.profile.id).expect("load").name,
         "Edited while the service was down"
     );
-    r.server = Some(serve(&r.bus.addr, &r.store).await); // and comes back
+    r.server = Some(serve(&r.bus.addr, &r.store, r._dir.path()).await); // and comes back
     let mut landed = false;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -230,4 +255,64 @@ async fn bundle_round_trip_over_dbus() {
         .map(|(_, n)| n)
         .collect();
     assert_eq!(names, vec!["Default".to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_list_and_manifests_empty() {
+    let Some(r) = rig().await else { return };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    assert_eq!(c.plugin_list().await.expect("list"), vec![]);
+    assert!(c.plugin_manifests().await.expect("manifests").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_errors_reach_the_gui() {
+    let Some(r) = rig().await else { return };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    match c.plugin_set_secret("hello", "password", "x").await {
+        Err(ClientError::Service(m)) => assert_eq!(m, "the hello plugin is not installed"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugins_changed_is_forwarded() {
+    let Some(r) = rig_with(|plugins| {
+        let folder = plugins.join("hello");
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(
+            folder.join("plugin.toml"),
+            include_str!("../../../examples/plugins/hello/plugin.toml"),
+        )
+        .expect("manifest");
+    })
+    .await
+    else {
+        return;
+    };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    let list = c.plugin_list().await.expect("list");
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(
+        (list[0].id.as_str(), list[0].status.as_str()),
+        ("hello", "incompatible")
+    );
+    // Let the signal sent when the host came up go by.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let mut events = c.events();
+    while events.try_recv().is_ok() {}
+    c.plugin_remove("hello").await.expect("remove");
+    let got = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Ok(ClientEvent::PluginsChanged) => return true,
+                Ok(_) => continue,
+                Err(_) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(got, "PluginsChanged reaches the GUI");
+    assert_eq!(c.plugin_list().await.expect("list"), vec![]);
 }

@@ -506,6 +506,33 @@ pub fn set_obs(state: &State, st: String, title: String, detail: String) {
     }
 }
 
+/// Fetch the plugin list and manifests. The list counts as known (key badges show) only once
+/// both arrived; a failure (the plugin host still coming up) leaves it as it was.
+pub fn refresh_plugins(state: &State) {
+    let Some(c) = state.client.borrow().clone() else {
+        return;
+    };
+    let s = state.clone();
+    runtime::run(
+        async move {
+            let list = c.plugin_list().await?;
+            let manifests = c.plugin_manifests().await?;
+            Ok::<_, crate::client::ClientError>((list, manifests))
+        },
+        move |r| match r {
+            Ok((list, manifests)) => {
+                *s.plugins.borrow_mut() = crate::plugins::Plugins {
+                    loaded: true,
+                    list,
+                    manifests,
+                };
+                s.notify(Change::Plugins);
+            }
+            Err(e) => tracing::debug!("plugin list: {e}"),
+        },
+    );
+}
+
 /// Connect to the service, load the active profile and settings, and follow events.
 pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
     let state = state.clone();
@@ -536,6 +563,7 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
                     }
                     state.notify(Change::Profiles);
                     state.notify(Change::Settings);
+                    refresh_plugins(&state);
                     if let Some(c) = state.client.borrow().clone() {
                         let s = state.clone();
                         runtime::run(async move { c.obs_status().await }, move |r| {
@@ -597,8 +625,12 @@ fn follow_events(state: &State, c: &Client) {
                 ClientEvent::Disconnected => {
                     *state.status.borrow_mut() = Status::ServiceDown;
                     state.notify(Change::Status);
+                    state.plugins.borrow_mut().loaded = false;
+                    state.notify(Change::Plugins);
                 }
+                ClientEvent::PluginsChanged => refresh_plugins(&state),
                 ClientEvent::Reconnected => {
+                    refresh_plugins(&state);
                     let s = state.clone();
                     if let Some(c) = state.client.borrow().clone() {
                         runtime::run(async move { c.hello().await }, move |h| {

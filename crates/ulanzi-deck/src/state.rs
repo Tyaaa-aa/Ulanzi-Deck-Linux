@@ -31,6 +31,8 @@ pub enum Change {
     Drag,
     /// The OBS connection changed.
     Obs,
+    /// The plugin list, a plugin's status or the manifests changed.
+    Plugins,
 }
 
 /// What the app knows about the OBS connection.
@@ -93,6 +95,8 @@ pub struct AppState {
     /// Expandable rows the user opened, by path, so rebuilding the inspector keeps them open.
     pub expanded: RefCell<std::collections::HashSet<String>>,
     pub obs: RefCell<ObsInfo>,
+    /// The daemon's plugins and their manifests.
+    pub plugins: RefCell<crate::plugins::Plugins>,
     /// What the service sees playing (for the Now Playing preview); `None` when nothing plays.
     pub now_playing: RefCell<Option<ulanzi_core::render::screen::MediaData>>,
     /// Weather for the preview, by (place, fahrenheit): the reading and when it was asked for.
@@ -134,6 +138,7 @@ impl AppState {
             rules: RefCell::new(std::collections::HashMap::new()),
             expanded: RefCell::new(std::collections::HashSet::new()),
             obs: RefCell::default(),
+            plugins: RefCell::default(),
             now_playing: RefCell::default(),
             weather: RefCell::default(),
             listeners: RefCell::new(Vec::new()),

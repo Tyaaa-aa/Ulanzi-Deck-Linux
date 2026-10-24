@@ -1,16 +1,20 @@
 //! The GUI's connection to `ulanzi-deckd`: calls, debounced profile saves, conflict handling and
 //! reconnection. Runs on tokio; the GTK side talks to it through a relm4 worker.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use tokio::sync::{Notify, broadcast};
 use ulanzi_core::model::{Profile, Settings};
+use ulanzi_core::plugin::{Inspected, Manifest};
 use ulanzi_core::store::parse_profile;
 use uuid::Uuid;
 use zbus::Connection;
+
+use crate::plugins::PluginRow;
 
 /// What to do with profiles that already exist when importing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +127,8 @@ pub enum ClientEvent {
         title: String,
         detail: String,
     },
+    /// The plugin list or a plugin's status changed: fetch the list again.
+    PluginsChanged,
     /// The service went away; edits are kept and sent when it returns.
     Disconnected,
     Reconnected,
@@ -455,6 +461,86 @@ impl Client {
         Ok(self.inner.proxy.call("ObsReconnect", &()).await?)
     }
 
+    /// Installed plugins (and plugin folders that could not be loaded).
+    pub async fn plugin_list(&self) -> Result<Vec<PluginRow>> {
+        let list: Vec<(String, String, String, String, String)> =
+            self.inner.proxy.call("PluginList", &()).await?;
+        Ok(list
+            .into_iter()
+            .map(|(id, name, version, status, detail)| PluginRow {
+                id,
+                name,
+                version,
+                status,
+                detail,
+            })
+            .collect())
+    }
+
+    /// Every installed plugin's manifest, by id.
+    pub async fn plugin_manifests(&self) -> Result<BTreeMap<String, Manifest>> {
+        let text: String = self.inner.proxy.call("PluginManifests", &()).await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// What installing the plugin folder at `path` (absolute) would install, writing nothing.
+    pub async fn plugin_inspect_dir(&self, path: &Path) -> Result<Inspected> {
+        let text: String = self
+            .inner
+            .proxy
+            .call("PluginInspectDir", &(path.to_string_lossy().as_ref(),))
+            .await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Install (or replace) the plugin in the folder at `path` (absolute); returns its id.
+    pub async fn plugin_install_dir(&self, path: &Path) -> Result<String> {
+        Ok(self
+            .inner
+            .proxy
+            .call("PluginInstallDir", &(path.to_string_lossy().as_ref(),))
+            .await?)
+    }
+
+    /// Stop the plugin and delete it and its secrets (its settings are kept).
+    pub async fn plugin_remove(&self, id: &str) -> Result<()> {
+        Ok(self.inner.proxy.call::<_, _, ()>("PluginRemove", &(id,)).await?)
+    }
+
+    pub async fn plugin_set_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        Ok(self
+            .inner
+            .proxy
+            .call::<_, _, ()>("PluginSetEnabled", &(id, enabled))
+            .await?)
+    }
+
+    pub async fn plugin_restart(&self, id: &str) -> Result<()> {
+        Ok(self.inner.proxy.call::<_, _, ()>("PluginRestart", &(id,)).await?)
+    }
+
+    /// The plugin's declared secret keys that are set (never their values).
+    pub async fn plugin_secret_keys(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self.inner.proxy.call("PluginSecretKeys", &(id,)).await?)
+    }
+
+    /// Write a secret straight into the plugin's secret store.
+    pub async fn plugin_set_secret(&self, id: &str, key: &str, value: &str) -> Result<()> {
+        Ok(self
+            .inner
+            .proxy
+            .call::<_, _, ()>("PluginSetSecret", &(id, key, value))
+            .await?)
+    }
+
+    pub async fn plugin_clear_secret(&self, id: &str, key: &str) -> Result<()> {
+        Ok(self
+            .inner
+            .proxy
+            .call::<_, _, ()>("PluginClearSecret", &(id, key))
+            .await?)
+    }
+
     pub async fn create_profile(&self, name: &str) -> Result<Uuid> {
         let id: String = self.inner.proxy.call("CreateProfile", &(name,)).await?;
         Uuid::parse_str(&id).map_err(|e| ClientError::Protocol(e.to_string()))
@@ -627,6 +713,7 @@ impl Client {
                 }),
                 "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
                 "SettingsChanged" => Some(ClientEvent::SettingsChanged),
+                "PluginsChanged" => Some(ClientEvent::PluginsChanged),
                 "ObsStatusChanged" => body
                     .deserialize::<(String, String, String)>()
                     .ok()

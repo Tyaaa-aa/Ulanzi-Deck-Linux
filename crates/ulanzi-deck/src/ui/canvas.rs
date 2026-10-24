@@ -910,6 +910,7 @@ pub fn build(state: &State) -> Canvas {
             | Change::Settings
             | Change::Preview
             | Change::Obs
+            | Change::Plugins
             | Change::Profiles => {
                 let dir = profile_dir(&state);
                 let hide = state.settings.borrow().hide_labels;

@@ -4,6 +4,7 @@
 pub const APP_ID: &str = "io.github.tyaaa_aa.UlanziDeck";
 
 pub mod client;
+pub mod plugins;
 pub mod runtime;
 pub mod state;
 pub mod ui;
