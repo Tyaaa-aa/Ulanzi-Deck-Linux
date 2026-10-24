@@ -214,3 +214,6 @@ off, open the window, or quit the background service. With auto-switch on, the i
 | Ctrl+O / Ctrl+E | Import / export `.ulanzideck` files |
 | Ctrl+, | Preferences |
 | Ctrl+? | All shortcuts |
+
+While you type in a text field, the deck leaves Ctrl+A, copy, paste, undo, redo, the style shortcuts
+and Delete to the text field, so they never change the keys.

@@ -11,6 +11,7 @@ pub mod icon_picker;
 pub mod inspector;
 pub mod integrations;
 pub mod item_picker;
+pub(crate) mod key_routing;
 pub mod library;
 pub mod obs_setup;
 pub mod onboarding;

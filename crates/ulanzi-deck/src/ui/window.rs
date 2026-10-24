@@ -412,18 +412,20 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State) {
         }),
     );
     if let Some(app) = window.application() {
-        app.set_accels_for_action("win.undo", &["<Ctrl>z"]);
-        app.set_accels_for_action("win.shortcuts", &["<Ctrl>question"]);
-        app.set_accels_for_action("win.redo", &["<Ctrl><Shift>z", "<Ctrl>y"]);
-        app.set_accels_for_action("win.select-all", &["<Ctrl>a"]);
-        app.set_accels_for_action("win.copy", &["<Ctrl>c"]);
-        app.set_accels_for_action("win.paste", &["<Ctrl>v"]);
-        app.set_accels_for_action("win.copy-style", &["<Ctrl><Shift>c"]);
-        app.set_accels_for_action("win.paste-style", &["<Ctrl><Shift>v"]);
-        app.set_accels_for_action("win.clear", &["Delete"]);
-        app.set_accels_for_action("win.deselect", &["Escape"]);
+        for (action, accels) in APP_ACCELS {
+            app.set_accels_for_action(action, accels);
+        }
     }
+    // Undo, select, copy, paste and clear yield to a focused text field, so they can't be
+    // application accelerators (those fire before the focused widget).
+    crate::ui::key_routing::install(window);
 }
+
+/// Window shortcuts that fire everywhere, text fields included.
+const APP_ACCELS: &[(&str, &[&str])] = &[
+    ("win.shortcuts", &["<Control>question"]),
+    ("win.deselect", &["Escape"]),
+];
 
 /// Show profile `id` in the editor, and make it the deck's active profile when `activate` is set.
 pub fn open_profile(state: &State, id: Uuid, activate: bool) {
@@ -696,6 +698,19 @@ fn follow_events(state: &State, c: &Client) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_accelerators_leave_text_keys_alone() {
+        // Application accelerators beat the focused widget, so none may be a text-editing key.
+        for (action, accels) in APP_ACCELS {
+            for accel in *accels {
+                assert!(
+                    crate::ui::key_routing::window_takes(accel, true),
+                    "{action} steals {accel} from text fields"
+                );
+            }
+        }
+    }
 
     #[test]
     fn control_names_map_to_slots() {

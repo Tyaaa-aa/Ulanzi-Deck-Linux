@@ -820,17 +820,25 @@ pub fn build(state: &State) -> Canvas {
 
     // Right-click a key: copy, paste and clear, with their shortcuts shown.
     let key_menu = {
+        // The shortcuts aren't application accelerators (see key_routing), so name them here.
+        let item = |section: &gio::Menu, label: &str, action: &str| {
+            let it = gio::MenuItem::new(Some(label), Some(&format!("win.{action}")));
+            if let Some(accel) = crate::ui::key_routing::accel_for(action) {
+                it.set_attribute_value("accel", Some(&accel.to_variant()));
+            }
+            section.append_item(&it);
+        };
         let m = gio::Menu::new();
         let keys_section = gio::Menu::new();
-        keys_section.append(Some("Copy Key"), Some("win.copy"));
-        keys_section.append(Some("Paste Key"), Some("win.paste"));
+        item(&keys_section, "Copy Key", "copy");
+        item(&keys_section, "Paste Key", "paste");
         m.append_section(None, &keys_section);
         let style = gio::Menu::new();
-        style.append(Some("Copy Style"), Some("win.copy-style"));
-        style.append(Some("Paste Style"), Some("win.paste-style"));
+        item(&style, "Copy Style", "copy-style");
+        item(&style, "Paste Style", "paste-style");
         m.append_section(Some("Colours, image and label only"), &style);
         let clear = gio::Menu::new();
-        clear.append(Some("Clear Key"), Some("win.clear"));
+        item(&clear, "Clear Key", "clear");
         m.append_section(None, &clear);
         m
     };
