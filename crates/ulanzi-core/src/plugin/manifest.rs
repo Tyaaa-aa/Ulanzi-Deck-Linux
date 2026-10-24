@@ -128,6 +128,21 @@ impl Manifest {
             .collect()
     }
 
+    /// `table` with every setting the user never set filled in from its manifest `default`, so
+    /// the plugin sees what the settings page shows. Secrets have no defaults and are skipped.
+    pub fn settings_with_defaults(&self, table: &toml::Table) -> toml::Table {
+        let mut out = table.clone();
+        for f in &self.settings {
+            if f.kind == FieldKind::Secret {
+                continue;
+            }
+            if let Some(d) = &f.default {
+                out.entry(f.key.clone()).or_insert_with(|| d.clone());
+            }
+        }
+        out
+    }
+
     pub fn action(&self, id: &str) -> Option<&ManifestAction> {
         self.actions.iter().find(|a| a.id == id)
     }

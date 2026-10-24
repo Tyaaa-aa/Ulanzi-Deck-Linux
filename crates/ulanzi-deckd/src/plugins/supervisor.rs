@@ -541,7 +541,7 @@ impl Host {
             }
             Ok(mut handle) => {
                 let _ = handle.post(Event::Init {
-                    settings: table_to_json(&e.settings),
+                    settings: table_to_json(&loaded.manifest.settings_with_defaults(&e.settings)),
                 });
                 // The supervisor awaits the exit; the handle stays here, so dropping the entry
                 // (or the host) still stops the instance.
@@ -736,9 +736,12 @@ impl Host {
                     if e.wanted && !*closed {
                         self.launch(id, e);
                     }
-                } else if settings_changed && let Some(run) = &e.run {
+                } else if settings_changed
+                    && let Some(run) = &e.run
+                    && let Some(loaded) = &e.loaded
+                {
                     let _ = run.handle.post(Event::Init {
-                        settings: table_to_json(&e.settings),
+                        settings: table_to_json(&loaded.manifest.settings_with_defaults(&e.settings)),
                     });
                 }
             }

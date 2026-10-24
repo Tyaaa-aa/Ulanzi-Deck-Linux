@@ -445,6 +445,23 @@ mod typed_fields {
     }
 
     #[test]
+    fn unset_settings_take_their_manifest_default() {
+        let s = "[[settings]]\nkey = \"url\"\ndefault = \"host.local:1\"\n\
+                 [[settings]]\nkey = \"port\"\nkind = \"number\"\ndefault = 4455\n\
+                 [[settings]]\nkey = \"token\"\nkind = \"secret\"\ndefault = \"nope\"\n\
+                 [[settings]]\nkey = \"other\"\n";
+        let m = Manifest::parse(&manifest("x1", "1.0.0", "1.0", s)).expect("parses");
+        let mut set = toml::Table::new();
+        set.insert("port".into(), toml::Value::Integer(1));
+        let out = m.settings_with_defaults(&set);
+        assert_eq!(out["url"].as_str(), Some("host.local:1"));
+        assert_eq!(out["port"].as_integer(), Some(1), "a set value wins");
+        assert!(!out.contains_key("token"), "secrets never get a default");
+        assert!(!out.contains_key("other"), "no default, no key");
+        assert!(!set.contains_key("url"), "the input is untouched");
+    }
+
+    #[test]
     fn secret_keys_listed() {
         let s = "[[settings]]\nkey = \"password\"\nkind = \"secret\"\n[[settings]]\nkey = \"host\"\n";
         let m = Manifest::parse(&manifest("x1", "1.0.0", "1.0", s)).expect("parses");
