@@ -23,10 +23,12 @@ pub use instance::{Dropped, Event, Exit, HostState, InstanceHandle, Output, spaw
 pub use secrets::{FileSecrets, KeyringSecrets, LazySecrets, SecretStore, system_secrets};
 pub use ulanzi_core::plugin::ManifestError;
 
-// The generated bindings cover the whole contract; not every item is used yet.
+// The generated bindings cover the whole contract; not every item is used yet. The host binds
+// the 1.0 exports (`plugin-base`); `list-items` (1.1) is looked up by name, so components built
+// against 1.0 keep loading.
 #[allow(dead_code)]
 mod bindings {
-    wasmtime::component::bindgen!({ world: "plugin", path: "../ulanzi-plugin/wit" });
+    wasmtime::component::bindgen!({ world: "plugin-base", path: "../ulanzi-plugin/wit" });
 }
 
 pub use bindings::*;
@@ -149,6 +151,20 @@ impl PluginHost {
         params: serde_json::Value,
     ) -> Result<(), PluginError> {
         self.inner.action(plugin, action, params).await
+    }
+
+    /// The entries of `plugin`'s picker `picker` matching `query` (`""`: all), only those in `group`
+    /// unless it is `""`; starts the plugin first if needed. Bounded: at most 5000 entries, every
+    /// field cut. A picker the manifest does not declare is refused (`Invalid`); the plugin's own
+    /// refusal comes back as `Action` with its message.
+    pub async fn list_items(
+        &self,
+        plugin: &str,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<ulanzi_core::plugin::PickItem>, PluginError> {
+        self.inner.list_items(plugin, picker, query, group).await
     }
 
     /// Turn plugins on or off per `[plugins.<id>].enabled`; running plugins whose settings

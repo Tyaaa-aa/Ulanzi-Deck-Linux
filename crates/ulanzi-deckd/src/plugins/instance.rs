@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::AbortHandle;
-use ulanzi_core::plugin::Manifest;
-use wasmtime::component::{Resource, ResourceTable};
+use ulanzi_core::plugin::{Manifest, PickItem};
+use wasmtime::component::{ComponentExportIndex, Resource, ResourceTable, TypedFunc};
 use wasmtime::{Store, StoreLimits, StoreLimitsBuilder, Trap, UpdateDeadline};
 use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -28,7 +28,7 @@ use super::engine::Ticker;
 use super::net::{Budget, Net};
 use super::ulanzi::plugin::types::{HttpResponse, LogLevel, Payload, Status};
 use super::ulanzi::plugin::{core, types};
-use super::{LoadedPlugin, PluginEngine, PluginError, PluginPre};
+use super::{LoadedPlugin, PluginBase, PluginBasePre, PluginEngine, PluginError};
 
 /// Events waiting for a plugin; when full, new events are dropped (one warning per episode).
 const EVENT_QUEUE: usize = 1024;
@@ -59,6 +59,15 @@ const MIN_REPEAT: Duration = Duration::from_millis(10);
 /// A guest stdout/stderr line longer than this is logged in pieces; a longer `log` or `set-status`
 /// message is truncated.
 const MAX_LOG_LINE: usize = 4096;
+/// Most entries of a `list-items` answer; the rest are dropped.
+const MAX_ITEMS: usize = 5000;
+/// An entry whose id is longer than this (or empty) is dropped.
+const MAX_ITEM_ID: usize = 1024;
+/// Longest label, subtitle, group and state of an entry; longer ones are cut.
+const MAX_ITEM_TEXT: usize = 256;
+const MAX_ITEM_ICON: usize = 128;
+/// Longest `list-items` error text; longer ones are cut.
+const MAX_ITEM_ERROR: usize = 4096;
 
 /// What the host asks a plugin instance to do, in order.
 pub enum Event {
@@ -70,6 +79,14 @@ pub enum Event {
         action: String,
         params: serde_json::Value,
         reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Contract 1.1: the entries of a picker (already bounded when they arrive). A plugin without
+    /// `list-items` answers `<name> has no list to pick from`.
+    ListItems {
+        picker: String,
+        query: String,
+        group: String,
+        reply: oneshot::Sender<Result<Vec<PickItem>, String>>,
     },
     Open(u32),
     Message(u32, Payload),
@@ -458,7 +475,8 @@ pub fn spawn_instance(
 ) -> Result<InstanceHandle, PluginError> {
     let manifest = loaded.manifest.clone();
     let plugin: Arc<str> = manifest.id.as_str().into();
-    let pre = PluginPre::new(loaded.pre.clone())
+    let list_items = loaded.list_items;
+    let pre = PluginBasePre::new(loaded.pre.clone())
         .map_err(|e| PluginError::Load(format!("{} is not a valid plugin: {e:#}", manifest.name)))?;
 
     let (tx, rx) = std::sync::mpsc::sync_channel(EVENT_QUEUE);
@@ -528,7 +546,7 @@ pub fn spawn_instance(
     std::thread::Builder::new()
         .name(format!("plugin-{plugin}"))
         .spawn(move || {
-            let exit = run(store, &pre, rx);
+            let exit = run(store, &pre, list_items, rx);
             let _ = exit_tx.send(exit);
         })
         .map_err(|e| PluginError::Io(format!("cannot start the {plugin} plugin: {e}")))?;
@@ -635,8 +653,59 @@ fn ended(e: &wasmtime::Error) -> Exit {
     }
 }
 
+/// `list-items(picker, query, group)`.
+type ListItems = TypedFunc<(String, String, String), (Result<Vec<types::Item>, String>,)>;
+
+/// Instantiate the component: its 1.0 exports, and `list-items` when `list_items` names it.
+/// A `list-items` of the wrong type counts as missing (with a warning).
+fn instantiate(
+    store: &mut Store<HostState>,
+    pre: &PluginBasePre<HostState>,
+    list_items: Option<ComponentExportIndex>,
+) -> wasmtime::Result<(PluginBase, Option<ListItems>)> {
+    let instance = pre.instance_pre().instantiate(&mut *store)?;
+    let guest = PluginBase::new(&mut *store, &instance)?;
+    let list_items = list_items.and_then(|index| {
+        instance
+            .get_typed_func(&mut *store, index)
+            .inspect_err(|e| {
+                let plugin = &store.data().plugin;
+                tracing::warn!(target: "plugin", plugin = %plugin, "list-items has the wrong type: {e:#}");
+            })
+            .ok()
+    });
+    Ok((guest, list_items))
+}
+
+/// Keep at most `MAX_ITEMS` entries with a usable id, every field cut to its limit.
+fn bound_items(items: Vec<types::Item>) -> Vec<PickItem> {
+    let cut = |s: String, max: usize| match s.len() <= max {
+        true => s,
+        false => truncate(&s, max).to_string(),
+    };
+    let text = |s: Option<String>| s.map(|s| cut(s, MAX_ITEM_TEXT));
+    items
+        .into_iter()
+        .filter(|i| !i.id.is_empty() && i.id.len() <= MAX_ITEM_ID)
+        .take(MAX_ITEMS)
+        .map(|i| PickItem {
+            id: i.id,
+            label: cut(i.label, MAX_ITEM_TEXT),
+            subtitle: text(i.subtitle),
+            group: text(i.group),
+            icon: i.icon.map(|s| cut(s, MAX_ITEM_ICON)),
+            state: text(i.state),
+        })
+        .collect()
+}
+
 /// The instance thread: instantiate, then one guest call per event until stopped or a trap.
-fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Event>) -> Exit {
+fn run(
+    mut store: Store<HostState>,
+    pre: &PluginBasePre<HostState>,
+    list_items: Option<ComponentExportIndex>,
+    rx: Receiver<Event>,
+) -> Exit {
     let plugin = Arc::clone(&store.data().plugin);
     let stop = Arc::clone(&store.data().stop);
     let name = store.data().manifest.name.clone();
@@ -646,12 +715,12 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
     };
 
     arm(&mut store);
-    let instantiated = pre.instantiate(&mut store);
+    let instantiated = instantiate(&mut store, pre, list_items);
     store.data_mut().flush_secrets();
     let mut unanswered = None;
     let exit = match instantiated {
         Err(e) => ended(&e),
-        Ok(guest) => loop {
+        Ok((guest, list_items)) => loop {
             if stop.load(Ordering::Relaxed) {
                 break Exit::Stopped;
             }
@@ -686,6 +755,30 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
                         let _ = reply.send(Err(refusal(&ended(&e))));
                         Err(e)
                     }
+                },
+                Event::ListItems {
+                    picker,
+                    query,
+                    group,
+                    reply,
+                } => match &list_items {
+                    None => {
+                        let _ = reply.send(Err(format!("{name} has no list to pick from")));
+                        Ok(())
+                    }
+                    Some(f) => match f.call(s, (picker, query, group)) {
+                        Ok((answer,)) => {
+                            let answer = answer
+                                .map(bound_items)
+                                .map_err(|e| truncate(&e, MAX_ITEM_ERROR).to_string());
+                            let _ = reply.send(answer);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            let _ = reply.send(Err(refusal(&ended(&e))));
+                            Err(e)
+                        }
+                    },
                 },
                 // Socket events reach the plugin only while it has the socket open.
                 Event::Open(socket) => match s.data().net.socket_open(socket) {
@@ -723,8 +816,14 @@ fn run(mut store: Store<HostState>, pre: &PluginPre<HostState>, rx: Receiver<Eve
     // Nothing queued runs any more; actions waiting on a reply get the reason.
     let message = refusal(&exit);
     for event in unanswered.into_iter().chain(rx.try_iter()) {
-        if let Event::Action { reply, .. } = event {
-            let _ = reply.send(Err(message.clone()));
+        match event {
+            Event::Action { reply, .. } => {
+                let _ = reply.send(Err(message.clone()));
+            }
+            Event::ListItems { reply, .. } => {
+                let _ = reply.send(Err(message.clone()));
+            }
+            _ => {}
         }
     }
     // Dropping the store aborts the instance's timers before anyone learns it exited.
@@ -750,7 +849,7 @@ fn crash_reason(e: &wasmtime::Error) -> String {
 }
 
 /// At most `max` bytes of `s`, cut at a character boundary.
-fn truncate(s: &str, max: usize) -> &str {
+pub(super) fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
     }

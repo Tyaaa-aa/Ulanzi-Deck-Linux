@@ -18,9 +18,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use ulanzi_core::model::{PluginEntry, Settings, table_to_json};
-use ulanzi_core::plugin::{CONTRACT, Manifest, ManifestError};
+use ulanzi_core::plugin::{CONTRACT, Manifest, ManifestError, PickItem};
 
 use super::deck_queue::DeckQueue;
+use super::instance::truncate;
 use super::ulanzi::plugin::types::Status;
 use super::{
     Dropped, Event, Exit, InstanceHandle, LoadedPlugin, Output, PluginEngine, PluginError, PluginInfo,
@@ -37,6 +38,8 @@ const STOP_WAIT: Duration = Duration::from_secs(5);
 /// An action waits this long for its reply once queued: the 500 ms call budget plus a generous
 /// margin (a call never outlasts its budget, blocking waits included).
 const REPLY_WAIT: Duration = Duration::from_secs(2);
+/// Longest `list-items` query or group passed to a plugin, in bytes; longer ones are cut.
+const MAX_QUERY: usize = 1024;
 
 pub(super) struct Host {
     pub(super) dir: PathBuf,
@@ -639,15 +642,12 @@ impl Host {
         e.run.take()
     }
 
-    pub(super) async fn action(
-        &self,
-        plugin: &str,
-        action: &str,
-        params: serde_json::Value,
-    ) -> Result<(), PluginError> {
+    /// The running instance of `plugin` and its name, starting it first when it is `Ready` and
+    /// waiting (up to `START_WAIT`) while it starts.
+    async fn running(&self, plugin: &str) -> Result<(Arc<InstanceHandle>, String), PluginError> {
         let deadline = Instant::now() + START_WAIT;
         let mut changes = self.changed.subscribe();
-        let (handle, name) = loop {
+        loop {
             changes.borrow_and_update();
             let name = {
                 let mut st = self.state();
@@ -660,7 +660,7 @@ impl Host {
                     PluginStatus::Incompatible(why) => return Err(PluginError::Load(why.clone())),
                     PluginStatus::Failed(_) => return Err(PluginError::Failed(e.name.clone())),
                     PluginStatus::Running | PluginStatus::Problem(_) => match &e.run {
-                        Some(run) => break (Arc::clone(&run.handle), e.name.clone()),
+                        Some(run) => return Ok((Arc::clone(&run.handle), e.name.clone())),
                         None => return Err(PluginError::Failed(e.name.clone())),
                     },
                     PluginStatus::Ready if closed => return Err(PluginError::Off(e.name.clone())),
@@ -675,25 +675,30 @@ impl Host {
             ) {
                 return Err(PluginError::Action(format!("{name} is still starting")));
             }
-        };
+        }
+    }
 
+    /// Queue `event` (made with the reply sender) on `handle` and wait for its reply.
+    async fn ask<T>(
+        &self,
+        plugin: &str,
+        name: String,
+        handle: Arc<InstanceHandle>,
+        event: impl FnOnce(oneshot::Sender<Result<T, String>>) -> Event,
+    ) -> Result<T, PluginError> {
         let (reply, rx) = oneshot::channel();
-        let posted = handle.post(Event::Action {
-            action: action.to_string(),
-            params,
-            reply,
-        });
+        let posted = handle.post(event(reply));
         drop(handle);
         if posted == Err(Dropped::Full) {
             return Err(PluginError::Action(format!("{name} is busy")));
         }
         let Ok(replied) = tokio::time::timeout(REPLY_WAIT, rx).await else {
             // Still working through earlier events (each call is bounded, so it is not stuck).
-            tracing::warn!(target: "plugin", plugin = %plugin, "no reply to an action within {} s", REPLY_WAIT.as_secs());
+            tracing::warn!(target: "plugin", plugin = %plugin, "no reply within {} s", REPLY_WAIT.as_secs());
             return Err(PluginError::Action(format!("{name} is busy")));
         };
         match replied {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(value)) => Ok(value),
             // The instance answers with these exact texts when it stops or crashes meanwhile.
             Ok(Err(msg)) if msg == PluginError::Off(name.clone()).to_string() => Err(PluginError::Off(name)),
             Ok(Err(msg)) if msg == PluginError::Failed(name.clone()).to_string() => {
@@ -703,6 +708,62 @@ impl Host {
             // The event was dropped: the instance is gone.
             Err(_) => Err(PluginError::Failed(name)),
         }
+    }
+
+    pub(super) async fn action(
+        &self,
+        plugin: &str,
+        action: &str,
+        params: serde_json::Value,
+    ) -> Result<(), PluginError> {
+        let (handle, name) = self.running(plugin).await?;
+        self.ask(plugin, name, handle, |reply| Event::Action {
+            action: action.to_string(),
+            params,
+            reply,
+        })
+        .await
+    }
+
+    pub(super) async fn list_items(
+        &self,
+        plugin: &str,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<PickItem>, PluginError> {
+        // Checked before anything starts: a plugin that cannot answer is not started for nothing.
+        {
+            let st = self.state();
+            let e = st
+                .plugins
+                .get(plugin)
+                .ok_or_else(|| PluginError::NotInstalled(plugin.to_string()))?;
+            let Some(loaded) = &e.loaded else {
+                return Err(PluginError::Load(e.status.detail()));
+            };
+            if !loaded.lists_items {
+                return Err(PluginError::Action(format!(
+                    "{} has no list to pick from",
+                    e.name
+                )));
+            }
+            if loaded.manifest.picker(picker).is_none() {
+                return Err(PluginError::Invalid(format!(
+                    "{} has no picker \"{picker}\"",
+                    e.name
+                )));
+            }
+        }
+        let (handle, name) = self.running(plugin).await?;
+        let cut = |s: &str| truncate(s, MAX_QUERY).to_string();
+        self.ask(plugin, name, handle, |reply| Event::ListItems {
+            picker: picker.to_string(),
+            query: cut(query),
+            group: cut(group),
+            reply,
+        })
+        .await
     }
 
     pub(super) async fn apply_settings(&self, settings: &Settings) {

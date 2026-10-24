@@ -670,6 +670,25 @@ impl DeckService {
         serde_json::to_string(&i).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
+    /// The entries of the plugin's picker `picker` (declared in its `[[pickers]]`) matching `query`
+    /// (`""`: all), only those in `group` unless it is `""`, as a JSON array of `PickItem`. Starts
+    /// the plugin if needed. Errors: NotFound (not installed), Invalid (undeclared picker),
+    /// Unavailable (the plugin's own message, for example "not connected", or it is off or busy).
+    async fn plugin_list_items(
+        &self,
+        id: String,
+        picker: String,
+        query: String,
+        group: String,
+    ) -> Result<String> {
+        let items = self
+            .plugins()?
+            .list_items(&id, &picker, &query, &group)
+            .await
+            .map_err(plugin_err)?;
+        serde_json::to_string(&items).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
     /// The declared secret keys of the plugin that are set (never their values).
     async fn plugin_secret_keys(&self, id: String) -> Result<Vec<String>> {
         self.plugins()?.secret_keys(&id).await.map_err(plugin_err)

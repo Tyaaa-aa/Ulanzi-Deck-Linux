@@ -7,6 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use futures_util::StreamExt;
+use ulanzi_core::plugin::PickItem;
 use ulanzi_core::store::{ProfileLoad, Store, parse_profile};
 use ulanzi_deckd::dbus::{BUS_NAME, INTERFACE, OBJECT_PATH};
 
@@ -108,12 +109,56 @@ enum PluginCmd {
     Restart { id: String },
     /// Allow or refuse installing plugins from a folder.
     DevMode { state: OnOff },
+    /// List what a plugin's picker offers (starts the plugin if needed).
+    Items {
+        id: String,
+        picker: String,
+        /// Only entries matching this text.
+        #[arg(default_value = "")]
+        query: String,
+        /// Only entries in this group.
+        #[arg(long, default_value = "")]
+        group: String,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq)]
 enum OnOff {
     On,
     Off,
+}
+
+/// `PluginListItems`: the entries of a plugin's picker.
+async fn plugin_list_items(
+    p: &zbus::Proxy<'_>,
+    id: &str,
+    picker: &str,
+    query: &str,
+    group: &str,
+) -> Result<Vec<PickItem>, String> {
+    let json: String = p
+        .call("PluginListItems", &(id, picker, query, group))
+        .await
+        .map_err(not_running)?;
+    serde_json::from_str(&json).map_err(|e| format!("unexpected answer from the service: {e}"))
+}
+
+/// `plugin items` output: one entry per line, id first, then the label and what else it has.
+fn items_table(items: &[PickItem]) -> String {
+    if items.is_empty() {
+        return "nothing to pick\n".into();
+    }
+    let width = items.iter().map(|i| i.id.chars().count()).max().unwrap_or(0);
+    let mut out = String::new();
+    for i in items {
+        let mut line = format!("{:<width$}  {}", i.id, i.label);
+        for extra in [&i.subtitle, &i.group, &i.state].into_iter().flatten() {
+            line.push_str(&format!("  [{extra}]"));
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
 }
 
 /// One row of `PluginList`: id, name, version, status, detail.
@@ -468,6 +513,15 @@ async fn plugin(cmd: PluginCmd) -> Result<(), String> {
             .call::<_, _, ()>("PluginRestart", &(id.as_str(),))
             .await
             .map_err(not_running)?,
+        PluginCmd::Items {
+            id,
+            picker,
+            query,
+            group,
+        } => print!(
+            "{}",
+            items_table(&plugin_list_items(&p, &id, &picker, &query, &group).await?)
+        ),
         PluginCmd::DevMode { state } => {
             let text: String = p.call("GetSettings", &()).await.map_err(not_running)?;
             let mut s: ulanzi_core::model::Settings = toml::from_str(&text).map_err(|e| e.to_string())?;
@@ -641,7 +695,43 @@ mod tests {
             PluginCmd::DevMode { state: OnOff::On }
         );
         assert!(plugin(&["plugin", "dev-mode", "maybe"]).is_err());
+        assert_eq!(
+            plugin(&["plugin", "items", "obs", "scenes", "--group", "x"]).expect("ok"),
+            PluginCmd::Items {
+                id: "obs".into(),
+                picker: "scenes".into(),
+                query: String::new(),
+                group: "x".into(),
+            }
+        );
+        assert_eq!(
+            plugin(&["plugin", "items", "ha", "entities", "kitchen"]).expect("ok"),
+            PluginCmd::Items {
+                id: "ha".into(),
+                picker: "entities".into(),
+                query: "kitchen".into(),
+                group: String::new(),
+            }
+        );
+        assert!(plugin(&["plugin", "items", "obs"]).is_err());
         assert!(plugin(&["plugin", "remove"]).is_err());
+    }
+
+    #[test]
+    fn items_lines() {
+        let item = |id: &str, label: &str| ulanzi_core::plugin::PickItem {
+            id: id.into(),
+            label: label.into(),
+            subtitle: None,
+            group: None,
+            icon: None,
+            state: None,
+        };
+        let mut lamp = item("light.kitchen", "Kitchen");
+        lamp.state = Some("on".into());
+        let text = items_table(&[item("a", "A"), lamp]);
+        assert_eq!(text, "a              A\nlight.kitchen  Kitchen  [on]\n");
+        assert_eq!(items_table(&[]), "nothing to pick\n");
     }
 
     #[test]

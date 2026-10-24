@@ -1,4 +1,4 @@
-//! Ulanzi Deck plugin contract (`ulanzi:plugin@1.0.0`). The WIT lives in `wit/plugin.wit`.
+//! Ulanzi Deck plugin contract (`ulanzi:plugin@1.1.0`). The WIT lives in `wit/plugin.wit`.
 //!
 //! Write a plugin by implementing [`Plugin`] and calling [`export_plugin!`] in the crate root;
 //! build it with `cargo build --release --target wasm32-wasip2`. Test it natively with
@@ -63,6 +63,49 @@ pub enum Status {
     Problem,
 }
 
+/// One entry of a picker list (contract 1.1), returned from [`Plugin::list_items`]:
+/// `Item::new("scene-1", "Intro").group("Show").state("live")`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Item {
+    /// What the setting or action param stores.
+    pub id: String,
+    /// What the user sees.
+    pub label: String,
+    pub subtitle: Option<String>,
+    /// The heading the entry is listed under (pickers with `groups = true`).
+    pub group: Option<String>,
+    /// An icon name, or a short text.
+    pub icon: Option<String>,
+    /// Live state, shown dimmed next to the entry (for example "on").
+    pub state: Option<String>,
+}
+
+impl Item {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Item {
+            id: id.into(),
+            label: label.into(),
+            ..Item::default()
+        }
+    }
+    pub fn subtitle(mut self, s: impl Into<String>) -> Self {
+        self.subtitle = Some(s.into());
+        self
+    }
+    pub fn group(mut self, g: impl Into<String>) -> Self {
+        self.group = Some(g.into());
+        self
+    }
+    pub fn icon(mut self, i: impl Into<String>) -> Self {
+        self.icon = Some(i.into());
+        self
+    }
+    pub fn state(mut self, s: impl Into<String>) -> Self {
+        self.state = Some(s.into());
+        self
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Socket(pub u32);
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
@@ -80,6 +123,19 @@ pub trait Plugin: Default + 'static {
     }
     /// A key pressed one of the plugin's actions. An error is shown to the user.
     fn action(&mut self, cx: &mut Cx, action: &str, params: Value) -> Result<(), String>;
+    /// The entries of the picker `picker` (declared in `[[pickers]]`) matching `query` (what the
+    /// user typed; `""` for all), only those in `group` unless it is `""`. Answer from memory: the
+    /// call has the usual 500 ms budget, so never wait for the network here. An error (for example
+    /// "not connected") is shown to the user, who can retry or type a value instead.
+    fn list_items(
+        &mut self,
+        cx: &mut Cx,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<Item>, String> {
+        Err("no list to pick from".into())
+    }
     fn opened(&mut self, cx: &mut Cx, socket: Socket) {}
     fn message(&mut self, cx: &mut Cx, socket: Socket, data: Payload) {}
     fn closed(&mut self, cx: &mut Cx, socket: Socket, reason: &str) {}
@@ -285,6 +341,20 @@ macro_rules! export_plugin {
                 }
                 fn on_timer(timer: u32) {
                     with(&PLUGIN, |p, cx| p.timer(cx, Timer(timer)));
+                }
+                fn list_items(picker: String, query: String, group: String) -> Result<Vec<wit::Item>, String> {
+                    let items = with(&PLUGIN, |p, cx| p.list_items(cx, &picker, &query, &group))?;
+                    Ok(items
+                        .into_iter()
+                        .map(|i| wit::Item {
+                            id: i.id,
+                            label: i.label,
+                            subtitle: i.subtitle,
+                            group: i.group,
+                            icon: i.icon,
+                            state: i.state,
+                        })
+                        .collect())
                 }
             }
 

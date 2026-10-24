@@ -1,0 +1,9 @@
+id = "legacy"
+name = "Legacy"
+version = "1.0.0"
+contract = "1.0"
+description = "Host test plugin built against the frozen 1.0 contract."
+
+[[actions]]
+id = "ping"
+name = "Ping"

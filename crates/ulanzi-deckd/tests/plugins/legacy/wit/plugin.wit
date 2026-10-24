@@ -1,0 +1,61 @@
+package ulanzi:plugin@1.0.0;
+
+interface types {
+    variant payload { text(string), binary(list<u8>) }
+    record http-request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+    record http-response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+    enum log-level { debug, info, warn, error }
+    /// The plugin's own connection status, shown next to the plugin in the app.
+    enum status { ok, connecting, problem }
+}
+
+/// Always available.
+interface core {
+    use types.{log-level, status};
+    /// Fire `on-timer(id)` after `ms`; again every `ms` when `repeat`.
+    set-timer: func(ms: u32, repeat: bool) -> u32;
+    cancel-timer: func(id: u32);
+    /// Live state; shown on keys as `{<plugin-id>.<key>}`.
+    set-state: func(key: string, value: string);
+    secret-get: func(key: string) -> option<string>;
+    secret-set: func(key: string, value: string);
+    secret-delete: func(key: string);
+    set-status: func(status: status, message: string);
+    log: func(level: log-level, message: string);
+}
+
+/// Needs `network` or `lan` permission. Calls return at once; results arrive as events.
+interface net {
+    use types.{payload, http-request};
+    /// `ws://` or `wss://`. Then `on-open` or `on-closed`.
+    ws-open: func(url: string) -> result<u32, string>;
+    tcp-open: func(host: string, port: u16, tls: bool) -> result<u32, string>;
+    send: func(socket: u32, data: payload) -> result<_, string>;
+    close: func(socket: u32);
+    /// Then `on-http(id, …)`.
+    fetch: func(request: http-request) -> result<u32, string>;
+}
+
+world plugin {
+    use types.{payload, http-response};
+    import core;
+    import net;
+    /// Settings from `[plugins.<id>.settings]` as JSON. Called at start and when settings change.
+    export init: func(settings: string) -> result<_, string>;
+    /// `params` is the key's action params as JSON. An error is shown to the user.
+    export on-action: func(action: string, params: string) -> result<_, string>;
+    export on-open: func(socket: u32);
+    export on-message: func(socket: u32, data: payload);
+    export on-closed: func(socket: u32, reason: string);
+    export on-http: func(request: u32, response: result<http-response, string>);
+    export on-timer: func(timer: u32);
+}

@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::backend::{self, Fake};
-use crate::{Cx, HttpRequest, HttpResponse, Payload, Plugin, Request, Socket, Status, Timer};
+use crate::{Cx, HttpRequest, HttpResponse, Item, Payload, Plugin, Request, Socket, Status, Timer};
 
 pub struct Harness<P: Plugin> {
     plugin: P,
@@ -39,6 +39,10 @@ impl<P: Plugin> Harness<P> {
     }
     pub fn action(&mut self, action: &str, params: Value) -> Result<(), String> {
         self.run(|p, cx| p.action(cx, action, params))
+    }
+    /// Ask for the entries of picker `picker` (contract 1.1), as the host does when a picker opens.
+    pub fn list_items(&mut self, picker: &str, query: &str, group: &str) -> Result<Vec<Item>, String> {
+        self.run(|p, cx| p.list_items(cx, picker, query, group))
     }
     /// Deliver `on-open` for a socket.
     pub fn open(&mut self, s: Socket) {
@@ -122,6 +126,51 @@ mod tests {
         fn opened(&mut self, cx: &mut Cx, socket: Socket) {
             let _ = cx.send(socket, Payload::Text("hi".into()));
         }
+        fn list_items(
+            &mut self,
+            cx: &mut Cx,
+            picker: &str,
+            query: &str,
+            group: &str,
+        ) -> Result<Vec<Item>, String> {
+            cx.set_state("asked", picker);
+            Ok(vec![
+                Item::new("a", format!("{query}/{group}"))
+                    .group(group)
+                    .state("on"),
+            ])
+        }
+    }
+
+    /// Implements only `action`: `list_items` has the default answer.
+    #[derive(Default)]
+    struct Bare;
+
+    impl Plugin for Bare {
+        fn action(&mut self, _cx: &mut Cx, _action: &str, _params: Value) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn list_items_comes_back() {
+        let mut h = Harness::<Demo>::new();
+        let items = h.list_items("things", "q", "g").unwrap();
+        let want = Item {
+            id: "a".into(),
+            label: "q/g".into(),
+            subtitle: None,
+            group: Some("g".into()),
+            icon: None,
+            state: Some("on".into()),
+        };
+        assert_eq!(items, [want]);
+        assert_eq!(h.state("asked"), Some("things"));
+        let mut bare = Harness::<Bare>::new();
+        assert_eq!(
+            bare.list_items("things", "", ""),
+            Err("no list to pick from".to_string())
+        );
     }
 
     #[test]

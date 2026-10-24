@@ -1,7 +1,9 @@
 use std::net::IpAddr;
 
 use ulanzi_core::model::{Action, Key, Model, Profile, Settings, table_to_json};
-use ulanzi_core::plugin::{Manifest, ManifestError, Permissions, host_allowed, is_lan};
+use ulanzi_core::plugin::{
+    CONTRACT, Manifest, ManifestError, Permissions, PickItem, PickerStyle, host_allowed, is_lan,
+};
 use ulanzi_core::store::parse_profile;
 
 const OBS: &str = r##"
@@ -100,9 +102,9 @@ fn manifest_rejects() {
         Manifest::parse(&two),
         Err(ManifestError::Incompatible { needs }) if needs == "2.0"
     ));
-    let one_one = manifest("obs", "1.0.0", "1.1", "");
+    let one_two = manifest("obs", "1.0.0", "1.2", "");
     assert!(matches!(
-        Manifest::parse(&one_one),
+        Manifest::parse(&one_two),
         Err(ManifestError::Incompatible { .. })
     ));
     let dup = manifest(
@@ -516,4 +518,154 @@ mod typed_fields {
         assert_eq!(ha.secret_keys(), ["token"]);
         assert!(obs.settings[1].is_integer());
     }
+}
+
+// ---- Contract 1.1: pickers ----
+
+#[test]
+fn pickers_parse_with_defaults() {
+    let text = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        "[[pickers]]\nid = \"scenes\"\n\n[[pickers]]\nid = \"sources\"\nstyle = \"grid\"\ngroups = true\nmulti = true\n",
+    );
+    let m = Manifest::parse(&text).expect("parses");
+    assert_eq!(m.pickers.len(), 2);
+    let scenes = m.picker("scenes").expect("scenes");
+    assert_eq!(scenes.style, PickerStyle::List);
+    assert!(!scenes.groups);
+    assert!(!scenes.multi);
+    let sources = m.picker("sources").expect("sources");
+    assert_eq!(sources.style, PickerStyle::Grid);
+    assert!(sources.groups);
+    assert!(sources.multi);
+    assert!(m.picker("nope").is_none());
+    let bad = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        "[[pickers]]\nid = \"x\"\nstyle = \"carousel\"\n",
+    );
+    assert!(matches!(Manifest::parse(&bad), Err(ManifestError::Parse(_))));
+}
+
+#[test]
+fn item_field_needs_a_declared_picker() {
+    let action = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        "[[actions]]\nid = \"go\"\nname = \"Go\"\nparams = [{ key = \"scene\", kind = \"item\", picker = \"scenes\" }]\n",
+    );
+    match Manifest::parse(&action) {
+        Err(e @ ManifestError::UnknownPicker { .. }) => {
+            assert_eq!(
+                e,
+                ManifestError::UnknownPicker {
+                    scope: "action \"go\"".into(),
+                    key: "scene".into(),
+                    picker: "scenes".into(),
+                }
+            );
+            assert!(e.to_string().contains("scenes"), "{e}");
+        }
+        other => panic!("accepted: {other:?}"),
+    }
+    let setting = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        "[[settings]]\nkey = \"room\"\nkind = \"item\"\npicker = \"rooms\"\n",
+    );
+    assert!(matches!(
+        Manifest::parse(&setting),
+        Err(ManifestError::UnknownPicker { scope, key, picker })
+            if scope == "the settings" && key == "room" && picker == "rooms"
+    ));
+}
+
+#[test]
+fn item_without_picker_is_still_allowed() {
+    let text = manifest(
+        "obs",
+        "1.0.0",
+        "1.0",
+        "[[actions]]\nid = \"go\"\nname = \"Go\"\nparams = [{ key = \"scene\", kind = \"item\" }]\n",
+    );
+    let m = Manifest::parse(&text).expect("a plain text field");
+    assert!(m.pickers.is_empty());
+    assert_eq!(m.actions[0].params[0].picker, None);
+}
+
+#[test]
+fn duplicate_picker_is_refused() {
+    let text = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        "[[pickers]]\nid = \"scenes\"\n[[pickers]]\nid = \"scenes\"\nstyle = \"grid\"\n",
+    );
+    assert!(matches!(
+        Manifest::parse(&text),
+        Err(ManifestError::DuplicatePicker(id)) if id == "scenes"
+    ));
+}
+
+#[test]
+fn params_cannot_use_a_multi_picker() {
+    let pickers = "[[pickers]]\nid = \"sources\"\nmulti = true\n";
+    let param = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        &format!(
+            "{pickers}[[actions]]\nid = \"go\"\nname = \"Go\"\nparams = [{{ key = \"src\", kind = \"item\", picker = \"sources\" }}]\n"
+        ),
+    );
+    assert!(matches!(
+        Manifest::parse(&param),
+        Err(ManifestError::MultiParam { action, key }) if action == "go" && key == "src"
+    ));
+    // A setting may use one: it stores a list of ids.
+    let setting = manifest(
+        "obs",
+        "1.0.0",
+        "1.1",
+        &format!("{pickers}[[settings]]\nkey = \"watched\"\nkind = \"item\"\npicker = \"sources\"\n"),
+    );
+    assert!(Manifest::parse(&setting).is_ok());
+}
+
+#[test]
+fn contract_1_1_loads_and_1_2_does_not() {
+    assert_eq!(CONTRACT, (1, 1));
+    for ok in ["1.0", "1.1"] {
+        assert!(Manifest::parse(&manifest("obs", "1.0.0", ok, "")).is_ok(), "{ok}");
+    }
+    for bad in ["1.2", "2.0", "0.9"] {
+        assert!(
+            matches!(
+                Manifest::parse(&manifest("obs", "1.0.0", bad, "")),
+                Err(ManifestError::Incompatible { needs }) if needs == bad
+            ),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn pick_items_skip_empty_fields_in_json() {
+    let item = PickItem {
+        id: "a".into(),
+        label: "A".into(),
+        subtitle: None,
+        group: Some("g".into()),
+        icon: None,
+        state: None,
+    };
+    let json = serde_json::to_string(&item).expect("json");
+    assert_eq!(json, r#"{"id":"a","label":"A","group":"g"}"#);
+    let back: PickItem = serde_json::from_str(&json).expect("parse");
+    assert_eq!(back, item);
 }

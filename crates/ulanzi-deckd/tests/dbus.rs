@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use ulanzi_core::model::{Model, Profile, Settings};
-use ulanzi_core::plugin::{Inspected, Manifest};
+use ulanzi_core::plugin::{Inspected, Manifest, PickItem};
 use ulanzi_core::store::Store;
 use ulanzi_deckd::actions::Executor;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, INTERFACE, OBJECT_PATH, forward_signals};
@@ -534,6 +534,41 @@ async fn plugin_manifests_json() {
     let json: String = p.call("PluginManifests", &()).await.expect("manifests");
     let m: BTreeMap<String, Manifest> = serde_json::from_str(&json).expect("json");
     assert_eq!(m["probe"].settings[0].key, "password");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_list_items_round_trip() {
+    let Some(r) = probe_rig().await else { return };
+    let p = proxy(&r.client).await;
+    let json: String = p
+        .call("PluginListItems", &("probe", "things", "lamp", "kitchen"))
+        .await
+        .expect("items");
+    let items: Vec<PickItem> = serde_json::from_str(&json).expect("json");
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0].label, "One lamp kitchen");
+    assert_eq!(items[1].subtitle, None);
+    let name = |e: &zbus::Error| match e {
+        zbus::Error::MethodError(name, ..) => name.to_string(),
+        other => panic!("not an error reply: {other}"),
+    };
+    let e = p
+        .call::<_, _, String>("PluginListItems", &("ghost", "things", "", ""))
+        .await
+        .expect_err("unknown plugin");
+    assert_eq!(name(&e), "io.github.tyaaa_aa.UlanziDeck1.Error.NotFound");
+    assert_eq!(error_message(e), "the ghost plugin is not installed");
+    let e = p
+        .call::<_, _, String>("PluginListItems", &("probe", "nope", "", ""))
+        .await
+        .expect_err("undeclared picker");
+    assert_eq!(name(&e), "io.github.tyaaa_aa.UlanziDeck1.Error.Invalid");
+    let e = p
+        .call::<_, _, String>("PluginListItems", &("probe", "refuse", "", ""))
+        .await
+        .expect_err("plugin refuses");
+    assert_eq!(name(&e), "io.github.tyaaa_aa.UlanziDeck1.Error.Unavailable");
+    assert_eq!(error_message(e), "not connected");
 }
 
 #[tokio::test(flavor = "multi_thread")]

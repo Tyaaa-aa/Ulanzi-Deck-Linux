@@ -3,10 +3,10 @@ use serde::{Deserialize, Serialize};
 use super::{Field, FieldKind};
 
 /// The plugin contract this host implements (major, minor).
-pub const CONTRACT: (u32, u32) = (1, 0);
+pub const CONTRACT: (u32, u32) = (1, 1);
 
-/// A plugin's `plugin.toml`. Tables the host does not read yet (pickers, faces, widgets,
-/// variables, detect, auth) are accepted and ignored.
+/// A plugin's `plugin.toml`. Tables the host does not read yet (faces, widgets, variables,
+/// detect, auth) are accepted and ignored.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub id: String,
@@ -31,6 +31,50 @@ pub struct Manifest {
     /// Settings the GUI renders as the plugin's settings page.
     #[serde(default)]
     pub settings: Vec<Field>,
+    /// Lists the user picks `item` fields from (contract 1.1); the plugin fills them (`list-items`).
+    #[serde(default)]
+    pub pickers: Vec<Picker>,
+}
+
+/// How the GUI lays out a picker's list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PickerStyle {
+    #[default]
+    List,
+    Grid,
+}
+
+/// A `[[pickers]]` entry: a list an `item` field (`picker = "<id>"`) is picked from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Picker {
+    pub id: String,
+    #[serde(default)]
+    pub style: PickerStyle,
+    /// The entries carry groups; the GUI offers a group filter.
+    #[serde(default)]
+    pub groups: bool,
+    /// Several entries can be picked; the setting stores a list of ids. Settings only.
+    #[serde(default)]
+    pub multi: bool,
+}
+
+/// One entry of a picker list as the plugin answered `list-items` (bounded by the host).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickItem {
+    /// What the setting or action param stores.
+    pub id: String,
+    /// What the user sees.
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Live state, shown dimmed next to the entry (for example "on").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 /// What a plugin may reach outside its sandbox.
@@ -81,6 +125,16 @@ pub enum ManifestError {
     SecretParam { action: String, key: String },
     #[error("a field in {scope} has an empty key")]
     EmptyFieldKey { scope: String },
+    #[error("picker \"{0}\" is declared twice")]
+    DuplicatePicker(String),
+    #[error("\"{key}\" in {scope} uses picker \"{picker}\", which is not declared in [[pickers]]")]
+    UnknownPicker {
+        scope: String,
+        key: String,
+        picker: String,
+    },
+    #[error("action \"{action}\": \"{key}\" cannot use a picker with multi = true; only settings can")]
+    MultiParam { action: String, key: String },
 }
 
 impl Manifest {
@@ -106,17 +160,54 @@ impl Manifest {
                 return Err(ManifestError::DuplicateAction(a.id.clone()));
             }
         }
+        for (i, p) in m.pickers.iter().enumerate() {
+            if m.pickers[..i].iter().any(|q| q.id == p.id) {
+                return Err(ManifestError::DuplicatePicker(p.id.clone()));
+            }
+        }
         check_fields("the settings".into(), &m.settings)?;
+        m.check_pickers("the settings".into(), &m.settings)?;
         for a in &m.actions {
-            check_fields(format!("action \"{}\"", a.id), &a.params)?;
+            let scope = format!("action \"{}\"", a.id);
+            check_fields(scope.clone(), &a.params)?;
             if let Some(f) = a.params.iter().find(|f| f.kind == FieldKind::Secret) {
                 return Err(ManifestError::SecretParam {
                     action: a.id.clone(),
                     key: f.key.clone(),
                 });
             }
+            m.check_pickers(scope, &a.params)?;
+            let multi = |f: &&Field| {
+                f.picker
+                    .as_deref()
+                    .and_then(|p| m.picker(p))
+                    .is_some_and(|p| p.multi)
+            };
+            if let Some(f) = a.params.iter().filter(|f| f.kind == FieldKind::Item).find(multi) {
+                return Err(ManifestError::MultiParam {
+                    action: a.id.clone(),
+                    key: f.key.clone(),
+                });
+            }
         }
         Ok(m)
+    }
+
+    /// Every `item` field in `fields` that names a picker names a declared one. An `item` field
+    /// without a picker is a plain text field (contract 1.0).
+    fn check_pickers(&self, scope: String, fields: &[Field]) -> Result<(), ManifestError> {
+        for f in fields.iter().filter(|f| f.kind == FieldKind::Item) {
+            if let Some(picker) = &f.picker
+                && self.picker(picker).is_none()
+            {
+                return Err(ManifestError::UnknownPicker {
+                    scope,
+                    key: f.key.clone(),
+                    picker: picker.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Keys of the settings declared as secrets.
@@ -145,6 +236,11 @@ impl Manifest {
 
     pub fn action(&self, id: &str) -> Option<&ManifestAction> {
         self.actions.iter().find(|a| a.id == id)
+    }
+
+    /// The declared `[[pickers]]` entry `id`.
+    pub fn picker(&self, id: &str) -> Option<&Picker> {
+        self.pickers.iter().find(|p| p.id == id)
     }
 
     /// Does the plugin ask to talk to the network at all?

@@ -1,4 +1,4 @@
-package ulanzi:plugin@1.0.0;
+package ulanzi:plugin@1.1.0;
 
 interface types {
     variant payload { text(string), binary(list<u8>) }
@@ -16,6 +16,17 @@ interface types {
     enum log-level { debug, info, warn, error }
     /// The plugin's own connection status, shown next to the plugin in the app.
     enum status { ok, connecting, problem }
+    /// One entry of a picker list (contract 1.1). `id` is what a setting or action param
+    /// stores; `label` is what the user sees. `group` sorts it under a heading, `icon` is an
+    /// icon name or a short text, `state` is live state shown dimmed next to it (for example "on").
+    record item {
+        id: string,
+        label: string,
+        subtitle: option<string>,
+        group: option<string>,
+        icon: option<string>,
+        state: option<string>,
+    }
 }
 
 /// Always available.
@@ -45,7 +56,8 @@ interface net {
     fetch: func(request: http-request) -> result<u32, string>;
 }
 
-world plugin {
+/// Contract 1.0: what every plugin exports. The host binds this world.
+world plugin-base {
     use types.{payload, http-response};
     import core;
     import net;
@@ -58,4 +70,15 @@ world plugin {
     export on-closed: func(socket: u32, reason: string);
     export on-http: func(request: u32, response: result<http-response, string>);
     export on-timer: func(timer: u32);
+}
+
+/// Contract 1.1: 1.0 plus picker lists. Plugins (the SDK) bind this world.
+world plugin {
+    include plugin-base;
+    use types.{item};
+    /// The entries of the picker `picker` (declared in `[[pickers]]`) that match `query` (what the
+    /// user typed, `""` for everything), only those in `group` unless it is `""`. Answer from
+    /// memory (what the plugin already knows), never wait for the network: the call has the same
+    /// 500 ms budget as any other. An error (for example "not connected") is shown to the user.
+    export list-items: func(picker: string, query: string, group: string) -> result<list<item>, string>;
 }

@@ -1,7 +1,7 @@
 id = "probe"
 name = "Probe"
 version = "1.0.0"
-contract = "1.0"
+contract = "1.1"
 description = "Host test plugin: exercises every host function and misbehaves on request."
 
 [permissions]
@@ -15,6 +15,23 @@ label = "Password"
 [[settings]]
 key = "greeting"
 kind = "text"
+
+[[pickers]]
+id = "things"
+groups = true
+
+[[pickers]]
+id = "refuse"
+
+[[pickers]]
+id = "flood"
+style = "grid"
+
+[[pickers]]
+id = "loud"
+
+[[pickers]]
+id = "panic"
 
 [[actions]]
 id = "state"

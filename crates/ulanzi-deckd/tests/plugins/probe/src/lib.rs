@@ -3,7 +3,9 @@
 use std::hint::black_box;
 use std::time::Duration;
 
-use ulanzi_plugin::{Cx, HttpRequest, HttpResponse, Payload, Plugin, Request, Socket, Status, Timer, Value};
+use ulanzi_plugin::{
+    Cx, HttpRequest, HttpResponse, Item, Payload, Plugin, Request, Socket, Status, Timer, Value,
+};
 
 #[derive(Default)]
 pub struct Probe {
@@ -145,6 +147,40 @@ impl Plugin for Probe {
             other => return Err(format!("unknown action: {other}")),
         }
         Ok(())
+    }
+
+    fn list_items(
+        &mut self,
+        _cx: &mut Cx,
+        picker: &str,
+        query: &str,
+        group: &str,
+    ) -> Result<Vec<Item>, String> {
+        match picker {
+            // Echoes `query` and `group` into the first label, so tests see that they arrived.
+            "things" => Ok(vec![
+                Item::new("one", format!("One {query} {group}"))
+                    .subtitle("the first")
+                    .group(group)
+                    .icon("lightbulb")
+                    .state("on"),
+                Item::new("two", "Two"),
+            ]),
+            "refuse" => Err("not connected".into()),
+            // Too many, too long: the host keeps 5000 and cuts every field.
+            "flood" => {
+                let mut items = vec![Item::new("", "empty id"), Item::new("x".repeat(2000), "long id")];
+                items.extend((0..6000).map(|i| {
+                    Item::new(format!("item{i}"), "é".repeat(1000))
+                        .subtitle("s".repeat(2000))
+                        .icon("i".repeat(500))
+                }));
+                Ok(items)
+            }
+            "loud" => Err("e".repeat(10_000)),
+            "panic" => panic!("the probe panics while listing"),
+            other => Err(format!("unknown picker: {other}")),
+        }
     }
 
     fn opened(&mut self, cx: &mut Cx, socket: Socket) {

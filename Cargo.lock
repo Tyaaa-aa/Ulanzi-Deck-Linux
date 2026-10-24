@@ -3828,6 +3828,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ulanzi-plugin-legacy"
+version = "1.0.0"
+dependencies = [
+ "wit-bindgen 0.63.0",
+]
+
+[[package]]
 name = "ulanzi-plugin-obs"
 version = "1.0.0"
 dependencies = [

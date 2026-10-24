@@ -1636,3 +1636,156 @@ async fn secret_keys_see_the_settings_copy() {
     );
     h.host.shutdown().await;
 }
+
+const LEGACY_PACKAGE: &str = "ulanzi-plugin-legacy";
+const LEGACY_MANIFEST: &str = include_str!("plugins/legacy/plugin.toml");
+
+#[tokio::test]
+async fn legacy_1_0_component_loads_and_runs() {
+    // Built against the frozen 1.0 WIT: imports `ulanzi:plugin/core@1.0.0`, no `list-items`.
+    let cache = tempfile::tempdir().expect("cache");
+    let dir = common::plugins::fixture(LEGACY_PACKAGE, LEGACY_MANIFEST);
+    let engine = PluginEngine::new(cache.path()).expect("engine");
+    let manifest = Manifest::parse(LEGACY_MANIFEST).expect("manifest");
+    assert_eq!(manifest.contract, "1.0");
+    let loaded = engine
+        .load(&manifest, &dir.path().join("plugin.wasm"))
+        .expect("a 1.0 component loads");
+    assert!(!loaded.lists_items);
+
+    let setup = |dir: &std::path::Path| plugin_folder(dir, "legacy", LEGACY_MANIFEST, Some(LEGACY_PACKAGE));
+    let mut h = host_with(setup, &Settings::default(), &[], mem_secrets()).await;
+    assert_eq!(h.host.action("legacy", "ping", json!({})).await, Ok(()));
+    assert!(h.saw_state("legacy", "ping", "pong").await);
+    let err = h
+        .host
+        .list_items("legacy", "anything", "", "")
+        .await
+        .expect_err("no list");
+    assert_eq!(err.to_string(), "Legacy has no list to pick from");
+    // Still running: the refusal is not a crash.
+    assert_eq!(h.status("legacy"), Some(PluginStatus::Running));
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn probe_reports_that_it_lists_items() {
+    let cache = tempfile::tempdir().expect("cache");
+    let dir = common::plugins::fixture(PROBE_PACKAGE, PROBE_MANIFEST);
+    let engine = PluginEngine::new(cache.path()).expect("engine");
+    let manifest = Manifest::parse(PROBE_MANIFEST).expect("manifest");
+    let loaded = engine
+        .load(&manifest, &dir.path().join("plugin.wasm"))
+        .expect("load");
+    assert!(loaded.lists_items);
+}
+
+#[tokio::test]
+async fn probe_lists_items() {
+    let h = host_with(probe_folder, &Settings::default(), &["probe"], mem_secrets()).await;
+    let items = h
+        .host
+        .list_items("probe", "things", "lamp", "kitchen")
+        .await
+        .expect("items");
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0].id, "one");
+    assert_eq!(items[0].label, "One lamp kitchen");
+    assert_eq!(items[0].subtitle.as_deref(), Some("the first"));
+    assert_eq!(items[0].group.as_deref(), Some("kitchen"));
+    assert_eq!(items[0].icon.as_deref(), Some("lightbulb"));
+    assert_eq!(items[0].state.as_deref(), Some("on"));
+    assert_eq!(items[1].id, "two");
+    assert_eq!(items[1].subtitle, None);
+    assert_eq!(items[1].state, None);
+    // The plugin's own refusal comes back as its message.
+    let err = h
+        .host
+        .list_items("probe", "refuse", "", "")
+        .await
+        .expect_err("refused");
+    assert_eq!(err, PluginError::Action("not connected".into()));
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn list_items_rejects_undeclared_picker() {
+    let h = host_with(probe_folder, &Settings::default(), &[], mem_secrets()).await;
+    let err = h
+        .host
+        .list_items("probe", "nope", "", "")
+        .await
+        .expect_err("undeclared");
+    assert_eq!(err, PluginError::Invalid("Probe has no picker \"nope\"".into()));
+    // Refused before anything starts.
+    assert_eq!(h.status("probe"), Some(PluginStatus::Ready));
+    let err = h
+        .host
+        .list_items("ghost", "things", "", "")
+        .await
+        .expect_err("unknown plugin");
+    assert_eq!(err, PluginError::NotInstalled("ghost".into()));
+}
+
+#[tokio::test]
+async fn list_items_starts_a_ready_plugin() {
+    let h = host_with(probe_folder, &Settings::default(), &[], mem_secrets()).await;
+    assert_eq!(h.status("probe"), Some(PluginStatus::Ready));
+    let items = h.host.list_items("probe", "things", "", "").await.expect("items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(h.status("probe"), Some(PluginStatus::Running));
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn list_items_is_bounded() {
+    let h = host_with(probe_folder, &Settings::default(), &["probe"], mem_secrets()).await;
+    let items = h.host.list_items("probe", "flood", "", "").await.expect("items");
+    assert_eq!(items.len(), 5000);
+    for i in &items {
+        assert!(!i.id.is_empty() && i.id.len() <= 1024, "id {}", i.id.len());
+        assert!(i.label.len() <= 256, "label {}", i.label.len());
+        for f in [&i.subtitle, &i.group, &i.state] {
+            assert!(f.as_ref().is_none_or(|s| s.len() <= 256));
+        }
+        assert!(i.icon.as_ref().is_none_or(|s| s.len() <= 128));
+    }
+    // Cut at a character boundary: the labels are "é" repeated.
+    assert!(items[0].label.chars().all(|c| c == 'é'));
+    assert_eq!(
+        items[0].id, "item0",
+        "items with an empty or overlong id are dropped"
+    );
+    let err = h
+        .host
+        .list_items("probe", "loud", "", "")
+        .await
+        .expect_err("refused");
+    assert!(err.to_string().len() <= 4096, "{}", err.to_string().len());
+    assert_eq!(h.status("probe"), Some(PluginStatus::Running));
+    h.host.shutdown().await;
+}
+
+#[tokio::test]
+async fn list_items_trap_counts_as_crash() {
+    let mut h = host_with(probe_folder, &Settings::default(), &["probe"], mem_secrets()).await;
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    let cleared = |m: &DeckMsg| matches!(m, DeckMsg::PluginCleared(id) if id == "probe");
+    let err = h
+        .host
+        .list_items("probe", "panic", "", "")
+        .await
+        .expect_err("panics");
+    assert_eq!(err, PluginError::Failed("Probe".into()));
+    assert!(h.deck_saw(cleared).await, "restarted once like any crash");
+    h.wait_status("probe", |s| *s == PluginStatus::Running).await;
+    let err = h
+        .host
+        .list_items("probe", "panic", "", "")
+        .await
+        .expect_err("panics");
+    assert_eq!(err, PluginError::Failed("Probe".into()));
+    h.wait_status("probe", |s| matches!(s, PluginStatus::Failed(_)))
+        .await;
+    h.host.shutdown().await;
+}

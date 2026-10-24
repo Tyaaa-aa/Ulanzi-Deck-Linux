@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use ulanzi_core::plugin::Manifest;
-use wasmtime::component::{Component, HasData, Linker, ResourceTable};
+use wasmtime::component::types::ComponentItem;
+use wasmtime::component::{Component, ComponentExportIndex, HasData, Linker, ResourceTable};
 use wasmtime::{Cache, CacheConfig, Config, Engine};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi::p2::bindings::{cli, clocks, random};
@@ -155,8 +156,15 @@ impl PluginEngine {
                 manifest.name
             ))
         })?;
+        // Contract 1.1: a component built against 1.0 has no `list-items`.
+        let list_items = match component.get_export(None, "list-items") {
+            Some((ComponentItem::ComponentFunc(_), index)) => Some(index),
+            _ => None,
+        };
         Ok(LoadedPlugin {
             manifest: manifest.clone(),
+            lists_items: list_items.is_some(),
+            list_items,
             component,
             pre,
             ticker: Arc::clone(&self.ticker),
@@ -171,6 +179,9 @@ impl PluginEngine {
 /// A compiled plugin that links against the host; `spawn_instance` instantiates it.
 pub struct LoadedPlugin {
     pub manifest: Manifest,
+    /// The component exports `list-items` (built against contract 1.1 or later).
+    pub lists_items: bool,
+    pub(crate) list_items: Option<ComponentExportIndex>,
     #[allow(dead_code)] // kept with its pre-instance; nothing reads it directly yet
     pub(crate) component: Component,
     pub(crate) pre: wasmtime::component::InstancePre<HostState>,

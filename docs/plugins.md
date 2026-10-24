@@ -53,7 +53,7 @@ background after it starts, and a plugin key pressed before that reports "plugin
 
 The interface between plugin and service is written in WIT:
 [`crates/ulanzi-plugin/wit/plugin.wit`](../crates/ulanzi-plugin/wit/plugin.wit), package
-`ulanzi:plugin@1.0.0`. The SDK wraps it, so most plugins never touch it directly.
+`ulanzi:plugin@1.1.0`. The SDK wraps it, so most plugins never touch it directly.
 
 What the service calls in your plugin (the exports):
 
@@ -66,6 +66,7 @@ What the service calls in your plugin (the exports):
 | `on-closed(socket, reason)` | A socket closed or failed to open. |
 | `on-http(request, response)` | A `fetch` finished, with the response or an error text. |
 | `on-timer(timer)` | A timer fired. |
+| `list-items(picker, query, group)` | Contract 1.1. The user opened one of your [pickers](#pickers). Return its entries that match `query` (what the user typed, `""` for all), only those in `group` unless it is `""`. An error (for example "not connected") is shown with Retry and "Enter manually…". |
 
 What your plugin can call (the imports):
 
@@ -85,6 +86,41 @@ Calls never wait. `ws-open`, `tcp-open` and `fetch` return an id at once; the an
 event (`on-open`, `on-closed`, `on-http`). Events for one plugin arrive one at a time, in order.
 A dial turn is an ordinary `on-action` for the action assigned to that direction (left, right, press
 or hold).
+
+### Pickers
+
+Contract 1.1 adds `list-items`, so the user picks a scene or an entity from a list instead of typing
+its name. Declare each list in the manifest and point `item` fields at it:
+
+```toml
+contract = "1.1"
+
+[[pickers]]
+id = "scenes"
+style = "grid"      # list (default) | grid
+groups = true       # entries have groups; the app offers a group filter
+multi = false       # true: several entries; settings only, the value is a list of ids
+
+[[actions]]
+id = "set_scene"
+name = "Switch scene"
+params = [{ key = "scene", kind = "item", picker = "scenes", label = "Scene" }]
+```
+
+Each entry (`item` in the WIT, `Item` in the SDK) has an `id` (what is stored), a `label` (what the user
+sees) and optionally a `subtitle`, a `group`, an `icon` (an icon name or short text) and a `state` (live
+state shown dimmed next to it, for example "on").
+
+Answer `list-items` from what the plugin already knows (the scenes it got when it connected, the entity
+states it keeps up to date). Never wait for the network in it: it has the same 500 ms budget as every
+call, and the app waits for the answer. The service starts a plugin that is not running yet when its
+picker opens. It keeps at most 5000 entries and drops entries whose id is empty or longer than 1024
+bytes. It cuts `label`, `subtitle`, `group` and `state` to 256 bytes, `icon` to 128 and an error text to
+4096. A picker the manifest does not declare is refused before the plugin is asked. A plugin built for
+1.0 has no `list-items`: its pickers answer "<name> has no list to pick from".
+
+To offer different lists to different actions (say lights for Toggle and scripts for Run), declare one
+picker for each.
 
 ### Showing state on keys
 
@@ -133,6 +169,7 @@ params = [{ key = "name", kind = "text", label = "Name" }]
 | `[permissions]` | Optional, see below. Nothing is allowed that is not listed. |
 | `[[settings]]` | Optional. The plugin's settings page in the app, one field each; see [Settings and parameters](#settings-and-parameters). |
 | `[[actions]]` | The actions the plugin offers: `id` and `name` (required, ids unique), `icon`, and `params` (fields, as below). |
+| `[[pickers]]` | Contract 1.1. Lists that `item` fields are picked from: `id` (required, unique), `style`, `groups`, `multi`; see [Pickers](#pickers). |
 
 A key uses an action like this in `profile.toml`:
 
@@ -147,12 +184,14 @@ params = { name = "Ana" }
 Values in `params` and in `[plugins.<id>.settings]` that have no JSON form (dates and times) reach the plugin as strings.
 
 **Contract versions.** `contract = "1.0"` loads if the major version equals the service's (1) and the
-minor version is not newer than the service's (0 today). A plugin that asks for more shows as
+minor version is not newer than the service's (1 today). A plugin that asks for more shows as
 `incompatible` and the message "needs a newer Ulanzi Deck". Minor versions only add things, so a plugin
 written for 1.0 keeps working on every later 1.x.
 
-The manifest may also contain tables this version does not read yet (pickers, key faces, widgets,
-variables, detection, sign-in). They are accepted and ignored.
+The manifest may also contain tables this version does not read yet (key faces, widgets, variables,
+detection, sign-in). They are accepted and ignored. A manifest is refused when a picker is declared
+twice, when an `item` field names a picker that is not declared, or when an action param uses a `multi`
+picker.
 
 ### Settings and parameters
 
@@ -170,7 +209,8 @@ the rows under the action in the key editor for `params`.
 | `choice` | Drop-down of `choices` | the chosen value (string) |
 | `color` | Colour button | `"#rrggbb"` |
 | `json` | Text entry that must hold valid JSON | the JSON text, as a string |
-| `item`, `key_combo`, `file` | Text entry (pickers come later) | string |
+| `item` | With a `picker`: the picked entry, from the plugin's list (contract 1.1, see [Pickers](#pickers)). Without one: a text entry | the entry's id (string); a list of ids for a `multi` picker |
+| `key_combo`, `file` | Text entry | string |
 | `secret` | Password entry | nothing in `settings.toml`: see [Secrets](#secrets). Only in `[[settings]]`, never in `params`. |
 
 `choices` is a list of plain values (`["up", "down"]`, shown as "Up", "Down") or of
@@ -226,10 +266,13 @@ pub trait Plugin: Default + 'static {
     fn closed(&mut self, cx: &mut Cx, socket: Socket, reason: &str) {}
     fn http(&mut self, cx: &mut Cx, request: Request, response: Result<HttpResponse, String>) {}
     fn timer(&mut self, cx: &mut Cx, timer: Timer) {}
+    fn list_items(&mut self, cx: &mut Cx, picker: &str, query: &str, group: &str)
+        -> Result<Vec<Item>, String> { Err("no list to pick from".into()) }
 }
 ```
 
-Only `action` is required. `Value` and `json!` are re-exported from `serde_json`. Call
+Only `action` is required. Build entries with `Item::new(id, label)` and, as needed,
+`.subtitle(…)`, `.group(…)`, `.icon(…)` and `.state(…)`. `Value` and `json!` are re-exported from `serde_json`. Call
 `ulanzi_plugin::export_plugin!(MyPlugin);` once in the crate root.
 
 `Cx` is your handle to the host: `set_timer`, `cancel_timer`, `set_state`, `secret`, `set_secret`,
@@ -241,7 +284,7 @@ data; every call goes straight to the host.
 On your own machine (not WebAssembly) the same calls go to a fake host, so plugin logic runs as an
 ordinary `cargo test`. `ulanzi_plugin::testing::Harness` drives your plugin and shows what it did:
 
-- Drive it: `init`, `action`, `open`, `message`, `closed`, `http`, `fire` (a timer).
+- Drive it: `init`, `action`, `list_items`, `open`, `message`, `closed`, `http`, `fire` (a timer).
 - Look at the result: `state`, `status`, `logs`, `timers`, `opened` (sockets the plugin opened),
   `sent` (what it wrote to a socket), `fetched` (requests it made) and `secrets` (read or preload them).
 
@@ -265,6 +308,7 @@ The service enforces these for every plugin.
 | State | 256 keys; key up to 256 bytes, value up to 1 KiB (it is label text). Anything over is ignored with a log line |
 | Secrets | 256 keys; key up to 256 bytes, value up to 64 KiB. Anything over is ignored with a log line |
 | Log line, status message | 4096 bytes; longer ones are cut |
+| Picker entries (`list-items`) | 5000 entries; id 1 to 1024 bytes (others dropped); label, subtitle, group, state 256 bytes, icon 128, error text 4096 (longer ones are cut) |
 
 Headers `Host`, `Connection`, `Transfer-Encoding` and `Content-Length` are set by the service; a request
 that includes one fails with `header not allowed: <name>`. HTTP requests use no proxy.
@@ -429,6 +473,7 @@ ulanzictl plugin remove <id>          deletes the plugin and its secrets (settin
 ulanzictl plugin enable <id>          ulanzictl plugin disable <id>
 ulanzictl plugin restart <id>         stop and start again; also clears a "failed" status
 ulanzictl plugin dev-mode on|off
+ulanzictl plugin items <id> <picker> [query] [--group G]   what a picker offers (starts the plugin)
 ```
 
 Statuses: `off` (turned off), `ready` (loaded, starts on first use), `starting`, `running`, `problem`
@@ -450,13 +495,15 @@ start = 10        # whatever the plugin reads in init()
 ## Later contract versions
 
 Contract 1.0 is the base: timers, state, secrets, status, logging, WebSockets, TCP/TLS and HTTP.
-These arrive as minor versions (1.1, 1.2, …) when the features that need them are built, and they
-only add, so 1.0 plugins keep working:
+Contract 1.1 adds `list-items` and `[[pickers]]`. A component built against 1.0 still loads (its
+`ulanzi:plugin/core@1.0.0` imports are served by 1.1), it just has no lists. More arrives as minor
+versions (1.2, …) when the features that need them are built, and they only add, so older plugins keep
+working:
 
 - Interfaces for discovering devices on the network, sign-in flows, listening for connections, D-Bus
   and running programs.
-- New exports: `list-items` (pickers), `widget-data` and `render` (widgets and key faces), `on-auth`,
-  `on-discovered` and `on-context`.
-- Pickers and state-driven key faces in the app.
+- New exports: `widget-data` and `render` (widgets and key faces), `on-auth`, `on-discovered` and
+  `on-context`.
+- State-driven key faces in the app.
 - A single-file package format, the marketplace and a `cargo generate` starter. Until then, plugins are
   installed from a folder in developer mode.

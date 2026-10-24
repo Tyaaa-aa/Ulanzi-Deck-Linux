@@ -70,7 +70,7 @@ flowchart LR
 |---|---|---|
 | `ulanzi-proto` | lib | The deck's USB protocol: report framing, commands, input parsing, the ZIP the deck expects |
 | `ulanzi-core` | lib | Profile and settings model, storage, key and wide-screen rendering, icons, catalog of actions, bundles, templates, backups, migration from version 1 |
-| `ulanzi-plugin` | lib | The plugin SDK and the contract (`wit/plugin.wit`, package `ulanzi:plugin@1.0.0`); plugins build to WebAssembly, and a test harness runs them natively |
+| `ulanzi-plugin` | lib | The plugin SDK and the contract (`wit/plugin.wit`, package `ulanzi:plugin@1.1.0`); plugins build to WebAssembly, and a test harness runs them natively |
 | `ulanzi-deckd` | bin + lib | The service: device I/O and hot-plug, deck actor, actions, OBS client, plugin host, widgets data, focus tracking, tray, D-Bus API |
 | `ulanzictl` | bin | Command-line client (including `plugin`), plus `probe` for talking to the deck directly |
 | `ulanzi-deck` | bin + lib | The GTK app |
@@ -159,7 +159,7 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). Explore it with
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
 | OBS | `ObsStatus`, `ObsList`, `ObsUseDetected`, `ObsEnableServer`, `ObsReconnect` |
 | Widgets | `NowPlaying`, `WeatherPlaces`, `WeatherNow` |
-| Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
+| Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
 
 Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
 `ActionFailed`, `ObsStatusChanged`, `PluginsChanged`.
@@ -186,7 +186,7 @@ ulanzictl brightness <0-100>
 ulanzictl export <file> [--profile <name>]   ulanzictl import <file> [--skip|--replace]
 ulanzictl snapshots              ulanzictl restore <name>
 ulanzictl validate [file]        check profile files
-ulanzictl plugin list|install|remove|enable|disable|restart|dev-mode on|off
+ulanzictl plugin list|install|remove|enable|disable|restart|dev-mode on|off|items <id> <picker>
 ulanzictl monitor                print presses, page changes and action errors live
 ulanzictl diagnostics            versions, session, device and recent logs (for bug reports)
 ulanzictl migrate                import version 1's ~/.config/ulanzi/config.yaml

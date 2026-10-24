@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 ### Added
+- Plugin contract 1.1: `list-items` and `[[pickers]]`, so plugins offer lists to pick from (entries with
+  label, subtitle, group, icon and live state; bounded by the service). Plugins built for 1.0 keep
+  working. `ulanzictl plugin items <id> <picker> [query] [--group G]` and the D-Bus method
+  `PluginListItems`.
 - Settings → Integrations: manage plugins, their settings and secrets; plugin actions in the key editor.
   Each plugin has a page built from its manifest's `[[settings]]` (passwords and tokens go straight into
   its secret store), with its status, on/off, Restart and Remove…; Developer Mode adds Install from
