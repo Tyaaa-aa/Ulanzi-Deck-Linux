@@ -77,11 +77,11 @@ A tray icon and a background service keep the deck working with the window close
     <td align="center"><sub>Tap and hold actions, look and live state</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/obs-light.png" alt="Connecting OBS Studio"></td>
+    <td><img src="docs/screenshots/plugins-light.png" alt="The plugin store"></td>
     <td><img src="docs/screenshots/templates-dark.png" alt="Starting from a template"></td>
   </tr>
   <tr>
-    <td align="center"><sub>OBS: every connection problem explained, one-click setup</sub></td>
+    <td align="center"><sub>Plugins: OBS Studio, Home Assistant and more, signed and sandboxed</sub></td>
     <td align="center"><sub>Start from a template, or save your own</sub></td>
   </tr>
 </table>

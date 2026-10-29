@@ -49,6 +49,13 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.1.0" date="2026-10-30">
+      <description>
+        <p>Plugins: a plugin store with signed, sandboxed plugins (OBS Studio and Home Assistant to
+        start), keys that follow what they control, ready-made keys, Cycle Through Actions and a
+        simpler key editor. OBS Studio now works through its plugin.</p>
+      </description>
+    </release>
     <release version="2.0.0" date="2026-10-23">
       <description>
         <p>A full rewrite in Rust with a new GTK interface: wide-screen widgets, OBS Studio control,

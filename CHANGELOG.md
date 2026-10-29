@@ -3,7 +3,7 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [2.1.0] - 2026-10-30
 
 **Ulanzi Deck 2.1 is needed for plugins, live keys and the profiles it saves.** It reads 2.0's profiles
 and settings and saves them in a new format (2) that 2.0 cannot open; the 2.0 files are kept once in
@@ -148,5 +148,5 @@ A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python)
   diagnostics.
 - Packages: Arch, .deb, .rpm, AppImage and a tarball with an installer.
 
-[Unreleased]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.0.0...HEAD
+[2.1.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases/tag/v2.0.0

@@ -1,6 +1,6 @@
 # Maintainer: Tyaaa-aa <https://github.com/Tyaaa-aa>
 pkgname=ulanzi-deck
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc="Set up Ulanzi D200 and D200X stream decks (keys, dials, wide-screen widgets, OBS)"
 arch=('x86_64' 'aarch64')

@@ -1,6 +1,6 @@
 pkgbase = ulanzi-deck
 	pkgdesc = Set up Ulanzi D200 and D200X stream decks (keys, dials, wide-screen widgets, OBS)
-	pkgver = 2.0.0
+	pkgver = 2.1.0
 	pkgrel = 1
 	url = https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux
 	arch = x86_64
@@ -16,7 +16,7 @@ pkgbase = ulanzi-deck
 	optdepends = wl-clipboard: Type Text with characters a US keyboard lacks
 	optdepends = obs-studio: OBS actions and widget
 	options = !lto
-	source = ulanzi-deck-2.0.0.tar.gz::https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/archive/refs/tags/v2.0.0.tar.gz
+	source = ulanzi-deck-2.1.0.tar.gz::https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/archive/refs/tags/v2.1.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = ulanzi-deck
