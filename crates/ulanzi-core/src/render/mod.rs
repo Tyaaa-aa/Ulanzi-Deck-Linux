@@ -9,5 +9,5 @@ mod text;
 
 pub use fonts::{Fonts, TextStyle};
 pub use icons::IconLibrary;
-pub use key::{KEY_PX, RenderCtx, Rendered, look_hash, render_key};
+pub use key::{KEY_PX, RenderCtx, Rendered, look_hash, plugin_icon_png, render_key};
 pub use nowplaying::{NowPlaying, render_now_playing};

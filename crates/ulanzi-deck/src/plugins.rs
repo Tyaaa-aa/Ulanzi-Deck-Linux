@@ -1096,6 +1096,7 @@ mod tests {
                             toml::Value::String(
                                 match (p.key.as_str(), a.id.as_str()) {
                                     ("entity_id", "run") => "scene.test",
+                                    ("entity_id", "climate") => "climate.test",
                                     ("entity_id", _) => "light.test",
                                     _ => "test",
                                 }

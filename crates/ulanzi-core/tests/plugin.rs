@@ -716,3 +716,75 @@ fn contract_1_1_still_checks_pickers() {
         Err(ManifestError::UnknownPicker { .. })
     ));
 }
+
+#[test]
+fn short_names_drop_a_shared_leading_phrase() {
+    use ulanzi_core::plugin::key_set::short_names;
+    let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        short_names(&names(&[
+            "Satya Bedroom Floor Lamp",
+            "Satya Bedroom Fan",
+            "Satya Bedroom Lights",
+            "Privacy Satya",
+            "Satya Fan Speed",
+        ])),
+        ["Floor Lamp", "Fan", "Lights", "Privacy Satya", "Fan Speed"]
+    );
+    // Alone, or the whole name shared: kept.
+    assert_eq!(short_names(&names(&["Kitchen Lamp"])), ["Kitchen Lamp"]);
+    assert_eq!(short_names(&names(&["Lamp", "Lamp"])), ["Lamp", "Lamp"]);
+}
+
+#[test]
+fn icons_and_key_sets_are_checked() {
+    let base = "id = \"xy\"\nname = \"X\"\nversion = \"1.0.0\"\ncontract = \"1.1\"\n";
+    let parse = |extra: &str| Manifest::parse(&format!("{base}{extra}"));
+    parse("icon = \"assets/icon.png\"\nsymbolic_icon = \"assets/s.svg\"\ncolor = \"#18bcf2\"\n")
+        .expect("valid");
+    assert!(
+        parse("icon = \"mdi:lightbulb\"\n").is_ok(),
+        "a theme name still works"
+    );
+    assert!(parse("icon = \"assets/../x.svg\"\n").is_err());
+    assert!(
+        parse("symbolic_icon = \"assets/s.png\"\n").is_err(),
+        "one-colour icons are SVG"
+    );
+    assert!(
+        parse("symbolic_icon = \"s.svg\"\n").is_err(),
+        "must be in assets/"
+    );
+    assert!(parse("color = \"blue\"\n").is_err());
+    let action = "[[actions]]\nid = \"go\"\nname = \"Go\"\nicon = \"assets/go.svg\"\n[[pickers]]\nid = \"p\"\nmulti = true\n";
+    let set = |keys: &str| {
+        parse(&format!(
+            "{action}[[key_sets]]\nid = \"keys\"\nname = \"S\"\npicker = \"p\"\n[[key_sets.variants]]\nkeys = [{keys}]\n"
+        ))
+    };
+    let m = set("{ action = \"go\", params = { id = \"$id\" }, label = \"$name\" }").expect("valid");
+    let item = ulanzi_core::plugin::key_set::Picked {
+        id: "a.b".into(),
+        name: "Bee".into(),
+        group: None,
+    };
+    let keys = m.key_set("keys").expect("set").keys_for(&m, &item, true);
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].look.label.text, "Bee");
+    assert_eq!(
+        keys[0].look.source,
+        ulanzi_core::model::ImageSource::Plugin {
+            plugin: "xy".into(),
+            icon: "assets/go.svg".into()
+        },
+        "the action's icon when the key has none"
+    );
+    match &keys[0].tap {
+        Some(ulanzi_core::model::Action::Plugin { params, .. }) => {
+            assert_eq!(params["id"].as_str(), Some("a.b"))
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(set("{ action = \"nope\" }").is_err(), "unknown action");
+    assert!(set("").is_err(), "no keys");
+}

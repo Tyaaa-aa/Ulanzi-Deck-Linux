@@ -75,6 +75,11 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
             }
             None => warnings.push(format!("no icon found for app {desktop_id}")),
         },
+        ImageSource::Plugin { plugin, icon } => {
+            if let Err(e) = draw_plugin_icon(&mut pix, plugin, icon, look.foreground, look.icon_scale) {
+                warnings.push(format!("icon {icon} of plugin {plugin}: {e}"));
+            }
+        }
         ImageSource::Steam { appid } => {
             match crate::steam::default_root().and_then(|r| crate::steam::art_for(&r, *appid)) {
                 Some(path) => {
@@ -93,6 +98,52 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
     }
     let png = pix.encode_png().ok()?;
     Some(Rendered { png, warnings })
+}
+
+/// Largest plugin icon file read.
+const MAX_PLUGIN_ICON_BYTES: u64 = 512 * 1024;
+
+/// A plugin's one-colour SVG tinted with `fg`; a PNG is drawn as it is.
+fn draw_plugin_icon(pix: &mut Pixmap, plugin: &str, icon: &str, fg: Color, scale: f32) -> Result<(), String> {
+    let path = crate::store::plugin_asset(plugin, icon).ok_or("not a file in the plugin's assets folder")?;
+    let len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if len > MAX_PLUGIN_ICON_BYTES {
+        return Err(format!("larger than {} KiB", MAX_PLUGIN_ICON_BYTES / 1024));
+    }
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+        let svg = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        draw_svg(pix, &svg, fg, scale)
+    } else {
+        draw_image(pix, &path, Fit::Contain(scale))
+    }
+}
+
+/// Plugin `plugin`'s icon file `icon` as a `px`-square PNG with a clear background: tinted with
+/// `tint` (one-colour icons), else in its own colours.
+pub fn plugin_icon_png(plugin: &str, icon: &str, px: u32, tint: Option<Color>) -> Option<Vec<u8>> {
+    let path = crate::store::plugin_asset(plugin, icon)?;
+    if std::fs::metadata(&path).ok()?.len() > MAX_PLUGIN_ICON_BYTES {
+        return None;
+    }
+    let mut big = Pixmap::new(KEY_PX, KEY_PX)?;
+    match tint {
+        Some(fg) => draw_svg(&mut big, &std::fs::read_to_string(&path).ok()?, fg, 1.0).ok()?,
+        None => draw_file(&mut big, &path, Fit::Contain(1.0)).ok()?,
+    }
+    let mut out = Pixmap::new(px, px)?;
+    let k = px as f32 / KEY_PX as f32;
+    out.draw_pixmap(
+        0,
+        0,
+        big.as_ref(),
+        &PixmapPaint {
+            quality: tiny_skia::FilterQuality::Bicubic,
+            ..PixmapPaint::default()
+        },
+        Transform::from_scale(k, k),
+        None,
+    );
+    out.encode_png().ok()
 }
 
 fn draw_svg(pix: &mut Pixmap, svg: &str, fg: Color, scale: f32) -> Result<(), String> {

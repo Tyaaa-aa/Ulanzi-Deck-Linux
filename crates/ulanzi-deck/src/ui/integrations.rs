@@ -129,7 +129,8 @@ fn plugin_row(state: &State, dialog: &adw::PreferencesDialog, p: &PluginRow) -> 
         .subtitle(escape(&status_line(&w)))
         .activatable(true)
         .build();
-    row.add_prefix(&status_icon(&w));
+    row.add_prefix(&crate::ui::plugin_logo(state, &p.id, 32));
+    row.add_suffix(&status_icon(&w));
     let switch = gtk::Switch::builder()
         .active(p.status != "off")
         .valign(gtk::Align::Center)
@@ -879,7 +880,7 @@ mod tests {
                 "Unverified plugin",
                 "Not from the Ulanzi Deck marketplace. Only install plugins you trust.",
             ),
-            ("OBS Studio 1.0.0".to_string(), description),
+            ("OBS Studio 1.1.0".to_string(), description),
             s("Replaces version 0.9.0", ""),
             s("Connect to 127.0.0.1, localhost", ""),
         ];

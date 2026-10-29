@@ -274,7 +274,7 @@ fn picker_items(t: &Tracked, picker: &str) -> Result<Vec<Item>, String> {
         .chain(live.muted.iter())
         .collect();
     Ok(match picker {
-        "scenes" => live
+        "scenes" | "scene_keys" => live
             .scenes
             .iter()
             .map(|n| {
@@ -1138,13 +1138,10 @@ impl Plugin for Obs {
             return Err("Not connected to OBS".to_string());
         }
         let items = picker_items(&self.tracked, picker)?;
-        let query = query.to_lowercase();
         Ok(items
             .into_iter()
             .filter(|i| {
-                (query.is_empty()
-                    || i.label.to_lowercase().contains(&query)
-                    || i.id.to_lowercase().contains(&query))
+                ulanzi_plugin::matches_query(query, &[&i.label, &i.id, i.group.as_deref().unwrap_or("")])
                     && (group.is_empty() || i.group.as_deref() == Some(group))
             })
             .collect())

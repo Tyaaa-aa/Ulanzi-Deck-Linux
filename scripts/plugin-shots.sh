@@ -4,7 +4,7 @@
 # showcase profiles and the OBS and Home Assistant plugins installed. No passwords or tokens are
 # set, so both plugins show their "needs a password/token" problems. Nothing of yours is used.
 #
-#   scripts/plugin-shots.sh OUT_DIR     → OUT_DIR/{integrations,integrations-obs,integrations-ha,action-picker}.png
+#   scripts/plugin-shots.sh OUT_DIR     → OUT_DIR/{integrations,integrations-obs,integrations-ha,action-picker,library,key-editor}.png
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: $0 OUT_DIR" >&2; exit 2; }
 out="$1"
@@ -34,6 +34,7 @@ for p in obs ha; do
   mkdir -p "$dest"
   cp "plugins/$p/plugin.toml" "$dest/plugin.toml"
   cp "target/wasm32-wasip2/release/ulanzi_plugin_$p.wasm" "$dest/plugin.wasm"
+  cp -r "plugins/$p/assets" "$dest/assets"
 done
 
 shot() { # name app-args...
@@ -49,3 +50,5 @@ shot integrations --open integrations
 shot integrations-obs --open integrations:obs
 shot integrations-ha --open integrations:ha
 shot action-picker --select key:1 --open action-picker
+shot library
+shot key-editor --select key:1

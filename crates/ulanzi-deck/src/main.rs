@@ -381,7 +381,7 @@ fn main() -> glib::ExitCode {
                                 };
                                 if let Some(t) = find_widget(pop.upcast_ref(), &|w| {
                                     w.downcast_ref::<gtk::ToggleButton>()
-                                        .and_then(|t| t.label())
+                                        .and_then(|t| t.tooltip_text())
                                         .is_some_and(|l| l == label)
                                 })
                                 .and_downcast::<gtk::ToggleButton>()

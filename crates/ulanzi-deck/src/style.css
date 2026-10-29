@@ -205,9 +205,9 @@ row:selected .page-number {
 }
 
 /* Action list: category pills, section headers */
-.category-tabs > viewport > box,
-.section-switcher {
-  padding-bottom: 4px;
+.category-menu .category-item {
+  min-width: 200px;
+  padding: 6px 10px;
 }
 
 .category-tab {

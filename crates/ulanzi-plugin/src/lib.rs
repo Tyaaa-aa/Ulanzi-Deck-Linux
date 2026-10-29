@@ -63,6 +63,17 @@ pub enum Status {
     Problem,
 }
 
+/// Whether every word of `query` appears in one of `fields` (case-insensitive), so "bedroom lamp"
+/// finds "Bedroom Floor Lamp". An empty query matches everything. Use it in
+/// [`Plugin::list_items`] so searches behave the same in every plugin.
+pub fn matches_query(query: &str, fields: &[&str]) -> bool {
+    let fields: Vec<String> = fields.iter().map(|f| f.to_lowercase()).collect();
+    query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .all(|w| fields.iter().any(|f| f.contains(&w)))
+}
+
 /// One entry of a picker list (contract 1.1), returned from [`Plugin::list_items`]:
 /// `Item::new("scene-1", "Intro").group("Show").state("live")`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

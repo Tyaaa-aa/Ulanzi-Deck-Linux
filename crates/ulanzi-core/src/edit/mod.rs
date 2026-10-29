@@ -427,6 +427,52 @@ impl Editor {
         });
     }
 
+    /// Place `groups` of keys (one group per device; a group stays on one page) in free slots,
+    /// in order: on the current page unless `new_page`, then on new pages named `page_name` added
+    /// after it. One undo step. Returns the first page that got keys.
+    pub fn add_keys(&mut self, groups: Vec<Vec<Key>>, page_name: &str, new_page: bool) -> usize {
+        let mut first = None;
+        let start = self.page;
+        let dials = self.profile.pages[self.page].dials.clone();
+        self.edit(|p, page| {
+            let mut at = page;
+            let mut added = 0;
+            let mut add_page = |p: &mut Profile, at: usize| {
+                added += 1;
+                let name = if added == 1 {
+                    page_name.to_string()
+                } else {
+                    format!("{page_name} {added}")
+                };
+                let mut new = Page::new(&name);
+                new.dials = dials.clone();
+                p.pages.insert(at + 1, new);
+                at + 1
+            };
+            if new_page {
+                at = add_page(p, at);
+            }
+            for group in groups {
+                let group: Vec<Key> = group.into_iter().take(KEYS as usize).collect();
+                let free = |pg: &Page| (0..KEYS).filter(|i| !pg.keys.contains_key(i)).collect::<Vec<_>>();
+                if free(&p.pages[at]).len() < group.len() {
+                    at = add_page(p, at);
+                }
+                for (slot, key) in free(&p.pages[at]).into_iter().zip(group) {
+                    p.pages[at].keys.insert(slot, key);
+                }
+                first.get_or_insert(at);
+            }
+        });
+        first.unwrap_or(start)
+    }
+
+    /// Free key slots on the current page.
+    pub fn free_keys(&self) -> usize {
+        let keys = &self.profile.pages[self.page].keys;
+        (0..KEYS).filter(|i| !keys.contains_key(i)).count()
+    }
+
     /// Add a page after the current one; returns its index.
     pub fn add_page(&mut self, name: &str) -> usize {
         let at = (self.page + 1).min(self.profile.pages.len());

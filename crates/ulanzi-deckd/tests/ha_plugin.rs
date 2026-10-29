@@ -74,11 +74,27 @@ fn ha_manifest_is_valid() {
     assert_eq!(m.id, "ha");
     assert_eq!(m.name, "Home Assistant");
     assert!(m.background);
-    assert_eq!(m.actions.len(), 8);
+    assert_eq!(m.actions.len(), 9);
     let pickers: Vec<&str> = m.pickers.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(pickers, ["entities", "toggleable", "runnable", "levels", "any"]);
+    assert_eq!(
+        pickers,
+        [
+            "entities",
+            "toggleable",
+            "runnable",
+            "levels",
+            "climate",
+            "devices",
+            "any"
+        ]
+    );
     assert!(m.pickers[0].multi && m.pickers[0].groups);
-    assert!(m.pickers[1..].iter().all(|p| !p.multi && p.groups));
+    // Only the entities setting and the device key set pick several.
+    assert!(
+        m.pickers
+            .iter()
+            .all(|p| p.groups && p.multi == matches!(p.id.as_str(), "entities" | "devices"))
+    );
     assert!(m.permissions.lan);
     assert!(m.permissions.network.is_empty());
 }
@@ -427,6 +443,14 @@ async fn ha_plugin_every_action_reaches_home_assistant() {
             "set_cover_position",
             Some("cover.blind"),
             json!({"position": 70}),
+        ),
+        (
+            "climate",
+            json!({"entity_id": "climate.bedroom", "op": "mode", "mode": "cool"}),
+            "climate",
+            "set_hvac_mode",
+            Some("climate.bedroom"),
+            json!({"hvac_mode": "cool"}),
         ),
         (
             "call_service",

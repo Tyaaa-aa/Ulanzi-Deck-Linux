@@ -103,4 +103,9 @@ pub enum ImageSource {
     Emoji {
         ch: String,
     },
+    /// A one-colour icon from an installed plugin's `assets/` folder, tinted like a bundled icon.
+    Plugin {
+        plugin: String,
+        icon: String,
+    },
 }

@@ -1,7 +1,10 @@
 id = "ha"
 name = "Home Assistant"
-version = "1.0.0"
+version = "1.1.0"
 contract = "1.1"
+icon = "assets/icon.svg"
+symbolic_icon = "assets/symbolic.svg"
+color = "#18bcf2"
 description = "Toggle, run and set Home Assistant entities and call any service, with live entity state on key labels."
 categories = ["smart-home"]
 background = true
@@ -64,6 +67,20 @@ id = "levels"
 style = "list"
 groups = true
 
+# Air conditioners and heaters, for climate.
+[[pickers]]
+id = "climate"
+style = "list"
+groups = true
+
+# What ready-made keys are made for: lights, fans, climate, switches, covers, media players,
+# scripts, scenes and buttons.
+[[pickers]]
+id = "devices"
+style = "list"
+groups = true
+multi = true
+
 # Every entity, one at a time, for call_service.
 [[pickers]]
 id = "any"
@@ -73,6 +90,7 @@ groups = true
 [[actions]]
 id = "toggle"
 name = "Toggle an entity"
+icon = "assets/actions/toggle.svg"
 params = [
   { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
@@ -80,6 +98,7 @@ params = [
 [[actions]]
 id = "turn_on"
 name = "Turn an entity on"
+icon = "assets/actions/turn_on.svg"
 params = [
   { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
@@ -87,6 +106,7 @@ params = [
 [[actions]]
 id = "turn_off"
 name = "Turn an entity off"
+icon = "assets/actions/turn_off.svg"
 params = [
   { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
@@ -94,6 +114,7 @@ params = [
 [[actions]]
 id = "run"
 name = "Run a scene, script, automation or button"
+icon = "assets/actions/run.svg"
 params = [
   { key = "entity_id", kind = "item", picker = "runnable", label = "Entity" },
 ]
@@ -101,6 +122,7 @@ params = [
 [[actions]]
 id = "set_level"
 name = "Set or change a level (light, volume, fan, cover)"
+icon = "assets/actions/set_level.svg"
 params = [
   { key = "entity_id", kind = "item", picker = "levels", label = "Entity" },
   { key = "op", kind = "choice", label = "Change", choices = ["set", "up", "down"] },
@@ -109,8 +131,28 @@ params = [
 ]
 
 [[actions]]
+id = "climate"
+name = "Control an air conditioner or heater"
+icon = "assets/actions/climate.svg"
+params = [
+  { key = "entity_id", kind = "item", picker = "climate", label = "Entity" },
+  { key = "op", kind = "choice", label = "Change", choices = [
+    { value = "power", label = "Turn on or off" },
+    { value = "up", label = "Warmer" },
+    { value = "down", label = "Cooler" },
+    { value = "set", label = "Set the temperature" },
+    { value = "mode", label = "Set the mode" },
+  ] },
+  { key = "temperature", kind = "number", label = "Temperature (for Set the temperature)", min = 5, max = 35, default = 24 },
+  { key = "mode", kind = "choice", label = "Mode (for Set the mode)", choices = [
+    "cool", "heat", "dry", { value = "fan_only", label = "Fan only" }, "auto", { value = "heat_cool", label = "Heat and cool" }, "off",
+  ] },
+]
+
+[[actions]]
 id = "call_service"
 name = "Call an action (service)"
+icon = "assets/actions/call_service.svg"
 params = [
   { key = "domain", kind = "text", label = "Domain (for example light)" },
   { key = "service", kind = "text", label = "Action (for example turn_on)", help = "Home Assistant calls services actions: light.turn_on is domain light, action turn_on" },
@@ -121,7 +163,82 @@ params = [
 [[actions]]
 id = "reconnect"
 name = "Reconnect to Home Assistant"
+icon = "assets/actions/reconnect.svg"
 
 [[actions]]
 id = "forget_token"
 name = "Forget the Home Assistant token"
+icon = "assets/actions/forget_token.svg"
+
+# Ready-made keys: pick devices, and each gets keys that fit what it is. Every picked entity is
+# added to the entities setting, so the keys show its live state.
+[[key_sets]]
+id = "devices"
+name = "Keys for your devices"
+description = "Pick lights, fans, air conditioners and more; each gets the keys that fit it"
+icon = "assets/keys/light.svg"
+picker = "devices"
+track = [
+  { setting = "entities", value = "$id" },
+  { setting = "attributes", value = "$id:temperature", groups = ["Climate"] },
+]
+
+[[key_sets.variants]]
+groups = ["Lights"]
+keys = [
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/light.svg", label = "$name" },
+  { action = "set_level", params = { entity_id = "$id", op = "down", step = 10 }, icon = "assets/keys/dimmer.svg", extra = true },
+  { action = "set_level", params = { entity_id = "$id", op = "up", step = 10 }, icon = "assets/keys/brighter.svg", label = "{ha.$id.pct}%", extra = true },
+]
+
+[[key_sets.variants]]
+groups = ["Fans"]
+keys = [
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/fan.svg", label = "$name" },
+  { action = "set_level", params = { entity_id = "$id", op = "down", step = 33 }, icon = "assets/keys/slower.svg", extra = true },
+  { action = "set_level", params = { entity_id = "$id", op = "up", step = 33 }, icon = "assets/keys/faster.svg", label = "{ha.$id.pct}%", extra = true },
+]
+
+[[key_sets.variants]]
+groups = ["Climate"]
+keys = [
+  { action = "climate", params = { entity_id = "$id", op = "power" }, icon = "assets/keys/aircon.svg", label = "$name" },
+  { action = "climate", params = { entity_id = "$id", op = "down" }, icon = "assets/keys/cooler.svg", extra = true },
+  { action = "climate", params = { entity_id = "$id", op = "up" }, icon = "assets/keys/warmer.svg", label = "{ha.$id.attr.temperature}°", extra = true },
+]
+
+[[key_sets.variants]]
+groups = ["Covers"]
+keys = [
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/cover.svg", label = "$name" },
+]
+
+[[key_sets.variants]]
+groups = ["Media players"]
+keys = [
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/media.svg", label = "$name" },
+]
+
+[[key_sets.variants]]
+groups = ["Scripts"]
+keys = [
+  { action = "run", params = { entity_id = "$id" }, icon = "assets/keys/script.svg", label = "$name" },
+]
+
+[[key_sets.variants]]
+groups = ["Scenes"]
+keys = [
+  { action = "run", params = { entity_id = "$id" }, icon = "assets/keys/scene.svg", label = "$name" },
+]
+
+[[key_sets.variants]]
+groups = ["Buttons", "Input buttons"]
+keys = [
+  { action = "run", params = { entity_id = "$id" }, icon = "assets/keys/power.svg", label = "$name" },
+]
+
+# Switches, input booleans and anything else that turns on and off.
+[[key_sets.variants]]
+keys = [
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/switch.svg", label = "$name" },
+]

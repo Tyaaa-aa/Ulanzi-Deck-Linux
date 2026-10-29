@@ -634,6 +634,9 @@ pub fn spec_for(a: &Action) -> Option<&'static ActionSpec> {
 /// The look a key gets when `a` is dropped on an empty key: the action's icon in its category
 /// colour on black, labelled with the action's title.
 pub fn default_look(a: &Action) -> KeyLook {
+    if let Action::Plugin { plugin, action, .. } = a {
+        return plugin_look(plugin, action);
+    }
     let Some(spec) = spec_for(a) else {
         return KeyLook::default();
     };
@@ -670,6 +673,49 @@ pub fn default_look(a: &Action) -> KeyLook {
             position: None,
         },
         ..KeyLook::default()
+    }
+}
+
+/// (plugin, action) → (icon, colour).
+type PluginLooks = std::collections::BTreeMap<(String, String), (Option<String>, Color)>;
+
+/// How each installed plugin's actions look on a fresh key.
+static PLUGIN_LOOKS: std::sync::RwLock<PluginLooks> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Read the installed plugins' action icons and colours, for [`default_look`] (the app calls this
+/// whenever the plugins change).
+pub fn set_plugin_looks<'a>(manifests: impl IntoIterator<Item = &'a crate::plugin::Manifest>) {
+    let mut map = std::collections::BTreeMap::new();
+    for m in manifests {
+        let fg = m.rgb().map_or(Color::WHITE, |[r, g, b]| Color([r, g, b, 255]));
+        for a in &m.actions {
+            let icon = a.icon.clone().filter(|i| crate::plugin::is_asset(i));
+            map.insert((m.id.clone(), a.id.clone()), (icon, fg));
+        }
+    }
+    if let Ok(mut looks) = PLUGIN_LOOKS.write() {
+        *looks = map;
+    }
+}
+
+/// A plugin action's fresh look: its icon in the plugin's colour, no label (the user names the
+/// key); plain when the plugin is not installed or has no icon for it.
+fn plugin_look(plugin: &str, action: &str) -> KeyLook {
+    let found = PLUGIN_LOOKS
+        .read()
+        .ok()
+        .and_then(|l| l.get(&(plugin.to_string(), action.to_string())).cloned());
+    match found {
+        Some((icon, fg)) => KeyLook {
+            source: icon.map_or(ImageSource::None, |icon| ImageSource::Plugin {
+                plugin: plugin.to_string(),
+                icon,
+            }),
+            foreground: fg,
+            ..KeyLook::default()
+        },
+        None => KeyLook::default(),
     }
 }
 

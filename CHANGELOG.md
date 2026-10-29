@@ -38,12 +38,24 @@ and the project uses [Semantic Versioning](https://semver.org).
   collections and profiles. It runs next to the built-in integration. Settings are in
   `[plugins.obs.settings]`.
 
+- Plugin icons: a plugin brings a full-colour `icon`, a one-colour `symbolic_icon`, a `color` and an
+  icon per action, all from its own `assets/` folder, so lists, the Integrations page and fresh keys show
+  them. Keys can show a plugin's icon (`source = { kind = "plugin", … }`), drawn in the key's colour.
+  Installing checks that every icon the manifest names is in the plugin.
+- Ready-made keys (`[[key_sets]]`): pick items from a plugin's list and get keys that fit each one, on
+  this page or a new one, with live state. The Home Assistant plugin makes keys for lights, fans, air
+  conditioners, covers, media players, scripts, scenes, buttons and switches; the OBS plugin one key per
+  scene.
+- Home Assistant `climate` action: turn an air conditioner or heater on or off, make it warmer or cooler
+  in the device's own steps, set a temperature or a mode.
+
 ### Changed
+- Plugin lists match every word of a search in any order, so "bedroom aircon" finds "Bedroom Aircon".
 - Function keys are written f1 to f24; zero-padded names such as f01 are no longer accepted.
 - The action list (the side panel with nothing selected, and the key editor's Choose / Change list) is
   easier to use with many plugins. One search field finds actions by name, category or plugin name. A
-  row of category buttons (All, the built-in categories, then one per plugin) shows one category at a
-  time and is remembered while the app runs. Sections fold away and list their actions A to Z. Plugin
+  category menu next to it (All, the built-in categories, then one per plugin with its logo) shows one
+  category at a time and is remembered while the app runs. Sections fold away and list their actions A to Z. Plugin
   actions show their plugin's icon and name and can be dragged from the side panel. Searching inside a
   category offers "Show N more in All" when other categories match.
 - The top bar's Actions button is gone. A key's editor has a × at the top of the panel, and Escape does
@@ -51,12 +63,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   the cursor in the action search (not while a dialog or menu is open). With a key selected, the list
   then gives way to the key's editor again when you click an action (it goes to the key), pick another
   key, or press the × ("Back to the key") or Escape.
-- The key editor no longer scrolls as one long column. The key preview stays at the top, with a row of
-  buttons under it: Look, Label, Press and Hold for a key; Left, Right, Press and Hold for a dial;
-  Display and Press for the wide screen; Look, Label and Keys for several keys. Each section fits the
-  panel at the usual window sizes and scrolls on its own only when it has to. The section you pick
-  stays open as you click from key to key while the app runs. Clear Key and Use This Dial on Every Page
-  stay in sight under every section.
+- The key editor is one page in the order you set a key up: **Press**, **Label**, **When Held** and
+  **Look**, with When Held and Look folded into one row each until opened (remembered while the app
+  runs), so one key needs no switching between sections. Show Label is now **Hidden** in Label
+  Position. A dial's four slots are one list of rows that open to their settings. Clear Key and Use
+  This Dial on Every Page stay in sight under the page.
 - Menu items no longer end in "…" (Rename, Delete, Export, Import, Set Up Deck and the like). The
   guides use the same names.
 

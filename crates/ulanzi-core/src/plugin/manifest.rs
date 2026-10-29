@@ -13,8 +13,18 @@ pub struct Manifest {
     pub name: String,
     pub version: String,
     pub contract: String,
+    /// The plugin's full-colour icon: an `assets/` file (`.svg` or `.png`), shown in lists, the
+    /// plugin's settings and the plugin store. A plain name (`mdi:lightbulb`) is looked up in
+    /// the icon theme instead.
     #[serde(default)]
     pub icon: Option<String>,
+    /// A one-colour version of the icon (`assets/….svg`) that the app tints to fit: small places
+    /// such as section headers.
+    #[serde(default)]
+    pub symbolic_icon: Option<String>,
+    /// The plugin's colour (`#rrggbb`): its action icons are drawn in it on fresh keys.
+    #[serde(default)]
+    pub color: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -34,6 +44,61 @@ pub struct Manifest {
     /// Lists the user picks `item` fields from (contract 1.1); the plugin fills them (`list-items`).
     #[serde(default)]
     pub pickers: Vec<Picker>,
+    /// Ready-made keys for items the user picks (contract 1.1).
+    #[serde(default)]
+    pub key_sets: Vec<KeySet>,
+}
+
+/// Ready-made keys: the user picks items from `picker` and each item gets the keys of the first
+/// variant whose `groups` hold the item's group (a variant without groups takes any item).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeySet {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    pub picker: String,
+    /// Settings each picked item is added to, so its live state is published.
+    #[serde(default)]
+    pub track: Vec<Track>,
+    pub variants: Vec<KeySetVariant>,
+}
+
+/// Add `value` (with `$id` and `$name` filled in) to setting `setting`: an item to a multi
+/// `item` setting, a comma-separated entry to a `text` setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Track {
+    pub setting: String,
+    pub value: String,
+    /// Only for items of these groups (empty: every item).
+    #[serde(default)]
+    pub groups: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeySetVariant {
+    #[serde(default)]
+    pub groups: Vec<String>,
+    pub keys: Vec<KeySetKey>,
+}
+
+/// One key of a variant. In `params`, `label` and `hold_params`, `$id` becomes the picked item's
+/// id and `$name` its name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KeySetKey {
+    pub action: String,
+    #[serde(default)]
+    pub params: toml::Table,
+    /// A one-colour `assets/….svg` drawn on the key; the action's icon when missing.
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub label: String,
+    /// More control than the main key (brightness, speed); the user can leave these out.
+    #[serde(default)]
+    pub extra: bool,
 }
 
 /// How the GUI lays out a picker's list.
@@ -94,6 +159,7 @@ pub struct Permissions {
 pub struct ManifestAction {
     pub id: String,
     pub name: String,
+    /// A one-colour `assets/….svg` the app tints: the action in lists and on fresh keys.
     #[serde(default)]
     pub icon: Option<String>,
     #[serde(default)]
@@ -135,6 +201,16 @@ pub enum ManifestError {
     },
     #[error("action \"{action}\": \"{key}\" cannot use a picker with multi = true; only settings can")]
     MultiParam { action: String, key: String },
+    #[error("{scope}: icon \"{icon}\" {why}")]
+    BadIcon {
+        scope: String,
+        icon: String,
+        why: &'static str,
+    },
+    #[error("color \"{0}\" is not a #rrggbb colour")]
+    BadColor(String),
+    #[error("key set \"{set}\": {why}")]
+    BadKeySet { set: String, why: String },
 }
 
 impl Manifest {
@@ -153,6 +229,7 @@ impl Manifest {
             .is_none_or(|v| v >= (1, 1));
         if !has_pickers {
             table.remove("pickers");
+            table.remove("key_sets");
         }
         let m: Manifest = table.try_into().map_err(parse_err)?;
         if !valid_id(&m.id) {
@@ -178,6 +255,12 @@ impl Manifest {
             if m.pickers[..i].iter().any(|q| q.id == p.id) {
                 return Err(ManifestError::DuplicatePicker(p.id.clone()));
             }
+        }
+        m.check_icons()?;
+        if let Some(c) = &m.color
+            && parse_color(c).is_none()
+        {
+            return Err(ManifestError::BadColor(c.clone()));
         }
         check_fields("the settings".into(), &m.settings)?;
         if has_pickers {
@@ -209,7 +292,96 @@ impl Manifest {
                 });
             }
         }
+        if has_pickers {
+            m.check_key_sets()?;
+        }
         Ok(m)
+    }
+
+    /// Icons that name `assets/` files are safe relative paths with a usable type. Other values
+    /// are icon theme names.
+    fn check_icons(&self) -> Result<(), ManifestError> {
+        let bad = |scope: &str, icon: &str, why| ManifestError::BadIcon {
+            scope: scope.to_string(),
+            icon: icon.to_string(),
+            why,
+        };
+        let check = |scope: &str, icon: &Option<String>, symbolic: bool| match icon.as_deref() {
+            Some(i) => match asset_icon_problem(i, symbolic) {
+                Some(why) => Err(bad(scope, i, why)),
+                None => Ok(()),
+            },
+            None => Ok(()),
+        };
+        check("the plugin", &self.icon, false)?;
+        if let Some(i) = &self.symbolic_icon
+            && !is_asset(i)
+        {
+            return Err(bad("symbolic_icon", i, "must be a file under assets/"));
+        }
+        check("symbolic_icon", &self.symbolic_icon, true)?;
+        for a in &self.actions {
+            check(&format!("action \"{}\"", a.id), &a.icon, true)?;
+        }
+        for k in &self.key_sets {
+            check(&format!("key set \"{}\"", k.id), &k.icon, true)?;
+            for v in &k.variants {
+                for key in &v.keys {
+                    check(&format!("key set \"{}\"", k.id), &key.icon, true)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn check_key_sets(&self) -> Result<(), ManifestError> {
+        for (i, k) in self.key_sets.iter().enumerate() {
+            let bad = |why: String| ManifestError::BadKeySet {
+                set: k.id.clone(),
+                why,
+            };
+            if !valid_id(&k.id) {
+                return Err(bad("the id must be a-z, 0-9 and _, starting with a letter".into()));
+            }
+            if self.key_sets[..i].iter().any(|o| o.id == k.id) {
+                return Err(bad("declared twice".into()));
+            }
+            if self.picker(&k.picker).is_none() {
+                return Err(bad(format!(
+                    "picker \"{}\" is not declared in [[pickers]]",
+                    k.picker
+                )));
+            }
+            if k.variants.is_empty() || k.variants.iter().any(|v| v.keys.is_empty()) {
+                return Err(bad("every variant needs at least one key".into()));
+            }
+            for key in k.variants.iter().flat_map(|v| &v.keys) {
+                if self.action(&key.action).is_none() {
+                    return Err(bad(format!("action \"{}\" is not declared", key.action)));
+                }
+            }
+            if k.variants.iter().any(|v| v.keys.len() > MAX_KEY_SET_KEYS) {
+                return Err(bad(format!("a variant has more than {MAX_KEY_SET_KEYS} keys")));
+            }
+            for t in &k.track {
+                if !self.settings.iter().any(|f| f.key == t.setting) {
+                    return Err(bad(format!(
+                        "track names setting \"{}\", which is not declared",
+                        t.setting
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The colour from `color`, if it is valid.
+    pub fn rgb(&self) -> Option<[u8; 3]> {
+        self.color.as_deref().and_then(parse_color)
+    }
+
+    pub fn key_set(&self, id: &str) -> Option<&KeySet> {
+        self.key_sets.iter().find(|k| k.id == id)
     }
 
     /// Every `item` field in `fields` that names a picker names a declared one. An `item` field
@@ -266,6 +438,43 @@ impl Manifest {
     pub fn has_network(&self) -> bool {
         !self.permissions.network.is_empty() || self.permissions.lan
     }
+}
+
+/// Keys one variant of a key set may add (a full page of the largest deck).
+pub const MAX_KEY_SET_KEYS: usize = 15;
+
+/// Whether `icon` names a file in the plugin's `assets/` folder (rather than a theme icon).
+pub fn is_asset(icon: &str) -> bool {
+    icon.starts_with("assets/")
+}
+
+/// Why an `assets/` icon path is not usable; `None` when it is (or is a theme name).
+fn asset_icon_problem(icon: &str, symbolic: bool) -> Option<&'static str> {
+    if !is_asset(icon) {
+        return None;
+    }
+    if icon.contains('\\')
+        || icon.contains('\0')
+        || icon.split('/').any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        return Some("must be a plain path inside assets/");
+    }
+    let lower = icon.to_ascii_lowercase();
+    if symbolic {
+        (!lower.ends_with(".svg")).then_some("must be an .svg file (one colour, tinted by the app)")
+    } else {
+        (!lower.ends_with(".svg") && !lower.ends_with(".png")).then_some("must be an .svg or .png file")
+    }
+}
+
+/// `#rrggbb` as bytes.
+fn parse_color(c: &str) -> Option<[u8; 3]> {
+    let hex = c.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 /// `^[a-z][a-z0-9_]{1,31}$`

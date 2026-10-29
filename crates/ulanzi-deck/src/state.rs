@@ -108,8 +108,6 @@ pub struct AppState {
     pub library_memory: RefCell<crate::action_list::Memory>,
     /// The same for the key editor's action picker.
     pub picker_memory: RefCell<crate::action_list::Memory>,
-    /// The key editor's section last picked, kept while switching keys.
-    pub inspector_section: Cell<Option<crate::ui::inspector::Section>>,
     /// Plugin pickers' answers for naming the ids item rows show, kept a few seconds.
     pub item_labels: RefCell<crate::plugins::LabelCache<LabelWaiter>>,
     listeners: RefCell<Vec<Listener>>,
@@ -158,7 +156,6 @@ impl AppState {
             weather: RefCell::default(),
             library_memory: RefCell::default(),
             picker_memory: RefCell::default(),
-            inspector_section: Cell::new(None),
             item_labels: RefCell::default(),
             listeners: RefCell::new(Vec::new()),
         })
@@ -196,6 +193,8 @@ impl AppState {
         if generation != self.plugins_gen.get() {
             return false;
         }
+        // Fresh keys get the plugins' action icons.
+        ulanzi_core::catalog::set_plugin_looks(manifests.values());
         *self.plugins.borrow_mut() = crate::plugins::Plugins {
             loaded: true,
             list,

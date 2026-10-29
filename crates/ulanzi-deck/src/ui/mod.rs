@@ -12,6 +12,7 @@ pub mod inspector;
 pub mod integrations;
 pub mod item_picker;
 pub(crate) mod key_routing;
+pub mod key_sets;
 pub mod library;
 pub mod obs_setup;
 pub mod onboarding;
@@ -205,6 +206,46 @@ pub(crate) fn assert_menu_labels(model: &impl gtk::gio::prelude::IsA<gtk::gio::M
             }
         }
     }
+}
+
+/// A plugin's full-colour logo, `size` px: its `icon` file from `assets/`, a theme icon it names,
+/// else the add-on icon.
+pub fn plugin_logo(state: &State, plugin: &str, size: i32) -> gtk::Image {
+    let icon = state
+        .plugins
+        .borrow()
+        .manifests
+        .get(plugin)
+        .and_then(|m| m.icon.clone());
+    plugin_image(plugin, icon.as_deref(), size)
+}
+
+/// `icon` as a manifest names it for plugin `plugin`, `size` px (see [`plugin_logo`]).
+pub fn plugin_image(plugin: &str, icon: Option<&str>, size: i32) -> gtk::Image {
+    use gtk::prelude::*;
+    let image = match icon {
+        Some(i) if ulanzi_core::plugin::is_asset(i) => {
+            // Drawn at twice the size, for sharp icons on high-density screens.
+            let px = u32::try_from(size * 2).unwrap_or(64);
+            ulanzi_core::render::plugin_icon_png(plugin, i, px, None)
+                .and_then(|png| gtk::gdk::Texture::from_bytes(&glib::Bytes::from(&png)).ok())
+                .map(|t| gtk::Image::from_paintable(Some(&t)))
+        }
+        _ => None,
+    };
+    let image = image.unwrap_or_else(|| {
+        let name = icon
+            .and_then(crate::plugins::icon_lookup)
+            .filter(|n| {
+                gtk::gdk::Display::default().is_some_and(|d| gtk::IconTheme::for_display(&d).has_icon(n))
+            })
+            .unwrap_or("application-x-addon-symbolic");
+        gtk::Image::from_icon_name(name)
+    });
+    image.set_pixel_size(size);
+    image.set_size_request(size, size);
+    image.set_valign(gtk::Align::Center);
+    image
 }
 
 #[cfg(test)]

@@ -1,11 +1,13 @@
 //! WebAssembly plugins: the manifest (`plugin.toml`) and the permissions it asks for.
 
 mod field;
+pub mod key_set;
 mod manifest;
 pub mod permission;
 
 pub use field::{Choice, Field, FieldKind};
 pub use manifest::{
-    CONTRACT, Inspected, Manifest, ManifestAction, ManifestError, Permissions, PickItem, Picker, PickerStyle,
+    CONTRACT, Inspected, KeySet, KeySetKey, KeySetVariant, MAX_KEY_SET_KEYS, Manifest, ManifestAction,
+    ManifestError, Permissions, PickItem, Picker, PickerStyle, Track, is_asset,
 };
 pub use permission::{describe, host_allowed, is_lan};

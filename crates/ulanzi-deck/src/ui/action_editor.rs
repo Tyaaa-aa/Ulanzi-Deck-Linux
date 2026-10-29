@@ -1729,13 +1729,11 @@ fn output_rows(ed: &Ed, devices: &[String]) -> Vec<gtk::Widget> {
 
 /// A small rendered key showing the action's default look (or an empty slot).
 pub fn action_chip(state: &State, action: Option<&Action>, size: i32) -> gtk::Widget {
-    // Plugin actions have no look of their own yet: every plugin uses the add-on icon.
-    if let Some(Action::Plugin { .. }) = action {
-        let i = gtk::Image::from_icon_name("application-x-addon-symbolic");
-        i.set_pixel_size(size);
-        i.set_size_request(size, size);
-        i.set_valign(gtk::Align::Center);
-        return i.upcast();
+    // A plugin action without an icon of its own shows its plugin's logo.
+    if let Some(a @ Action::Plugin { plugin, .. }) = action
+        && catalog::default_look(a).source == ulanzi_core::model::ImageSource::None
+    {
+        return crate::ui::plugin_logo(state, plugin, size).upcast();
     }
     let texture = action.and_then(|a| {
         crate::ui::canvas::key_texture(&catalog::default_look(a), &crate::ui::canvas::profile_dir(state))

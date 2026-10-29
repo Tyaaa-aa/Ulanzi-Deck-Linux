@@ -1,7 +1,9 @@
 id = "obs"
 name = "OBS Studio"
-version = "1.0.0"
+version = "1.1.0"
 contract = "1.1"
+icon = "assets/icon.svg"
+symbolic_icon = "assets/symbolic.svg"
 description = "Scenes, recording, streaming, replay buffer, virtual camera and audio, with live state on key labels."
 categories = ["streaming"]
 background = true
@@ -42,6 +44,12 @@ help = "OBS: Tools → WebSocket Server Settings → Show Connect Info"
 id = "scenes"
 style = "grid"
 
+# Several scenes at once, for the scene keys.
+[[pickers]]
+id = "scene_keys"
+style = "grid"
+multi = true
+
 [[pickers]]
 id = "audio_inputs"
 style = "list"
@@ -71,6 +79,7 @@ style = "list"
 [[actions]]
 id = "set_scene"
 name = "Switch scene"
+icon = "assets/actions/set_scene.svg"
 params = [
   { key = "scene", kind = "item", picker = "scenes", label = "Scene" },
   { key = "preview", kind = "toggle", label = "Set the preview scene instead (studio mode)" },
@@ -79,6 +88,7 @@ params = [
 [[actions]]
 id = "toggle_scenes"
 name = "Toggle between two scenes"
+icon = "assets/actions/toggle_scenes.svg"
 params = [
   { key = "a", kind = "item", picker = "scenes", label = "First scene" },
   { key = "b", kind = "item", picker = "scenes", label = "Second scene" },
@@ -87,6 +97,7 @@ params = [
 [[actions]]
 id = "toggle_source"
 name = "Show or hide a source"
+icon = "assets/actions/toggle_source.svg"
 params = [
   { key = "scene", kind = "item", picker = "scenes", label = "Scene" },
   { key = "source", kind = "item", picker = "scene_sources", label = "Scene / Source" },
@@ -95,46 +106,57 @@ params = [
 [[actions]]
 id = "toggle_record"
 name = "Toggle recording"
+icon = "assets/actions/toggle_record.svg"
 
 [[actions]]
 id = "start_record"
 name = "Start recording"
+icon = "assets/actions/start_record.svg"
 
 [[actions]]
 id = "stop_record"
 name = "Stop recording"
+icon = "assets/actions/stop_record.svg"
 
 [[actions]]
 id = "pause_record"
 name = "Pause or resume recording"
+icon = "assets/actions/pause_record.svg"
 
 [[actions]]
 id = "toggle_stream"
 name = "Toggle streaming"
+icon = "assets/actions/toggle_stream.svg"
 
 [[actions]]
 id = "start_stream"
 name = "Start streaming"
+icon = "assets/actions/start_stream.svg"
 
 [[actions]]
 id = "stop_stream"
 name = "Stop streaming"
+icon = "assets/actions/stop_stream.svg"
 
 [[actions]]
 id = "toggle_replay"
 name = "Toggle replay buffer"
+icon = "assets/actions/toggle_replay.svg"
 
 [[actions]]
 id = "save_replay"
 name = "Save replay"
+icon = "assets/actions/save_replay.svg"
 
 [[actions]]
 id = "toggle_virtual_cam"
 name = "Toggle virtual camera"
+icon = "assets/actions/toggle_virtual_cam.svg"
 
 [[actions]]
 id = "toggle_mute"
 name = "Mute or unmute an input"
+icon = "assets/actions/toggle_mute.svg"
 params = [
   { key = "input", kind = "item", picker = "audio_inputs", label = "Audio input" },
 ]
@@ -142,6 +164,7 @@ params = [
 [[actions]]
 id = "input_volume"
 name = "Change an input's volume"
+icon = "assets/actions/input_volume.svg"
 params = [
   { key = "input", kind = "item", picker = "audio_inputs", label = "Audio input" },
   { key = "op", kind = "choice", label = "Change", choices = ["up", "down", { value = "mute", label = "Mute or unmute" }, "set"] },
@@ -152,6 +175,7 @@ params = [
 [[actions]]
 id = "toggle_filter"
 name = "Turn a filter on or off"
+icon = "assets/actions/toggle_filter.svg"
 params = [
   { key = "source", kind = "item", picker = "sources", label = "Source" },
   { key = "filter", kind = "item", picker = "filters", label = "Filter" },
@@ -160,10 +184,12 @@ params = [
 [[actions]]
 id = "studio_transition"
 name = "Studio mode: transition"
+icon = "assets/actions/studio_transition.svg"
 
 [[actions]]
 id = "set_collection"
 name = "Switch scene collection"
+icon = "assets/actions/set_collection.svg"
 params = [
   { key = "name", kind = "item", picker = "collections", label = "Scene collection" },
 ]
@@ -171,6 +197,7 @@ params = [
 [[actions]]
 id = "set_profile"
 name = "Switch OBS profile"
+icon = "assets/actions/set_profile.svg"
 params = [
   { key = "name", kind = "item", picker = "profiles", label = "OBS profile" },
 ]
@@ -178,11 +205,27 @@ params = [
 [[actions]]
 id = "screenshot"
 name = "Take a screenshot"
+icon = "assets/actions/screenshot.svg"
 
 [[actions]]
 id = "reconnect"
 name = "Reconnect to OBS"
+icon = "assets/actions/reconnect.svg"
 
 [[actions]]
 id = "forget_password"
 name = "Forget the OBS password"
+icon = "assets/actions/forget_password.svg"
+
+# Ready-made keys: one key per scene the user picks.
+[[key_sets]]
+id = "scenes"
+name = "Scene keys"
+description = "Pick scenes; each gets a key that switches to it"
+icon = "assets/actions/set_scene.svg"
+picker = "scene_keys"
+
+[[key_sets.variants]]
+keys = [
+  { action = "set_scene", params = { scene = "$id" }, label = "$name" },
+]

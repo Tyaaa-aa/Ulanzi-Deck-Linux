@@ -1,5 +1,5 @@
-//! The action list: a search field, a row of category buttons (All · built-in categories · one
-//! per plugin) and the actions in collapsible sections, A–Z. The side panel shows it as the
+//! The action list: a search field with a category menu next to it (All · built-in categories ·
+//! one per plugin) and the actions in collapsible sections, A–Z. The side panel shows it as the
 //! library (drag an action onto the deck, or click it to assign it to the selection); the key
 //! editor's action picker shows the same list in a popover. What it shows comes from
 //! [`crate::action_list`].
@@ -51,9 +51,10 @@ struct Inner {
     catalog: RefCell<Catalog>,
     view: RefCell<View>,
     search: gtk::SearchEntry,
+    /// The category menu's entries.
     tabs: gtk::Box,
+    category_button: gtk::MenuButton,
     list: gtk::Box,
-    tab_scroller: gtk::ScrolledWindow,
     /// Set while the category buttons are rebuilt, so their toggles don't redraw the list.
     building_tabs: Cell<bool>,
     /// The query the shown list was made for.
@@ -101,6 +102,8 @@ impl Inner {
         self.render_list();
     }
 
+    /// The category menu: its button names the chosen category; the menu lists All, the
+    /// built-in categories and one entry per plugin (with its logo).
     fn render_tabs(self: &Rc<Self>) {
         self.building_tabs.set(true);
         while let Some(c) = self.tabs.first_child() {
@@ -109,65 +112,76 @@ impl Inner {
         let current = self.category();
         let mut first: Option<gtk::ToggleButton> = None;
         for tab in self.catalog.borrow().tabs() {
+            let plugin = tab.id.strip_prefix("plugin:").map(str::to_string);
+            let line = gtk::Box::builder().spacing(10).build();
+            match &plugin {
+                Some(id) => line.append(&crate::ui::plugin_logo(&self.state, id, 18)),
+                None => {
+                    // Keeps the names lined up with the plugins' below.
+                    let gap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+                    gap.set_size_request(18, 18);
+                    line.append(&gap);
+                }
+            }
+            line.append(
+                &gtk::Label::builder()
+                    .label(&tab.label)
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .build(),
+            );
+            let tick = gtk::Image::from_icon_name("object-select-symbolic");
+            tick.set_opacity(if tab.id == current { 1.0 } else { 0.0 });
+            line.append(&tick);
             let b = gtk::ToggleButton::builder()
-                .label(&tab.label)
+                .child(&line)
                 .active(tab.id == current)
-                .css_classes(["category-tab"])
+                .css_classes(["flat", "category-item"])
+                .tooltip_text(&tab.label)
                 .build();
             match &first {
                 Some(f) => b.set_group(Some(f)),
                 None => first = Some(b.clone()),
             }
+            if tab.id == current {
+                self.show_category(&tab.label, plugin.as_deref());
+            }
             let weak = Rc::downgrade(self);
-            let id = tab.id.clone();
+            let (id, label) = (tab.id.clone(), tab.label.clone());
             b.connect_toggled(move |b| {
+                tick.set_opacity(if b.is_active() { 1.0 } else { 0.0 });
                 let Some(inner) = weak.upgrade() else {
                     return;
                 };
                 if b.is_active() && !inner.building_tabs.get() {
                     inner.memory().borrow_mut().category = id.clone();
+                    inner.show_category(&label, id.strip_prefix("plugin:"));
+                    inner.category_button.popdown();
                     inner.render_list();
                 }
             });
             self.tabs.append(&b);
         }
         self.building_tabs.set(false);
-        self.scroll_to_chosen_tab_soon();
     }
 
-    /// Bring the chosen category's button into view once it has its size.
-    fn scroll_to_chosen_tab_soon(self: &Rc<Self>) {
-        let weak = Rc::downgrade(self);
-        glib::idle_add_local_once(move || {
-            if let Some(inner) = weak.upgrade() {
-                inner.scroll_to_chosen_tab();
-            }
-        });
-    }
-
-    fn scroll_to_chosen_tab(&self) {
-        let mut c = self.tabs.first_child();
-        while let Some(w) = c {
-            c = w.next_sibling();
-            let Some(b) = w.downcast_ref::<gtk::ToggleButton>() else {
-                continue;
-            };
-            if !b.is_active() {
-                continue;
-            }
-            let Some(p) = b.compute_point(&self.tabs, &gtk::graphene::Point::new(0.0, 0.0)) else {
-                return;
-            };
-            let adj = self.tab_scroller.hadjustment();
-            let v = scroll_into_view(
-                adj.value(),
-                adj.page_size(),
-                f64::from(p.x()),
-                f64::from(b.width()),
-            );
-            adj.set_value(v);
-            return;
+    /// Name the chosen category on the menu button.
+    fn show_category(&self, label: &str, plugin: Option<&str>) {
+        let line = gtk::Box::builder().spacing(6).build();
+        if let Some(id) = plugin {
+            line.append(&crate::ui::plugin_logo(&self.state, id, 16));
         }
+        line.append(
+            &gtk::Label::builder()
+                .label(label)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .max_width_chars(12)
+                .build(),
+        );
+        line.append(&gtk::Image::from_icon_name("pan-down-symbolic"));
+        self.category_button.set_child(Some(&line));
+        self.category_button
+            .set_tooltip_text(Some(&format!("Category: {label}")));
     }
 
     fn render_list(self: &Rc<Self>) {
@@ -209,7 +223,11 @@ impl Inner {
         let collapsed = self.memory().borrow().collapsed.clone();
         let mut folded = HashSet::new();
         for g in &view.groups {
-            let rows = self.group_list(g);
+            let rows = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            if let Some(sets) = self.key_set_list(g, &query) {
+                rows.append(&sets);
+            }
+            rows.append(&self.group_list(g));
             if !view.headers {
                 self.list.append(&rows);
                 continue;
@@ -249,8 +267,8 @@ impl Inner {
     /// closes the section (remembered unless searching).
     fn group_header(self: &Rc<Self>, g: &Group, revealer: &gtk::Revealer) -> gtk::Button {
         let b = gtk::Box::builder().spacing(8).build();
-        if g.plugin {
-            b.append(&plugin_icon(g.icon.as_deref(), 16));
+        if let Some(id) = g.id.strip_prefix("plugin:").filter(|_| g.plugin) {
+            b.append(&crate::ui::plugin_image(id, g.icon.as_deref(), 18));
         }
         b.append(
             &gtk::Label::builder()
@@ -298,6 +316,43 @@ impl Inner {
         button
     }
 
+    /// A plugin section's ready-made keys (side panel only; they add keys, not one action),
+    /// when the query is empty or names them.
+    fn key_set_list(self: &Rc<Self>, g: &Group, query: &str) -> Option<gtk::ListBox> {
+        if !matches!(self.purpose, Use::Library) {
+            return None;
+        }
+        let plugin = g.id.strip_prefix("plugin:").filter(|_| g.plugin)?;
+        let sets: Vec<_> = crate::ui::key_sets::sets_of(&self.state, plugin)
+            .into_iter()
+            .filter(|k| {
+                let q = query.to_lowercase();
+                q.split_whitespace()
+                    .all(|w| k.name.to_lowercase().contains(w) || k.description.to_lowercase().contains(w))
+            })
+            .collect();
+        if sets.is_empty() {
+            return None;
+        }
+        let list = gtk::ListBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .css_classes(["boxed-list", "key-sets"])
+            .build();
+        for ks in &sets {
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&ks.name).as_str())
+                .subtitle(glib::markup_escape_text(&ks.description).as_str())
+                .activatable(true)
+                .build();
+            row.add_prefix(&crate::ui::key_sets::set_icon(plugin, ks, 24));
+            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            let (state, plugin, id) = (self.state.clone(), plugin.to_string(), ks.id.clone());
+            row.connect_activated(move |r| crate::ui::key_sets::start(&state, r, &plugin, &id));
+            list.append(&row);
+        }
+        Some(list)
+    }
+
     fn group_list(self: &Rc<Self>, g: &Group) -> gtk::ListBox {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::None)
@@ -321,11 +376,7 @@ impl Inner {
 
     fn entry_row(self: &Rc<Self>, e: &Entry) -> gtk::ListBoxRow {
         let b = gtk::Box::builder().spacing(10).build();
-        if e.plugin.is_some() {
-            b.append(&plugin_icon(e.icon.as_deref(), 24));
-        } else {
-            b.append(&action_chip(&self.state, Some(&e.action), 24));
-        }
+        b.append(&action_chip(&self.state, Some(&e.action), 24));
         b.append(
             &gtk::Label::builder()
                 .label(&e.title)
@@ -363,18 +414,6 @@ impl Inner {
     }
 }
 
-/// The scroll position that shows `[x, x + width)` in a view of `page` starting at `value`,
-/// moving as little as possible.
-fn scroll_into_view(value: f64, page: f64, x: f64, width: f64) -> f64 {
-    if x < value {
-        x
-    } else if x + width > value + page {
-        (x + width - page).min(x)
-    } else {
-        value
-    }
-}
-
 fn arrow_icon(open: bool) -> &'static str {
     if open {
         "pan-down-symbolic"
@@ -384,18 +423,6 @@ fn arrow_icon(open: bool) -> &'static str {
 }
 
 /// The plugin's icon when the icon theme has it, else the add-on icon.
-fn plugin_icon(icon: Option<&str>, size: i32) -> gtk::Image {
-    let name = icon
-        .and_then(crate::plugins::icon_lookup)
-        .filter(|n| gdk::Display::default().is_some_and(|d| gtk::IconTheme::for_display(&d).has_icon(n)))
-        .unwrap_or("application-x-addon-symbolic");
-    let i = gtk::Image::from_icon_name(name);
-    i.set_pixel_size(size);
-    i.set_size_request(size, size);
-    i.set_valign(gtk::Align::Center);
-    i
-}
-
 /// Dragging a row carries the action, as the canvas expects it.
 fn drag_source(state: &State, action: Action) -> gtk::DragSource {
     let drag = gtk::DragSource::builder().actions(gdk::DragAction::COPY).build();
@@ -446,14 +473,29 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let search = gtk::SearchEntry::builder()
         .placeholder_text("Search actions")
+        .hexpand(true)
         .build();
-    let tabs = gtk::Box::builder().spacing(4).build();
-    let tab_scroller = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
-        .vscrollbar_policy(gtk::PolicyType::Never)
+    let tabs = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    let menu = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_height(true)
+        .max_content_height(420)
         .child(&tabs)
-        .css_classes(["category-tabs"])
         .build();
+    let category_button = gtk::MenuButton::builder()
+        .popover(
+            &gtk::Popover::builder()
+                .child(&menu)
+                .css_classes(["category-menu"])
+                .build(),
+        )
+        .build();
+    let bar = gtk::Box::builder().spacing(6).build();
+    bar.append(&search);
+    bar.append(&category_button);
     let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
     list.set_margin_bottom(12);
     let scroller = gtk::ScrolledWindow::builder()
@@ -461,8 +503,7 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
         .vexpand(true)
         .child(&list)
         .build();
-    root.append(&search);
-    root.append(&tab_scroller);
+    root.append(&bar);
     root.append(&scroller);
 
     let inner = Rc::new(Inner {
@@ -473,7 +514,7 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
         search: search.clone(),
         tabs,
         list,
-        tab_scroller: tab_scroller.clone(),
+        category_button,
         building_tabs: Cell::new(false),
         shown_query: RefCell::default(),
         folded: RefCell::default(),
@@ -522,15 +563,6 @@ pub(crate) fn action_list(state: &State, purpose: Use) -> ActionList {
             }
         })
     };
-    {
-        // Opening the panel (or the picker): show the chosen category's button.
-        let weak = Rc::downgrade(&inner);
-        root.connect_map(move |_| {
-            if let Some(inner) = weak.upgrade() {
-                inner.scroll_to_chosen_tab_soon();
-            }
-        });
-    }
     let weak = Rc::downgrade(&inner);
     // The list lives as long as its root: the root's handler is what holds it (the list's own
     // handlers hold it weakly).
@@ -635,7 +667,11 @@ mod tests {
             let tabs = tab_buttons(&inner);
             assert_eq!(tabs.len(), 1 + Category::ALL.len());
             assert!(tabs[0].is_active(), "All first");
-            assert_eq!(tabs[0].label().as_deref(), Some("All"));
+            assert_eq!(tabs[0].tooltip_text().as_deref(), Some("All"));
+            assert_eq!(
+                inner.category_button.tooltip_text().as_deref(),
+                Some("Category: All")
+            );
 
             // Enter without a query picks nothing.
             list.search.emit_activate();
@@ -658,6 +694,10 @@ mod tests {
             tabs[1].set_active(true);
             assert_eq!(state.picker_memory.borrow().category, "cat:navigation");
             assert!(!tabs[0].is_active());
+            assert_eq!(
+                inner.category_button.tooltip_text().as_deref(),
+                Some("Category: Navigation")
+            );
             list.search.set_text("");
             inner.render_list();
             assert_eq!(
@@ -682,18 +722,6 @@ mod tests {
             assert!(tab_buttons(&inner)[1].is_active());
             assert_eq!(state.library_memory.borrow().category, action_list::ALL);
         });
-    }
-
-    #[test]
-    fn the_chosen_tab_scrolls_into_view() {
-        // Already visible: stays.
-        assert_eq!(scroll_into_view(0.0, 300.0, 100.0, 80.0), 0.0);
-        // Off to the right: its right edge lines up with the view's.
-        assert_eq!(scroll_into_view(0.0, 300.0, 500.0, 80.0), 280.0);
-        // Off to the left: its left edge lines up.
-        assert_eq!(scroll_into_view(400.0, 300.0, 120.0, 80.0), 120.0);
-        // Wider than the view: its start shows.
-        assert_eq!(scroll_into_view(0.0, 50.0, 200.0, 80.0), 200.0);
     }
 
     #[test]

@@ -164,12 +164,14 @@ params = [{ key = "name", kind = "text", label = "Name" }]
 | Field | Meaning |
 |---|---|
 | `id`, `name`, `version`, `contract` | Required. The folder name must equal the id. |
-| `description`, `icon`, `categories`, `tested_on_hardware` | Optional, for the app's lists. |
+| `description`, `categories`, `tested_on_hardware` | Optional, for the app's lists. |
+| `icon`, `symbolic_icon`, `color` | Optional, the plugin's look; see [Icons](#icons). |
 | `background` | Optional, default `false`. |
 | `[permissions]` | Optional, see below. Nothing is allowed that is not listed. |
 | `[[settings]]` | Optional. The plugin's settings page in the app, one field each; see [Settings and parameters](#settings-and-parameters). |
-| `[[actions]]` | The actions the plugin offers: `id` and `name` (required, ids unique), `icon`, and `params` (fields, as below). |
+| `[[actions]]` | The actions the plugin offers: `id` and `name` (required, ids unique), `icon` (see [Icons](#icons)), and `params` (fields, as below). |
 | `[[pickers]]` | Contract 1.1. Lists that `item` fields are picked from: `id` (required, unique), `style`, `groups`, `multi`; see [Pickers](#pickers). |
+| `[[key_sets]]` | Contract 1.1. Ready-made keys for items the user picks; see [Ready-made keys](#ready-made-keys). |
 
 A key uses an action like this in `profile.toml`:
 
@@ -194,6 +196,74 @@ picker is declared twice, when an `item` field names a picker that is not declar
 param uses a `multi` picker. A `contract = "1.0"` manifest keeps the 1.0 rules: its `[[pickers]]` tables
 (whatever their shape) and a field's `picker` are accepted and ignored, so its `item` fields are text
 entries.
+
+### Icons
+
+Every plugin brings its own icons in `assets/`, so the app, the plugin store and the deck show it the
+same way without anything built into the app:
+
+| Field | File | Used for |
+|---|---|---|
+| `icon` | `assets/….svg` or `.png`, full colour, square (at least 128 px for a PNG) | The plugin in lists, its settings page, the category menu and the plugin store. |
+| `symbolic_icon` | `assets/….svg`, one colour | Small places that follow the theme's colours. |
+| `color` | `#rrggbb` | The colour the plugin's action icons get on fresh keys (white when missing). |
+| an action's `icon` | `assets/….svg`, one colour | The action in the action list and on a fresh key. |
+| a key set key's `icon` | `assets/….svg`, one colour | That key (see [Ready-made keys](#ready-made-keys)). |
+
+One-colour SVGs are drawn in the key's icon colour: use `currentColor` for strokes and fills, or leave
+them black (the app fills the root with `currentColor`). Keep each under 512 KiB. Paths are relative to
+the plugin folder, start with `assets/` and may not hold `..`; installing refuses a plugin whose manifest
+names an icon that is not in it. A value without `assets/` (such as `mdi:lightbulb`) is still read as an
+icon theme name, as before. A key showing a plugin icon stores it as `source = { kind = "plugin",
+plugin = "<id>", icon = "assets/…" }`, so it changes when the plugin's file does.
+
+```toml
+icon = "assets/icon.svg"
+symbolic_icon = "assets/symbolic.svg"
+color = "#18bcf2"
+
+[[actions]]
+id = "toggle"
+name = "Toggle an entity"
+icon = "assets/actions/toggle.svg"
+```
+
+### Ready-made keys
+
+A `[[key_sets]]` entry lets the user set up many keys at once: they pick items from a multi picker (the
+app's action list shows the key set at the top of the plugin's section), and each item gets the keys of
+the first variant whose `groups` hold the item's group (a variant without `groups` takes any item). The
+app shortens names that start the same ("Bedroom Lamp", "Bedroom Fan" → "Lamp", "Fan"), asks whether
+the keys go on this page or a new one, and keeps each item's keys together on one page.
+
+| Field | Meaning |
+|---|---|
+| `id`, `name`, `picker` | Required. `picker` names a `[[pickers]]` entry; make it `multi = true`. |
+| `description`, `icon` | Shown in the action list. |
+| `track` | Settings each picked item is added to, so the keys get live state: `{ setting, value, groups }`. A multi `item` setting gets the value as a list entry (up to its `max`), a `text` setting as a comma-separated entry. |
+| `[[key_sets.variants]]` | `groups` (optional) and `keys`: up to 15, each with `action` (declared), `params`, `icon`, `label` and `extra`. |
+
+In `params`, `label` and a track's `value`, `$id` becomes the picked item's id and `$name` its (short)
+name. Keys with `extra = true` (brightness, speed) can be left out by the user, so each item gets only its
+main key. From the Home Assistant plugin:
+
+```toml
+[[key_sets]]
+id = "devices"
+name = "Keys for your devices"
+picker = "devices"
+track = [{ setting = "entities", value = "$id" }]
+
+[[key_sets.variants]]
+groups = ["Lights"]
+keys = [
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/light.svg", label = "$name" },
+  { action = "set_level", params = { entity_id = "$id", op = "up", step = 10 }, icon = "assets/keys/brighter.svg", label = "{ha.$id.pct}%", extra = true },
+]
+```
+
+Picker searches should match every word of the query anywhere in the name, id or group, in any order;
+`ulanzi_plugin::matches_query` does exactly that.
 
 ### Settings and parameters
 
@@ -487,7 +557,9 @@ with no real OBS and no waiting.
 [`plugins/ha`](../plugins/ha/README.md) is the second real plugin. It talks to Home Assistant over one WebSocket
 with a filtered `subscribe_entities`, so only the entities listed in its settings are sent (never the whole
 install), and shows them as `{ha.<entity_id>}` labels. The access token goes into the secret store like the OBS
-password, and `lan = true` limits it to Home Assistant on the local network.
+password, and `lan = true` limits it to Home Assistant on the local network. Its "Keys for your devices" key
+set makes keys for lights (on/off, dimmer, brighter), fans (on/off, slower, faster), air conditioners (on/off,
+cooler, warmer, with the `climate` action), covers, media players, scripts, scenes, buttons and switches.
 
 ## Managing plugins
 
@@ -499,8 +571,9 @@ secrets; keys that use it keep their settings and show "Needs the “<id>” plu
 packages are unsigned, so its Install button works only with Developer Mode on (the dialog says so). With
 Developer Mode on, Install from Folder (developers)… does the same for a folder that contains
 `plugin.toml`. Plugin actions appear in the action list (the side panel and the key editor's action
-picker) as a category and a section per plugin, A–Z, with the plugin's name and its `icon` (an action's
-own `icon` wins; a themed icon name such as `mdi:lightbulb` is shown when the icon theme has it). The key
+picker) under a category of their own (the menu next to the search field) and a section per plugin, A–Z,
+with the plugin's logo and each action's own icon (see [Icons](#icons)); a plugin's key sets head its
+section in the side panel. The key
 editor shows rows for their `params` (an `item` param opens the plugin's list; see [Pickers](#pickers)); keys whose plugin
 is missing, turned off, stopped working or cannot be loaded show a warning badge.
 

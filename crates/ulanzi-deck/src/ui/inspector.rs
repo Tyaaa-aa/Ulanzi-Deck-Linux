@@ -65,19 +65,17 @@ pub fn close_does(has_selection: bool, library_asked: bool) -> CloseDoes {
     }
 }
 
-/// A page of the key editor, picked with the switcher under the key preview.
+/// A part of the editor's page, top to bottom in the order [`sections`] gives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     /// Image and colours.
     Look,
     /// The label's text and place.
     Label,
-    /// What a press (a tap, for the screen) does.
+    /// What a press (a tap, for the screen; every zone, for a dial) does.
     Press,
     /// What holding does.
     Hold,
-    TurnLeft,
-    TurnRight,
     /// What the wide screen shows.
     Display,
     /// Things done to several selected keys at once.
@@ -85,68 +83,36 @@ pub enum Section {
 }
 
 impl Section {
-    pub fn title(self) -> &'static str {
-        match self {
-            Section::Look => "Look",
-            Section::Label => "Label",
-            Section::Press => "Press",
-            Section::Hold => "Hold",
-            // Short, so a dial's four fit the panel; the tooltip and the page say "Turn".
-            Section::TurnLeft => "Left",
-            Section::TurnRight => "Right",
-            Section::Display => "Display",
-            Section::Keys => "Keys",
-        }
-    }
-
-    /// The longer name, where the switcher's label is shortened.
-    pub fn long_title(self) -> &'static str {
-        match self {
-            Section::TurnLeft => "Turn left",
-            Section::TurnRight => "Turn right",
-            s => s.title(),
-        }
-    }
-
-    /// The section's page name in the editor's stack.
+    /// The part's widget name (for tests and the inspector in GTK's debugger).
     fn name(self) -> &'static str {
         match self {
             Section::Look => "look",
             Section::Label => "label",
             Section::Press => "press",
             Section::Hold => "hold",
-            Section::TurnLeft => "left",
-            Section::TurnRight => "right",
             Section::Display => "display",
             Section::Keys => "keys",
         }
     }
 }
 
-/// The sections the editor shows for `slots` (the selection), in switcher order; empty when
+/// The parts the editor shows for `slots` (the selection), top to bottom; empty when
 /// there is nothing to edit. `screen` is what the wide screen is set to show.
 pub fn sections(slots: &[Slot], screen: &ScreenConfig) -> Vec<Section> {
     use Section::*;
     match slots {
         [] => vec![],
-        [Slot::Key(_)] => vec![Look, Label, Press, Hold],
-        // The zones a dial has (see `Dial`).
-        [Slot::Dial(_)] => vec![TurnLeft, TurnRight, Press, Hold],
+        [Slot::Key(_)] => vec![Press, Label, Hold, Look],
+        // Its four zones (see `Dial`) together.
+        [Slot::Dial(_)] => vec![Press],
         [Slot::Small(_)] => vec![Press],
         [Slot::Screen] => match screen {
             ScreenConfig::Custom { .. } => vec![Display, Press],
             _ => vec![Display],
         },
-        _ if slots.iter().any(|s| matches!(s, Slot::Key(_))) => vec![Look, Label, Keys],
+        _ if slots.iter().any(|s| matches!(s, Slot::Key(_))) => vec![Label, Look, Keys],
         _ => vec![],
     }
-}
-
-/// The section to open: the one last picked while it is there, else the first.
-pub fn initial_section(remembered: Option<Section>, available: &[Section]) -> Option<Section> {
-    remembered
-        .filter(|r| available.contains(r))
-        .or_else(|| available.first().copied())
 }
 
 /// Shared by every row of one build of the inspector.
@@ -369,7 +335,7 @@ fn fill(ctx: &C, content: &gtk::Box) -> bool {
             View::default()
         }
     };
-    add_sections(ctx, content, &list, view);
+    add_sections(content, &list, view);
     true
 }
 
@@ -402,73 +368,31 @@ fn padded(w: impl IsA<gtk::Widget>) -> impl IsA<gtk::Widget> {
     w
 }
 
-/// The switcher (with more than one section), the sections in `list` order and the footer.
-/// Each page is built once per rebuild; switching only changes the visible one.
-fn add_sections(ctx: &C, content: &gtk::Box, list: &[Section], mut view: View) {
-    let stack = gtk::Stack::builder()
-        .vexpand(true)
-        .transition_type(gtk::StackTransitionType::Crossfade)
-        .build();
-    let switcher = gtk::Box::builder()
-        .spacing(4)
-        .halign(gtk::Align::Center)
-        .css_classes(["section-switcher"])
-        .build();
-    switcher.update_property(&[gtk::accessible::Property::Label("Sections")]);
-    let open = initial_section(ctx.state.inspector_section.get(), list);
-    let mut first: Option<gtk::ToggleButton> = None;
+/// The sections in `list` order on one scrolling page (most-used first, so a key is set up
+/// without switching anything), then the footer.
+fn add_sections(content: &gtk::Box, list: &[Section], mut view: View) {
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
     for &section in list {
         let Some(i) = view.pages.iter().position(|(s, _)| *s == section) else {
             debug_assert!(false, "no page for {section:?}");
             continue;
         };
         let (_, page) = view.pages.remove(i);
-        let scroller = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .child(&page)
-            .build();
-        stack.add_named(&scroller, Some(section.name()));
-        let b = gtk::ToggleButton::builder()
-            .label(section.title())
-            .active(open == Some(section))
-            .css_classes(["category-tab"])
-            .build();
-        if section.long_title() != section.title() {
-            b.set_tooltip_text(Some(section.long_title()));
-        }
-        match &first {
-            Some(f) => b.set_group(Some(f)),
-            None => first = Some(b.clone()),
-        }
-        let (stack, state) = (stack.clone(), ctx.state.clone());
-        b.connect_toggled(move |b| {
-            if b.is_active() {
-                stack.set_visible_child_name(section.name());
-                // Kept for the next key, until the app quits.
-                state.inspector_section.set(Some(section));
-            }
-        });
-        switcher.append(&b);
+        page.set_widget_name(section.name());
+        body.append(&page);
     }
     debug_assert!(view.pages.is_empty(), "pages the model does not list");
-    if let Some(s) = open {
-        stack.set_visible_child_name(s.name());
-    }
-    if list.len() > 1 {
-        // Scrolls sideways rather than widen the panel, should a font make the pills too wide.
-        let scroller = gtk::ScrolledWindow::builder()
-            .vscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_width(true)
-            .halign(gtk::Align::Center)
-            .child(&switcher)
-            .build();
-        content.append(&padded(scroller));
-    }
     if !list.is_empty() {
-        content.append(&stack);
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .child(&body)
+            .css_classes(["inspector-body"])
+            .build();
+        content.append(&scroller);
     }
     if let Some(f) = view.footer {
+        f.set_margin_top(6);
         f.set_margin_bottom(18);
         content.append(&padded(f));
     }
@@ -552,8 +476,7 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
         let key = e.key(k);
         (key.and_then(|k| k.tap.clone()), key.and_then(|k| k.hold.clone()))
     };
-    // The switcher names the section, so the groups need no title.
-    let actions = adw::PreferencesGroup::new();
+    let actions = adw::PreferencesGroup::builder().title("Press").build();
     let write_tap: Write = {
         let ctx = ctx.clone();
         Rc::new(move |a: Option<Action>, how: How, picked: bool| {
@@ -583,9 +506,7 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
     }
     view.page(Section::Press).append(&actions);
 
-    let hold_group = adw::PreferencesGroup::builder()
-        .description("Runs instead when the key is held for half a second")
-        .build();
+    let hold_group = adw::PreferencesGroup::new();
     let write_hold: Write = {
         let ctx = ctx.clone();
         Rc::new(move |a: Option<Action>, how: How, _| {
@@ -595,15 +516,18 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
             })
         })
     };
-    for w in slot_rows(
+    // Rarely used: one row until it has an action, and folded unless opened before.
+    let held = slot_expander(
         ctx,
         &format!("key{k}/hold"),
+        "When Held",
         hold.as_ref(),
         write_hold,
-        "Nothing (tap action only)",
-    ) {
-        hold_group.add(&w);
-    }
+    );
+    held.set_tooltip_text(Some(
+        "Runs instead of Press when the key is held for half a second",
+    ));
+    hold_group.add(&held);
     view.page(Section::Hold).append(&hold_group);
 
     let clear = gtk::Button::builder()
@@ -696,6 +620,10 @@ fn source_summary(s: &ImageSource) -> String {
             .unwrap_or_else(|| desktop_id.clone()),
         ImageSource::Steam { appid } => format!("Steam game {appid}"),
         ImageSource::Emoji { ch } => ch.clone(),
+        ImageSource::Plugin { icon, .. } => std::path::Path::new(icon)
+            .file_stem()
+            .map(|f| f.to_string_lossy().replace(['-', '_'], " "))
+            .unwrap_or_else(|| icon.clone()),
     }
 }
 
@@ -721,10 +649,15 @@ const VARIABLES: [(&str, &str); 10] = [
     ("profile", "Profile name"),
 ];
 
-/// The look of `keys`: image, colours, icon size and live state; and their label.
+/// The look of `keys` (image, colours, icon size and live state) folded into one row, since a
+/// fresh action already gives the key its look; and their label.
 fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::PreferencesGroup) {
     let state = ctx.state.clone();
     let group = adw::PreferencesGroup::new();
+    let look = adw::ExpanderRow::builder().title("Look").build();
+    look.add_prefix(&gtk::Image::from_icon_name("applications-graphics-symbolic"));
+    state.remember_expanded(&look, "look");
+    group.add(&look);
     let label_group = adw::PreferencesGroup::new();
     let keys: Rc<Vec<u8>> = Rc::new(keys);
     let (source, bg, fg, label, visible, scale, dynamic, pos) = {
@@ -745,6 +678,12 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         move |how: How, f: Field| ctx.commit(how, |e| e.set_field(&keys, f))
     };
 
+    look.set_subtitle(&glib::markup_escape_text(&match (&source, &bg) {
+        (Mixed::Mixed, _) | (_, Mixed::Mixed) => "Mixed".to_string(),
+        (Mixed::One(ImageSource::None), _) => "No image".to_string(),
+        (Mixed::One(s), _) => source_summary(s),
+        _ => String::new(),
+    }));
     // Image
     let image = adw::ActionRow::builder()
         .title("Image")
@@ -767,7 +706,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         remove.connect_clicked(move |_| set(How::Structure, Field::Source(ImageSource::None)));
         image.add_suffix(&remove);
     }
-    group.add(&image);
+    look.add_row(&image);
 
     // Colours
     for (title, value, is_bg) in [("Background", bg, true), ("Icon and Text", fg, false)] {
@@ -803,7 +742,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         let button = crate::ui::color_popover::color_button(current, preview, pick);
         row.add_suffix(&button);
         row.set_activatable_widget(Some(&button));
-        group.add(&row);
+        look.add_row(&row);
     }
 
     // Label text with a variables menu.
@@ -861,22 +800,6 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     label_row.add_suffix(&vars);
     label_group.add(&label_row);
 
-    let show = adw::SwitchRow::builder()
-        .title("Show Label")
-        .active(visible != Mixed::One(false))
-        .build();
-    if visible == Mixed::Mixed {
-        show.set_subtitle("Mixed");
-    }
-    {
-        let set = set.clone();
-        show.connect_active_notify(move |r| {
-            r.set_subtitle("");
-            set(How::Set, Field::LabelVisible(r.is_active()))
-        });
-    }
-    label_group.add(&show);
-
     // Say what "Default" means right now (the position set in Preferences).
     let default_position = format!(
         "Default ({})",
@@ -893,25 +816,28 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
             "Top",
             "Middle",
             "Bottom",
+            "Hidden",
         ]))
-        .selected(match pos {
-            Mixed::One(Some(p)) => 1 + LabelPosition::ALL.iter().position(|x| *x == p).unwrap_or(0) as u32,
-            _ => 0,
-        })
+        .selected(position_index(&visible, &pos))
         .build();
-    position.set_subtitle(match pos {
-        Mixed::Mixed => "Mixed",
-        _ => "Default is set in Preferences",
+    let hint = "Default is set in Preferences";
+    position.set_subtitle(if visible == Mixed::Mixed || pos == Mixed::Mixed {
+        "Mixed"
+    } else {
+        hint
     });
     {
-        let set = set.clone();
+        let (ctx, keys) = (ctx.clone(), keys.clone());
         position.connect_selected_notify(move |r| {
-            r.set_subtitle("Default is set in Preferences");
-            let p = match r.selected() {
-                0 => None,
-                i => LabelPosition::ALL.get(i as usize - 1).copied(),
-            };
-            set(How::Set, Field::LabelPosition(p))
+            r.set_subtitle(hint);
+            let (visible, p) = position_choice(r.selected());
+            // One undo step for both.
+            ctx.commit(How::Set, |e| {
+                e.set_field(&keys, Field::LabelVisible(visible));
+                if visible {
+                    e.set_field(&keys, Field::LabelPosition(p));
+                }
+            });
         });
     }
     label_group.add(&position);
@@ -932,7 +858,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
             set(How::Typing("scale"), Field::IconScale((r.value() / 100.0) as f32))
         });
     }
-    group.add(&size);
+    look.add_row(&size);
 
     let live = adw::SwitchRow::builder()
         .title("Show Live State")
@@ -940,8 +866,29 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         .active(dynamic != Mixed::One(false))
         .build();
     live.connect_active_notify(move |r| set(How::Set, Field::Dynamic(r.is_active())));
-    group.add(&live);
+    look.add_row(&live);
     (group, label_group)
+}
+
+/// The Label Position entry for the keys' visibility and position: Default, Top, Middle, Bottom
+/// or Hidden (4).
+fn position_index(visible: &Mixed<bool>, pos: &Mixed<Option<LabelPosition>>) -> u32 {
+    if *visible == Mixed::One(false) {
+        return 4;
+    }
+    match pos {
+        Mixed::One(Some(p)) => 1 + LabelPosition::ALL.iter().position(|x| x == p).unwrap_or(0) as u32,
+        _ => 0,
+    }
+}
+
+/// What entry `i` of Label Position sets: (shown, position).
+fn position_choice(i: u32) -> (bool, Option<LabelPosition>) {
+    match i {
+        0 => (true, None),
+        4 => (false, None),
+        i => (true, LabelPosition::ALL.get(i as usize - 1).copied()),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1188,49 +1135,28 @@ fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
     let dial = ctx.state.editor.borrow().dials()[d as usize].clone();
     type Pick = fn(&mut Dial) -> &mut Option<Action>;
     // The path names are the old expander titles, which the undo merging keys on.
-    let zones: [(Section, &str, &str, Option<&Action>, Pick); 4] = [
-        (
-            Section::TurnLeft,
-            "Turn Left",
-            "Choose what turning left does",
-            dial.left.as_ref(),
-            |d| &mut d.left,
-        ),
-        (
-            Section::TurnRight,
-            "Turn Right",
-            "Choose what turning right does",
-            dial.right.as_ref(),
-            |d| &mut d.right,
-        ),
-        (
-            Section::Press,
-            "Press",
-            "Choose what pressing the dial does",
-            dial.press.as_ref(),
-            |d| &mut d.press,
-        ),
-        (
-            Section::Hold,
-            "Hold",
-            "Nothing (press action only)",
-            dial.hold.as_ref(),
-            |d| &mut d.hold,
-        ),
+    let zones: [(&str, Option<&Action>, Pick); 4] = [
+        ("Turn Left", dial.left.as_ref(), |d| &mut d.left),
+        ("Turn Right", dial.right.as_ref(), |d| &mut d.right),
+        ("Press", dial.press.as_ref(), |d| &mut d.press),
+        ("Hold", dial.hold.as_ref(), |d| &mut d.hold),
     ];
-    for (section, title, hint, action, pick) in zones {
+    // One list: each zone opens to its settings.
+    let group = adw::PreferencesGroup::new();
+    for (title, action, pick) in zones {
         let write: Write = {
             let ctx = ctx.clone();
             Rc::new(move |a, how, _| ctx.commit(how, |e| e.set_dial(d, |dial| *pick(dial) = a)))
         };
-        let group = adw::PreferencesGroup::builder()
-            .title(section.long_title())
-            .build();
-        for w in slot_rows(ctx, &format!("dial{d}/{title}"), action, write, hint) {
-            group.add(&w);
-        }
-        view.page(section).append(&group);
+        group.add(&slot_expander(
+            ctx,
+            &format!("dial{d}/{title}"),
+            title,
+            action,
+            write,
+        ));
     }
+    view.page(Section::Press).append(&group);
 
     let all = adw::PreferencesGroup::builder()
         .description(
@@ -1504,61 +1430,54 @@ mod tests {
             style: ClockStyle::ALL[0],
         };
         let widgets = ScreenConfig::custom(vec![Widget::clock()], None, None);
-        // The look takes two sections, so each fits a small window without scrolling.
-        assert_eq!(sections(&[Slot::Key(3)], &clock), [Look, Label, Press, Hold]);
-        // A dial has no look: its four zones, in the order they sit on the dial's card.
-        assert_eq!(
-            sections(&[Slot::Dial(1)], &clock),
-            [TurnLeft, TurnRight, Press, Hold]
-        );
+        // What a key does first, its name next; hold and look are folded until opened.
+        assert_eq!(sections(&[Slot::Key(3)], &clock), [Press, Label, Hold, Look]);
+        // A dial's four zones sit together.
+        assert_eq!(sections(&[Slot::Dial(1)], &clock), [Press]);
         assert_eq!(sections(&[Slot::Small(0)], &clock), [Press]);
         // The screen can only be pressed when the app draws it.
         assert_eq!(sections(&[Slot::Screen], &clock), [Display]);
         assert_eq!(sections(&[Slot::Screen], &widgets), [Display, Press]);
         assert_eq!(
             sections(&[Slot::Key(0), Slot::Key(1)], &clock),
-            [Look, Label, Keys]
+            [Label, Look, Keys]
         );
         // Keys mixed with other controls: the keys are edited together.
         assert_eq!(
             sections(&[Slot::Key(0), Slot::Dial(0)], &clock),
-            [Look, Label, Keys]
+            [Label, Look, Keys]
         );
         assert!(sections(&[Slot::Dial(0), Slot::Small(1)], &clock).is_empty());
         assert!(sections(&[], &clock).is_empty());
     }
 
     #[test]
-    fn section_titles_and_names_are_distinct() {
+    fn section_names_are_distinct() {
         use Section::*;
-        let all = [Look, Label, Press, Hold, TurnLeft, TurnRight, Display, Keys];
+        let all = [Look, Label, Press, Hold, Display, Keys];
         for (i, a) in all.iter().enumerate() {
-            assert!(!a.title().is_empty());
             for b in &all[i + 1..] {
-                assert_ne!(a.title(), b.title());
                 assert_ne!(a.name(), b.name());
             }
         }
-        assert_eq!(TurnLeft.title(), "Left");
-        assert_eq!(TurnLeft.long_title(), "Turn left");
-        assert_eq!(Press.long_title(), "Press");
     }
 
     #[test]
-    fn the_last_section_stays_open_while_there() {
-        use Section::*;
-        let key = [Look, Label, Press, Hold];
-        let dial = [TurnLeft, TurnRight, Press, Hold];
-        assert_eq!(initial_section(None, &key), Some(Look));
-        assert_eq!(initial_section(Some(Hold), &key), Some(Hold));
-        assert_eq!(initial_section(Some(Label), &key), Some(Label));
-        // From a key's Hold to a dial's Hold, and its Press back to a key's Press.
-        assert_eq!(initial_section(Some(Hold), &dial), Some(Hold));
-        assert_eq!(initial_section(Some(Press), &key), Some(Press));
-        // Not there: the first.
-        assert_eq!(initial_section(Some(Look), &dial), Some(TurnLeft));
-        assert_eq!(initial_section(Some(Display), &key), Some(Look));
-        assert_eq!(initial_section(Some(Look), &[]), None);
+    fn label_position_covers_hidden() {
+        assert_eq!(position_index(&Mixed::One(true), &Mixed::One(None)), 0);
+        assert_eq!(
+            position_index(&Mixed::One(true), &Mixed::One(Some(LabelPosition::Middle))),
+            2
+        );
+        assert_eq!(
+            position_index(&Mixed::One(false), &Mixed::One(Some(LabelPosition::Top))),
+            4
+        );
+        for i in 0..5 {
+            let (shown, p) = position_choice(i);
+            let back = position_index(&Mixed::One(shown), &Mixed::One(p));
+            assert_eq!(back, i, "entry {i}");
+        }
     }
 
     fn state() -> State {
@@ -1591,22 +1510,25 @@ mod tests {
         }
     }
 
-    /// The editor's section stack (the library has none with these page names).
-    fn section_stack(panel: &Panel) -> Option<gtk::Stack> {
-        all::<gtk::Stack>(&panel.root).into_iter().find(|s| {
-            ["look", "left", "press", "display"]
-                .iter()
-                .any(|n| s.child_by_name(n).is_some())
-        })
+    /// The editor's scrolling page.
+    fn body(panel: &Panel) -> Option<gtk::ScrolledWindow> {
+        all::<gtk::ScrolledWindow>(&panel.root)
+            .into_iter()
+            .find(|s| s.has_css_class("inspector-body"))
     }
 
-    /// The switcher's buttons, as (label, active).
-    fn switcher(panel: &Panel) -> Vec<(String, bool)> {
-        all::<gtk::ToggleButton>(&panel.root)
-            .into_iter()
-            .filter(|b| b.parent().is_some_and(|p| p.has_css_class("section-switcher")))
-            .map(|b| (b.label().unwrap_or_default().to_string(), b.is_active()))
-            .collect()
+    /// The parts on the page, top to bottom.
+    fn parts(panel: &Panel) -> Vec<String> {
+        let Some(page) = body(panel).and_then(|b| b.child()).and_then(|v| v.first_child()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut c = page.first_child();
+        while let Some(w) = c {
+            c = w.next_sibling();
+            out.push(w.widget_name().to_string());
+        }
+        out
     }
 
     fn select(state: &State, slot: Slot) {
@@ -1618,45 +1540,35 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_switches_sections_and_keeps_the_last_one() {
+    fn the_editor_shows_every_part_on_one_page() {
         crate::ui::with_gtk(|| {
             let state = state();
             let panel = Panel::build(&state);
             select(&state, Slot::Key(0));
-            let names = |p: &Panel| switcher(p).into_iter().map(|(l, _)| l).collect::<Vec<_>>();
-            assert_eq!(names(&panel), ["Look", "Label", "Press", "Hold"]);
-            assert!(switcher(&panel)[0].1, "Look first");
-            let stack = section_stack(&panel).expect("sections");
-            assert_eq!(stack.visible_child_name().as_deref(), Some("look"));
-
-            // Picking Hold shows it and is remembered for the next key and for a dial.
-            let hold = all::<gtk::ToggleButton>(&panel.root)
-                .into_iter()
-                .find(|b| b.label().as_deref() == Some("Hold"))
-                .expect("Hold");
-            hold.set_active(true);
-            assert_eq!(stack.visible_child_name().as_deref(), Some("hold"));
-            assert_eq!(state.inspector_section.get(), Some(Section::Hold));
-            select(&state, Slot::Key(5));
-            let stack = section_stack(&panel).expect("sections");
-            assert_eq!(stack.visible_child_name().as_deref(), Some("hold"));
-            select(&state, Slot::Dial(0));
-            assert_eq!(names(&panel), ["Left", "Right", "Press", "Hold"]);
-            let stack = section_stack(&panel).expect("sections");
-            assert_eq!(stack.visible_child_name().as_deref(), Some("hold"));
-            // A small button has one section: no switcher, and Hold stays remembered.
-            select(&state, Slot::Small(0));
-            assert!(switcher(&panel).is_empty());
-            let stack = section_stack(&panel).expect("sections");
-            assert_eq!(stack.visible_child_name().as_deref(), Some("press"));
-            select(&state, Slot::Key(1));
-            assert_eq!(
-                section_stack(&panel)
-                    .expect("sections")
-                    .visible_child_name()
-                    .as_deref(),
-                Some("hold")
+            assert_eq!(parts(&panel), ["press", "label", "hold", "look"]);
+            assert!(
+                all::<gtk::ToggleButton>(&panel.root)
+                    .iter()
+                    .all(|b| !b.has_css_class("category-tab")),
+                "no section switcher"
             );
+            // Hold and Look are folded rows.
+            let titles: Vec<String> = all::<adw::ExpanderRow>(&panel.root)
+                .iter()
+                .map(|e| e.title().to_string())
+                .collect();
+            assert!(
+                titles.contains(&"When Held".to_string()) && titles.contains(&"Look".to_string()),
+                "{titles:?}"
+            );
+            // A dial: its four zones in one list.
+            select(&state, Slot::Dial(0));
+            assert_eq!(parts(&panel), ["press"]);
+            let zones: Vec<String> = all::<adw::ExpanderRow>(&panel.root)
+                .iter()
+                .map(|e| e.title().to_string())
+                .collect();
+            assert_eq!(zones, ["Turn Left", "Turn Right", "Press", "Hold"]);
         });
     }
 
@@ -1706,8 +1618,8 @@ mod tests {
         });
     }
 
-    /// At the default window size (1280×800) and at 1280×720, every section of a typical key
-    /// and of a dial fits below the preview and the switcher, so nothing scrolls. The panel is
+    /// At the default window size (1280×800) and at 1280×720, the whole page of a typical key
+    /// and of a dial (folded rows folded) fits below the preview, so nothing scrolls. The panel is
     /// 320 wide there (see window.rs: the inner split's minimum) and runs the window's height.
     #[test]
     fn sections_fit_without_scrolling_at_the_default_and_a_small_size() {
@@ -1742,8 +1654,8 @@ mod tests {
                 win.present();
                 for slot in [Slot::Key(0), Slot::Dial(0)] {
                     select(&state, slot);
-                    let stack = section_stack(&panel).expect("sections");
-                    pump_until(|| stack.height() > 0);
+                    let scroller = body(&panel).expect("page");
+                    pump_until(|| scroller.height() > 0);
                     // The test display is smaller than 800px: give the panel its size directly.
                     panel.root.allocate(320, height, -1, None);
                     assert_eq!(panel.root.height(), height);
@@ -1752,24 +1664,19 @@ mod tests {
                         min_width <= 320,
                         format!("{slot:?} widens the panel to {min_width}px"),
                     );
-                    let mut page = stack.first_child();
-                    while let Some(scroller) = page {
-                        page = scroller.next_sibling();
-                        let child = scroller.first_child().expect("page");
-                        let (_, natural, _, _) = child.measure(gtk::Orientation::Vertical, stack.width());
-                        let name = stack.page(&scroller).name().unwrap_or_default();
-                        eprintln!(
-                            "{height}px window, {slot:?} {name}: needs {natural}px of {}px",
-                            stack.height()
-                        );
-                        check(
-                            natural <= stack.height(),
-                            format!(
-                                "{slot:?} {name} needs {natural}px but has {}px at {height}px",
-                                stack.height()
-                            ),
-                        );
-                    }
+                    let child = scroller.child().expect("page");
+                    let (_, natural, _, _) = child.measure(gtk::Orientation::Vertical, scroller.width());
+                    eprintln!(
+                        "{height}px window, {slot:?}: needs {natural}px of {}px",
+                        scroller.height()
+                    );
+                    check(
+                        natural <= scroller.height(),
+                        format!(
+                            "{slot:?} needs {natural}px but has {}px at {height}px",
+                            scroller.height()
+                        ),
+                    );
                 }
                 win.destroy();
             }

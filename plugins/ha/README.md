@@ -92,6 +92,7 @@ other requests get 5 s. An action whose entity is not chosen yet fails with "Cho
 | `toggle`, `turn_on`, `turn_off` | `entity_id` | `homeassistant.toggle` / `turn_on` / `turn_off` |
 | `run` | `entity_id` (a scene, script, automation, button or input_button) | `scene.turn_on`, `script.turn_on`, `automation.trigger`, `button.press`, `input_button.press` |
 | `set_level` | `entity_id`; `op` = `set` (default) / `up` / `down`; `percent` (0-100, for `set`; 100 for a key added in the app); `step` (1-50, default 5) | see below |
+| `climate` | `entity_id` (a climate entity); `op` = `power` (default) / `up` / `down` / `set` / `mode`; `temperature` (for `set`, kept in the device's range); `mode` (`cool`, `heat`, `dry`, `fan_only`, `auto`, `heat_cool`, `off`) | `climate.toggle`; `up`/`down` move the tracked target temperature by the device's `target_temp_step` (0.5 when unknown; the entity must be listed under `entities`); `climate.set_temperature`; `climate.set_hvac_mode` |
 | `call_service` ("Call an action (service)" in the app; Home Assistant now calls services actions) | `domain`, `service`, optional `entity_id`, optional `data` (a JSON object, as a table or a JSON string, up to 4096 bytes) | `<domain>.<service>` with the entity as target |
 | `reconnect` | none | |
 | `forget_token` | none | |
@@ -142,6 +143,8 @@ work on:
 | `toggleable` | `toggle`, `turn_on`, `turn_off` | light, switch, fan, input_boolean, automation, script, cover, media_player, siren, humidifier, remote, group |
 | `runnable` | `run` | scene, script, automation, button, input_button |
 | `levels` | `set_level` | light, media_player, fan, cover |
+| `climate` | `climate` | climate |
+| `devices` | the "Keys for your devices" key set (several at once) | light, fan, climate, switch, input_boolean, cover, media_player, script, scene, button, input_button |
 | `any` | `call_service` | every entity |
 
 `ulanzictl plugin items ha toggleable kitchen` shows the same list in a terminal. While Home Assistant is not
@@ -167,6 +170,24 @@ Limits:
   (fewer with many non-Latin names) and the log says so once. Lights, switches, fans, covers, media players,
   scenes, scripts, automations and buttons come first, so what keys can control is listed before sensors.
 - If Home Assistant refuses the first render of the template, the picker shows that error and you can type the id. Errors in later renders are dropped by Home Assistant, so the list then just keeps its last content.
+
+## Keys for your devices
+
+In the app's action list, the Home Assistant section starts with "Keys for your devices": pick lights, fans,
+air conditioners and more, and each gets keys that fit it, with the plugin's own icons:
+
+| Picked | Keys (the extra ones can be left out) |
+|---|---|
+| Light | on/off with its name; extra: dimmer, brighter (labelled with the brightness) |
+| Fan | on/off with its name; extra: slower, faster (labelled with the speed) |
+| Air conditioner or heater | on/off with its name; extra: cooler, warmer (labelled with the target temperature) |
+| Cover, media player | on/off |
+| Script, scene, button | run |
+| Switch, input boolean, anything else | on/off |
+
+Names that start the same are shortened ("Bedroom Floor Lamp" and "Bedroom Fan" become "Floor Lamp" and
+"Fan"). The picked entities are added to `entities` (and air conditioners' `temperature` to `attributes`), so
+the labels stay live. Search matches every word anywhere, so "bedroom aircon" finds "Bedroom Aircon".
 
 ## Live state
 

@@ -86,7 +86,7 @@ impl Choice {
 }
 
 /// A plugin setting (`[[settings]]`) or an action parameter (`params`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Field {
     pub key: String,
     #[serde(default)]

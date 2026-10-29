@@ -415,3 +415,40 @@ fn match_rule_is_an_undoable_edit() {
     assert!(e.undo());
     assert!(e.profile().r#match.apps.is_empty());
 }
+
+#[test]
+fn add_keys_keeps_each_group_on_one_page() {
+    let mut e = Editor::new(Profile::new_default("P", Model::D200X));
+    let k = |label: &str| Key {
+        look: KeyLook {
+            label: Label {
+                text: label.into(),
+                ..Label::default()
+            },
+            ..KeyLook::default()
+        },
+        tap: Some(Action::NextPage),
+        hold: None,
+    };
+    let pages = e.profile().pages.len();
+    // 13 slots: four groups of three fill twelve; the fifth goes to a new page.
+    let groups: Vec<Vec<Key>> = (0..5)
+        .map(|g| (0..3).map(|i| k(&format!("{g}.{i}"))).collect())
+        .collect();
+    assert_eq!(e.free_keys(), 13);
+    let first = e.add_keys(groups, "Home", false);
+    assert_eq!(first, 0);
+    assert_eq!(e.profile().pages.len(), pages + 1);
+    assert_eq!(e.profile().pages[0].keys.len(), 12);
+    let next = &e.profile().pages[1];
+    assert_eq!(next.name, "Home");
+    assert_eq!(next.keys[&0].look.label.text, "4.0");
+    // One undo step takes it all back.
+    assert!(e.undo());
+    assert_eq!(e.profile().pages.len(), pages);
+    assert!(e.profile().pages[0].keys.is_empty());
+    // On a new page from the start.
+    let first = e.add_keys(vec![vec![k("a")]], "Home", true);
+    assert_eq!(first, 1);
+    assert_eq!(e.profile().pages[1].keys[&0].look.label.text, "a");
+}

@@ -47,6 +47,23 @@ pub fn data_dir() -> Result<PathBuf, CoreError> {
     Ok(xdg("XDG_DATA_HOME", ".local/share")?.join("ulanzi-deck"))
 }
 
+/// Where plugins are installed: `<data folder>/plugins`.
+pub fn plugins_dir() -> Result<PathBuf, CoreError> {
+    Ok(data_dir()?.join("plugins"))
+}
+
+/// The file `icon` (an `assets/` path from the plugin's manifest) of installed plugin `plugin`;
+/// `None` when the names could leave the plugin's folder.
+pub fn plugin_asset(plugin: &str, icon: &str) -> Option<PathBuf> {
+    let safe = |s: &str| {
+        !s.is_empty() && !s.contains('\\') && s.split('/').all(|p| !p.is_empty() && p != "." && p != "..")
+    };
+    if !safe(plugin) || plugin.contains('/') || !safe(icon) || !icon.starts_with("assets/") {
+        return None;
+    }
+    Some(plugins_dir().ok()?.join(plugin).join(icon))
+}
+
 impl Store {
     /// Standard XDG locations: `~/.config/ulanzi-deck`, `~/.local/state/ulanzi-deck`, `~/.cache/ulanzi-deck`.
     pub fn xdg() -> Result<Store, CoreError> {

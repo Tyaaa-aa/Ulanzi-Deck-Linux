@@ -69,6 +69,7 @@ fn obs_manifest_is_valid() {
         pickers,
         [
             "scenes",
+            "scene_keys",
             "audio_inputs",
             "scene_sources",
             "sources",

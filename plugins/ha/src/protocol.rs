@@ -481,13 +481,28 @@ pub const TOGGLEABLE: &[&str] = &[
 ];
 /// What the run action accepts.
 pub const RUNNABLE: &[&str] = &["scene", "script", "automation", "button", "input_button"];
+/// What ready-made keys are made for.
+pub const DEVICES: &[&str] = &[
+    "light",
+    "fan",
+    "climate",
+    "switch",
+    "input_boolean",
+    "cover",
+    "media_player",
+    "script",
+    "scene",
+    "button",
+    "input_button",
+];
 /// What the set_level action accepts.
 pub const LEVELS: &[&str] = &["light", "media_player", "fan", "cover"];
 /// Listed first by the template, so a cut list keeps what keys can control.
 pub const PREFERRED_DOMAINS: &[&str] = &[
     "light",
-    "switch",
     "fan",
+    "climate",
+    "switch",
     "cover",
     "media_player",
     "input_boolean",
@@ -678,6 +693,8 @@ fn picker_domains(picker: &str) -> Result<Option<&'static [&'static str]>, Strin
         "toggleable" => Ok(Some(TOGGLEABLE)),
         "runnable" => Ok(Some(RUNNABLE)),
         "levels" => Ok(Some(LEVELS)),
+        "climate" => Ok(Some(&["climate"])),
+        "devices" => Ok(Some(DEVICES)),
         other => Err(format!(
             "unknown picker \"{}\"",
             other.chars().take(60).collect::<String>()
@@ -685,7 +702,8 @@ fn picker_domains(picker: &str) -> Result<Option<&'static [&'static str]>, Strin
     }
 }
 
-/// The entries of `picker` matching `query` (case-insensitive, on the name or the id), only those
+/// The entries of `picker` matching every word of `query` (case-insensitive, on the name, the id
+/// or the group heading), only those
 /// in `group` (a heading from [`group_label`] or a raw domain) unless it is empty.
 pub fn picker_items(
     list: &EntityList,
@@ -694,7 +712,6 @@ pub fn picker_items(
     group: &str,
 ) -> Result<Vec<ulanzi_plugin::Item>, String> {
     let domains = picker_domains(picker)?;
-    let query = query.trim().to_lowercase();
     let group = group.trim();
     let mut out = Vec::new();
     for row in &list.rows {
@@ -711,7 +728,7 @@ pub fn picker_items(
         if !group.is_empty() && group != heading && group != domain {
             continue;
         }
-        if !query.is_empty() && !label.to_lowercase().contains(&query) && !row.entity_id.contains(&query) {
+        if !ulanzi_plugin::matches_query(query, &[&label, &row.entity_id, &heading]) {
             continue;
         }
         out.push(

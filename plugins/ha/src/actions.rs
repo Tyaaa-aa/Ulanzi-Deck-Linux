@@ -81,6 +81,7 @@ pub fn plan(action: &str, params: &Value, tracked: &Tracked) -> Result<Plan, Str
         }
         "run" => run(entity_of(params)?),
         "set_level" => set_level(params, tracked),
+        "climate" => climate(params, tracked),
         "call_service" => call_service(params),
         "reconnect" => Ok(Plan::Reconnect),
         "forget_token" => Ok(Plan::ForgetToken),
@@ -198,6 +199,66 @@ fn set_level(params: &Value, tracked: &Tracked) -> Result<Plan, String> {
         }
         _ => Err(format!(
             "set_level works on light, media_player, fan and cover entities, not {entity}"
+        )),
+    }
+}
+
+/// Temperatures the climate action accepts, in degrees.
+const TEMPERATURE_RANGE: (f64, f64) = (5.0, 35.0);
+const HVAC_MODES: &[&str] = &["off", "heat", "cool", "heat_cool", "auto", "dry", "fan_only"];
+
+fn climate(params: &Value, tracked: &Tracked) -> Result<Plan, String> {
+    let entity = entity_of(params)?;
+    if !entity.starts_with("climate.") {
+        return Err(format!("this action works on climate entities, not {entity}"));
+    }
+    let attrs = tracked.entities.get(entity).map(|e| &e.attrs);
+    let attr = |k: &str| attrs.and_then(|a| a.get(k)).and_then(Value::as_f64);
+    let set = |t: f64| {
+        let (lo, hi) = (
+            attr("min_temp").unwrap_or(TEMPERATURE_RANGE.0),
+            attr("max_temp").unwrap_or(TEMPERATURE_RANGE.1),
+        );
+        call(
+            "climate",
+            "set_temperature",
+            entity,
+            data_of("temperature", t.clamp(lo, hi).into()),
+        )
+    };
+    match params.get("op").and_then(Value::as_str).unwrap_or("power") {
+        "power" => Ok(call("climate", "toggle", entity, Map::new())),
+        op @ ("up" | "down") => {
+            let now = attr("temperature").ok_or_else(|| {
+                format!(
+                    "{entity} has no known target temperature yet (list it under entities so it is tracked)"
+                )
+            })?;
+            let step = attr("target_temp_step").filter(|s| *s > 0.0).unwrap_or(0.5);
+            let next = if op == "up" { now + step } else { now - step };
+            // Stay on the device's steps: 24.5 + 0.5 is 25, not 25.000001.
+            Ok(set((next / step).round() * step))
+        }
+        "set" => {
+            let t =
+                number(params, "temperature").ok_or("Set the temperature needs a temperature".to_string())?;
+            Ok(set(t.clamp(TEMPERATURE_RANGE.0, TEMPERATURE_RANGE.1)))
+        }
+        "mode" => {
+            let mode = params.get("mode").and_then(Value::as_str).unwrap_or_default();
+            if !HVAC_MODES.contains(&mode) {
+                return Err(format!("mode must be one of {}", HVAC_MODES.join(", ")));
+            }
+            Ok(call(
+                "climate",
+                "set_hvac_mode",
+                entity,
+                data_of("hvac_mode", mode.into()),
+            ))
+        }
+        other => Err(format!(
+            "op must be power, up, down, set or mode, not \"{}\"",
+            other.chars().take(20).collect::<String>()
         )),
     }
 }

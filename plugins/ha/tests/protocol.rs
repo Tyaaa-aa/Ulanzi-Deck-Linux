@@ -613,6 +613,7 @@ fn manifest_declares_the_actions() {
             "turn_off",
             "run",
             "set_level",
+            "climate",
             "call_service",
             "reconnect",
             "forget_token"
@@ -803,6 +804,148 @@ fn picker_items_filter_by_picker_query_and_group() {
     lv.sort();
     assert_eq!(lv, ["light.bare", "light.kitchen", "media_player.tv"]);
     assert!(picker_items(&l, "nope", "", "").is_err());
+    // Every word must match somewhere, in any order: name, id or group heading.
+    assert_eq!(
+        ids(picker_items(&l, "entities", "lamp kitchen", "").expect("w")),
+        ["light.kitchen"]
+    );
+    assert_eq!(
+        ids(picker_items(&l, "entities", "kitchen lights", "").expect("w")),
+        ["light.kitchen"]
+    );
+    assert!(
+        picker_items(&l, "entities", "kitchen garage", "")
+            .expect("w")
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_devices_picker_lists_what_ready_made_keys_fit() {
+    let l = parse_entity_list(
+        "light.a\tA\ton\nclimate.ac\tBedroom Aircon\tcool\nsensor.t\tT\t21\nfan.f\tF\toff\nscript.s\tS\toff\n",
+    );
+    let mut got: Vec<String> = picker_items(&l, "devices", "", "")
+        .expect("d")
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    got.sort();
+    assert_eq!(got, ["climate.ac", "fan.f", "light.a", "script.s"]);
+    let ac: Vec<String> = picker_items(&l, "climate", "bedroom aircon", "")
+        .expect("c")
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ac, ["climate.ac"]);
+}
+
+#[test]
+fn climate_keys_step_on_the_devices_own_scale() {
+    let t = tracked(&[(
+        "climate.ac",
+        "cool",
+        json!({"temperature": 24.0, "target_temp_step": 0.5, "min_temp": 16.0, "max_temp": 31.0}),
+    )]);
+    let temp = |op: &str| {
+        let c = call("climate", &json!({"entity_id": "climate.ac", "op": op}), &t);
+        assert_eq!(
+            (c.domain.as_str(), c.service.as_str()),
+            ("climate", "set_temperature")
+        );
+        c.data["temperature"].as_f64().expect("number")
+    };
+    assert_eq!(temp("up"), 24.5);
+    assert_eq!(temp("down"), 23.5);
+    let power = call("climate", &json!({"entity_id": "climate.ac", "op": "power"}), &t);
+    assert_eq!(power.service, "toggle");
+    let set = call(
+        "climate",
+        &json!({"entity_id": "climate.ac", "op": "set", "temperature": 40}),
+        &t,
+    );
+    assert_eq!(
+        set.data["temperature"],
+        json!(31.0),
+        "kept within the device's range"
+    );
+    let mode = call(
+        "climate",
+        &json!({"entity_id": "climate.ac", "op": "mode", "mode": "dry"}),
+        &t,
+    );
+    assert_eq!(
+        (mode.service.as_str(), &mode.data["hvac_mode"]),
+        ("set_hvac_mode", &json!("dry"))
+    );
+    // Untracked: say how to fix it. Wrong domain or mode: refused.
+    let none = Tracked::default();
+    assert!(
+        plan("climate", &json!({"entity_id": "climate.ac", "op": "up"}), &none)
+            .expect_err("untracked")
+            .contains("entities")
+    );
+    assert!(plan("climate", &json!({"entity_id": "light.a", "op": "power"}), &t).is_err());
+    assert!(
+        plan(
+            "climate",
+            &json!({"entity_id": "climate.ac", "op": "mode", "mode": "turbo"}),
+            &t
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn the_manifest_offers_device_keys() {
+    use ulanzi_core::plugin::key_set::Picked;
+    let m = ulanzi_core::plugin::Manifest::parse(include_str!("../plugin.toml")).expect("valid");
+    assert_eq!(m.rgb(), Some([0x18, 0xbc, 0xf2]));
+    let set = m.key_set("devices").expect("devices");
+    let item = |id: &str, group: &str| Picked {
+        id: id.into(),
+        name: "Lamp".into(),
+        group: Some(group.into()),
+    };
+    let light = set.keys_for(&m, &item("light.lamp", "Lights"), true);
+    assert_eq!(light.len(), 3);
+    assert_eq!(light[0].look.label.text, "Lamp");
+    assert_eq!(light[2].look.label.text, "{ha.light.lamp.pct}%");
+    assert_eq!(
+        set.keys_for(&m, &item("light.lamp", "Lights"), false).len(),
+        1,
+        "extras left out"
+    );
+    let ac = set.keys_for(&m, &item("climate.ac", "Climate"), true);
+    assert_eq!(ac[2].look.label.text, "{ha.climate.ac.attr.temperature}°");
+    assert_eq!(
+        set.tracking(&item("climate.ac", "Climate")),
+        [
+            ("entities".to_string(), "climate.ac".to_string()),
+            ("attributes".to_string(), "climate.ac:temperature".to_string())
+        ]
+    );
+    assert_eq!(
+        set.keys_for(&m, &item("switch.x", "Switches"), true).len(),
+        1,
+        "the catch-all variant"
+    );
+    // Every icon the manifest names is in assets/.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut icons: Vec<&str> = [&m.icon, &m.symbolic_icon]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    icons.extend(m.actions.iter().filter_map(|a| a.icon.as_deref()));
+    icons.extend(m.key_sets.iter().flat_map(|k| {
+        k.variants
+            .iter()
+            .flat_map(|v| v.keys.iter().filter_map(|k| k.icon.as_deref()))
+    }));
+    for i in icons {
+        assert!(root.join(i).is_file(), "{i} is missing");
+    }
 }
 
 #[test]

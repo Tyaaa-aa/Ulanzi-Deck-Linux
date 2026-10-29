@@ -53,7 +53,9 @@ Click a key to edit it. The editor shows the key's preview at the top and, under
 its sections: **Look**, **Label**, **Press** and **Hold**. The section you pick stays open when you
 click another key. **Clear Key** at the bottom empties the key.
 
-Every key has:
+A key's editor is one page, top to bottom: **Press** (what it does), **Label**, **When Held** and
+**Look**. When Held and Look are folded into one row each until you open them (they stay open while you
+click from key to key); picking an action already gives the key a matching icon and colours. Every key has:
 
 - **Look**: an image, background colour, icon colour and icon size.
   Press **Choose…** next to Image to pick from:
@@ -63,17 +65,17 @@ Every key has:
   - **Emoji**, **Steam** games, or a **File** of your own (or drag a picture onto a key).
 - **Label**: text on the key. It can show live values: insert `{cpu}`, `{ram}`, `{time}`,
   `{media_title}`, `{obs_scene}`, `{obs_rec_time}`, `{timer}` and more with the **{ }** button.
-  **Label Position** moves it to the top, middle or bottom of that key.
+  **Label Position** moves it to the top, middle or bottom of that key, or hides it (**Hidden**).
 - **Show Live State** (in Look): lets the key change with what it controls. A play key turns into pause, a
   recording key turns red and shows the time, a muted mic turns red.
-- **Press** and **Hold**: two actions per key. Hold runs when you keep the key down for half a
-  second (adjustable in Preferences).
+- **Press** and **When Held**: two actions per key. When Held runs when you keep the key down for half
+  a second (adjustable in Preferences).
 
 **Working faster**
 - Drag an action from the action list onto a key: the key gets a matching icon and colour. Type in
-  **Search actions** (Ctrl+L) to find one by name, category or plugin; the buttons under it (All,
-  Navigation, System, …, then one per plugin) show one category at a time, and clicking a section's
-  name folds it away. Searching inside a category offers **Show … more in All** when other
+  **Search actions** (Ctrl+L) to find one by name, category or plugin; the menu next to it (All,
+  Navigation, System, …, then one per plugin with its logo) shows one category at a time, and clicking
+  a section's name folds it away. Searching inside a category offers **Show … more in All** when other
   categories have matches too. The key editor's **Choose** / **Change** list works the same way.
   With a key selected, Ctrl+L shows the list in place of its editor: click an action to give it to
   the key, or press the × (**Back to the key**) or Escape to return to the editor.
@@ -117,9 +119,9 @@ Notes:
 
 ## Dials and small buttons
 
-Each **dial** has four slots, one section each in its editor: **Left** and **Right** (turning),
-**Press** and **Hold**. Dials belong to the page, so each page can use them differently (**Use This
-Dial on Every Page**, under the sections, copies one to all pages).
+Each **dial** has four slots, one row each in its editor: **Turn Left** and **Turn Right**, **Press**
+and **Hold**; open a row for its settings. Dials belong to the page, so each page can use them differently (**Use This
+Dial on Every Page**, under the slots, copies one to all pages).
 Good dial actions: volume, input volume in OBS, brightness, next/previous page, skip back/forward.
 
 The two **small buttons** beside the dials have one action each.
