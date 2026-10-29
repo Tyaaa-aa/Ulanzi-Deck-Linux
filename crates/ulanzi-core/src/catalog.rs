@@ -12,17 +12,15 @@ pub enum Category {
     System,
     Media,
     Audio,
-    Obs,
     Device,
 }
 
 impl Category {
-    pub const ALL: [Category; 6] = [
+    pub const ALL: [Category; 5] = [
         Category::Navigation,
         Category::System,
         Category::Media,
         Category::Audio,
-        Category::Obs,
         Category::Device,
     ];
 
@@ -32,7 +30,6 @@ impl Category {
             Category::System => "System",
             Category::Media => "Media",
             Category::Audio => "Audio",
-            Category::Obs => "OBS Studio",
             Category::Device => "Device",
         }
     }
@@ -43,7 +40,6 @@ impl Category {
             Category::Navigation => Color::rgb(0x35, 0x84, 0xe4),
             Category::System => Color::rgb(0x33, 0xd1, 0x7a),
             Category::Media | Category::Audio => Color::rgb(0xff, 0x78, 0x00),
-            Category::Obs => Color::rgb(0x91, 0x41, 0xac),
             Category::Device => Color::rgb(0xf6, 0xd3, 0x2d),
         }
     }
@@ -343,212 +339,6 @@ static CATALOG: &[ActionSpec] = &[
         }
     ),
     spec!(
-        "obs_scene",
-        "Switch Scene",
-        Obs,
-        "clapperboard",
-        Action::Obs(ObsAction::SetScene {
-            scene: String::new(),
-            preview: false
-        }),
-        Action::Obs(ObsAction::SetScene { .. })
-    ),
-    spec!(
-        "obs_toggle_scenes",
-        "Toggle Scenes",
-        Obs,
-        "repeat",
-        Action::Obs(ObsAction::ToggleScenes {
-            a: String::new(),
-            b: String::new()
-        }),
-        Action::Obs(ObsAction::ToggleScenes { .. })
-    ),
-    spec!(
-        "obs_source",
-        "Show / Hide Source",
-        Obs,
-        "eye",
-        Action::Obs(ObsAction::ToggleSource {
-            scene: String::new(),
-            source: String::new()
-        }),
-        Action::Obs(ObsAction::ToggleSource { .. })
-    ),
-    spec!(
-        "obs_record",
-        "Record",
-        Obs,
-        "circle-dot",
-        Action::Obs(ObsAction::ToggleRecord),
-        Action::Obs(ObsAction::ToggleRecord)
-    ),
-    spec!(
-        "obs_stream",
-        "Stream",
-        Obs,
-        "radio",
-        Action::Obs(ObsAction::ToggleStream),
-        Action::Obs(ObsAction::ToggleStream)
-    ),
-    spec!(
-        "obs_record_start",
-        "Start Recording",
-        Obs,
-        "circle-play",
-        Action::Obs(ObsAction::StartRecord),
-        Action::Obs(ObsAction::StartRecord)
-    ),
-    spec!(
-        "obs_record_stop",
-        "Stop Recording",
-        Obs,
-        "circle-stop",
-        Action::Obs(ObsAction::StopRecord),
-        Action::Obs(ObsAction::StopRecord)
-    ),
-    spec!(
-        "obs_record_pause",
-        "Pause Recording",
-        Obs,
-        "circle-pause",
-        Action::Obs(ObsAction::PauseRecord),
-        Action::Obs(ObsAction::PauseRecord)
-    ),
-    spec!(
-        "obs_stream_start",
-        "Go Live",
-        Obs,
-        "cast",
-        Action::Obs(ObsAction::StartStream),
-        Action::Obs(ObsAction::StartStream)
-    ),
-    spec!(
-        "obs_stream_stop",
-        "End Stream",
-        Obs,
-        "square",
-        Action::Obs(ObsAction::StopStream),
-        Action::Obs(ObsAction::StopStream)
-    ),
-    spec!(
-        "obs_replay",
-        "Replay Buffer",
-        Obs,
-        "history",
-        Action::Obs(ObsAction::ToggleReplay),
-        Action::Obs(ObsAction::ToggleReplay)
-    ),
-    spec!(
-        "obs_replay_save",
-        "Save Replay",
-        Obs,
-        "save",
-        Action::Obs(ObsAction::SaveReplay),
-        Action::Obs(ObsAction::SaveReplay)
-    ),
-    spec!(
-        "obs_vcam",
-        "Virtual Camera",
-        Obs,
-        "webcam",
-        Action::Obs(ObsAction::ToggleVirtualCam),
-        Action::Obs(ObsAction::ToggleVirtualCam)
-    ),
-    spec!(
-        "obs_mute",
-        "Mute Input",
-        Obs,
-        "mic-off",
-        Action::Obs(ObsAction::ToggleMute { input: String::new() }),
-        Action::Obs(ObsAction::ToggleMute { .. })
-    ),
-    spec!(
-        "obs_volume_up",
-        "Input Volume Up",
-        Obs,
-        "volume-2",
-        Action::Obs(ObsAction::InputVolume {
-            input: String::new(),
-            op: VolumeOp::Up,
-            step: 2
-        }),
-        Action::Obs(ObsAction::InputVolume { op: VolumeOp::Up, .. })
-    ),
-    spec!(
-        "obs_volume_down",
-        "Input Volume Down",
-        Obs,
-        "volume-1",
-        Action::Obs(ObsAction::InputVolume {
-            input: String::new(),
-            op: VolumeOp::Down,
-            step: 2
-        }),
-        Action::Obs(ObsAction::InputVolume {
-            op: VolumeOp::Down,
-            ..
-        })
-    ),
-    spec!(
-        "obs_volume_set",
-        "Set Input Volume",
-        Obs,
-        "volume",
-        Action::Obs(ObsAction::InputVolume {
-            input: String::new(),
-            op: VolumeOp::Set { percent: 100 },
-            step: 2
-        }),
-        Action::Obs(ObsAction::InputVolume {
-            op: VolumeOp::Set { .. } | VolumeOp::Mute,
-            ..
-        })
-    ),
-    spec!(
-        "obs_filter",
-        "Filter On / Off",
-        Obs,
-        "sparkles",
-        Action::Obs(ObsAction::ToggleFilter {
-            source: String::new(),
-            filter: String::new()
-        }),
-        Action::Obs(ObsAction::ToggleFilter { .. })
-    ),
-    spec!(
-        "obs_transition",
-        "Studio Transition",
-        Obs,
-        "arrow-right-left",
-        Action::Obs(ObsAction::StudioTransition),
-        Action::Obs(ObsAction::StudioTransition)
-    ),
-    spec!(
-        "obs_collection",
-        "Scene Collection",
-        Obs,
-        "library",
-        Action::Obs(ObsAction::SetCollection { name: String::new() }),
-        Action::Obs(ObsAction::SetCollection { .. })
-    ),
-    spec!(
-        "obs_profile",
-        "OBS Profile",
-        Obs,
-        "user-cog",
-        Action::Obs(ObsAction::SetProfile { name: String::new() }),
-        Action::Obs(ObsAction::SetProfile { .. })
-    ),
-    spec!(
-        "obs_screenshot",
-        "OBS Screenshot",
-        Obs,
-        "camera",
-        Action::Obs(ObsAction::Screenshot),
-        Action::Obs(ObsAction::Screenshot)
-    ),
-    spec!(
         "brightness_up",
         "Brightness Up",
         Device,
@@ -711,6 +501,19 @@ pub fn set_plugin_looks<'a>(manifests: impl IntoIterator<Item = &'a crate::plugi
     }
 }
 
+/// The live looks plugin `plugin` declares for `action` (empty when it declares none or is not
+/// installed): what a key with that action uses when it has no looks of its own.
+pub fn plugin_states(plugin: &str, action: &str) -> Vec<LookState> {
+    PLUGIN_LOOKS
+        .read()
+        .ok()
+        .and_then(|l| {
+            l.get(&(plugin.to_string(), action.to_string()))
+                .map(|e| e.2.clone())
+        })
+        .unwrap_or_default()
+}
+
 /// A plugin action's fresh look: its icon in the plugin's colour, no label (the user names the
 /// key); plain when the plugin is not installed or has no icon for it.
 fn plugin_look(plugin: &str, action: &str) -> KeyLook {
@@ -719,13 +522,13 @@ fn plugin_look(plugin: &str, action: &str) -> KeyLook {
         .ok()
         .and_then(|l| l.get(&(plugin.to_string(), action.to_string())).cloned());
     match found {
-        Some((icon, fg, states)) => KeyLook {
+        // The action's live looks are not copied: the key uses the plugin's current ones.
+        Some((icon, fg, _)) => KeyLook {
             source: icon.map_or(ImageSource::None, |icon| ImageSource::Plugin {
                 plugin: plugin.to_string(),
                 icon,
             }),
             foreground: fg,
-            states,
             ..KeyLook::default()
         },
         None => KeyLook::default(),
@@ -827,32 +630,6 @@ pub fn describe(a: &Action) -> String {
             1 => "1 step".into(),
             n => format!("{n} steps, one per press"),
         },
-        Action::Obs(ObsAction::SetScene { scene, preview }) if !scene.is_empty() => {
-            if *preview {
-                format!("Preview · {scene}")
-            } else {
-                format!("Scene · {scene}")
-            }
-        }
-        Action::Obs(ObsAction::ToggleMute { input }) if !input.is_empty() => format!("Mute · {input}"),
-        Action::Obs(ObsAction::InputVolume { input, op, step }) if !input.is_empty() => match op {
-            VolumeOp::Up => format!("{input} +{step} dB"),
-            VolumeOp::Down => format!("{input} −{step} dB"),
-            VolumeOp::Mute => format!("Mute · {input}"),
-            VolumeOp::Set { percent } => format!("{input} at {percent}%"),
-        },
-        Action::Obs(ObsAction::ToggleFilter { source, filter }) if !filter.is_empty() => {
-            format!("{filter} on {source}")
-        }
-        Action::Obs(ObsAction::SetCollection { name }) | Action::Obs(ObsAction::SetProfile { name })
-            if !name.is_empty() =>
-        {
-            format!("{title} · {name}")
-        }
-        Action::Obs(ObsAction::ToggleScenes { a, b }) if !a.is_empty() => format!("{a} ⇄ {b}"),
-        Action::Obs(ObsAction::ToggleSource { source, .. }) if !source.is_empty() => {
-            format!("Show / hide · {source}")
-        }
         _ => title.into(),
     }
 }
@@ -866,8 +643,6 @@ pub struct Problems<'a> {
     pub pages: &'a [Uuid],
     /// Every profile; empty means "don't check".
     pub profiles: &'a [Uuid],
-    /// Scenes in OBS while connected; `None` when OBS can't be asked.
-    pub obs_scenes: Option<&'a [String]>,
     /// Why a plugin action can't work (plugin id, action id); `None` when it looks fine.
     pub plugin: &'a dyn Fn(&str, &str) -> Option<String>,
 }
@@ -875,14 +650,6 @@ pub struct Problems<'a> {
 /// Why this action can't work as it is, in words for a warning badge; `None` when it looks fine.
 pub fn problem(a: &Action, c: &Problems) -> Option<String> {
     let blank = |s: &str| s.trim().is_empty();
-    let scene = |s: &str| -> Option<String> {
-        if blank(s) {
-            return Some("Choose a scene".into());
-        }
-        c.obs_scenes
-            .filter(|list| !list.is_empty() && !list.iter().any(|x| x == s))
-            .map(|_| format!("OBS has no scene “{s}”"))
-    };
     match a {
         Action::Command { cmd, .. } if blank(cmd) => Some("No command entered".into()),
         Action::LaunchApp {
@@ -907,23 +674,6 @@ pub fn problem(a: &Action, c: &Problems) -> Option<String> {
         Action::Multi { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
         Action::Cycle { steps, .. } => steps.iter().find_map(|s| problem(&s.action, c)),
         Action::Plugin { plugin, action, .. } => (c.plugin)(plugin, action),
-        Action::Obs(o) => match o {
-            ObsAction::SetScene { scene: s, .. } => scene(s),
-            ObsAction::ToggleScenes { a, b } => scene(a).or_else(|| scene(b)),
-            ObsAction::ToggleSource { scene: s, source } => {
-                scene(s).or_else(|| blank(source).then(|| "Choose a source".into()))
-            }
-            ObsAction::ToggleMute { input } | ObsAction::InputVolume { input, .. } if blank(input) => {
-                Some("Choose an audio input".into())
-            }
-            ObsAction::ToggleFilter { source, filter } if blank(source) || blank(filter) => {
-                Some("Choose a source and a filter".into())
-            }
-            ObsAction::SetCollection { name } | ObsAction::SetProfile { name } if blank(name) => {
-                Some("Choose one from OBS".into())
-            }
-            _ => None,
-        },
         _ => None,
     }
 }

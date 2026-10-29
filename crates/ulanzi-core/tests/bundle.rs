@@ -71,16 +71,26 @@ fn round_trips_profiles_with_icons() {
 }
 
 #[test]
-fn export_all_with_settings_drops_obs_password() {
+fn export_all_with_settings_drops_plugin_passwords() {
     let d = tempfile::tempdir().expect("tmp");
     let s = store(d.path());
     profile_with_icon(&s, "A");
     let mut settings = Settings::default();
-    settings.obs.password = Some("s3cret".into());
+    settings
+        .plugins
+        .entry("obs".into())
+        .or_default()
+        .settings
+        .insert("password".into(), "s3cret".into());
     s.save_settings(&settings).expect("settings");
     let b = read(&export(&s, &[], true).expect("export")).expect("read");
     assert!(b.manifest.includes_settings);
-    assert_eq!(b.settings.expect("settings").obs.password, None);
+    let kept = b.settings.expect("settings");
+    assert!(
+        kept.plugins
+            .get("obs")
+            .is_none_or(|e| !e.settings.contains_key("password"))
+    );
 }
 
 /// A ZIP with the given (name, declared bytes) entries.

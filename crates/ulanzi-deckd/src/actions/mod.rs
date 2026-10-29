@@ -47,7 +47,6 @@ pub async fn run_multi(runner: &dyn ActionRunner, steps: &[Step]) -> Result<(), 
 pub struct Executor {
     media: Option<MediaClient>,
     keyboard: Arc<Mutex<Option<VirtualKeyboard>>>,
-    obs: Option<crate::obs::ObsHandle>,
     plugins: Option<crate::plugins::PluginSlot>,
 }
 
@@ -57,15 +56,8 @@ impl Executor {
         Executor {
             media: session.map(MediaClient::new),
             keyboard: Arc::default(),
-            obs: None,
             plugins: None,
         }
-    }
-
-    /// Run OBS actions through this connection.
-    pub fn with_obs(mut self, obs: crate::obs::ObsHandle) -> Executor {
-        self.obs = Some(obs);
-        self
     }
 
     /// Run plugin actions through this host.
@@ -258,10 +250,6 @@ impl ActionRunner for Executor {
                     None => Err(ActionError::Unavailable("plugins are not running".into())),
                 },
                 None => Err(plugin_error(PluginError::NotInstalled(plugin.clone()))),
-            },
-            Action::Obs(o) => match &self.obs {
-                Some(obs) => obs.action(o).await.map_err(ActionError::Failed),
-                None => Err(ActionError::Unavailable("OBS support is off".into())),
             },
             Action::NextPage
             | Action::PrevPage

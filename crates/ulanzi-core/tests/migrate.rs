@@ -105,10 +105,7 @@ fn migrates_fixture() {
     );
     assert_eq!(
         key(&p, 11).tap,
-        Some(Action::Obs(ObsAction::ToggleScenes {
-            a: "Gaming".into(),
-            b: "Desktop".into()
-        }))
+        Some(Action::obs("toggle_scenes", &[("a", "Gaming"), ("b", "Desktop")]))
     );
     assert_eq!(
         key(&p, 12).tap,
@@ -169,7 +166,11 @@ fn migrates_fixture() {
     assert_eq!(s.brightness, 10);
     assert!(s.hide_labels);
     assert_eq!(s.sleep_after_min, 0);
-    assert_eq!(s.obs.port, 4444);
+    assert_eq!(
+        s.plugins["obs"].settings["port"].as_integer(),
+        Some(4444),
+        "for the OBS plugin"
+    );
     assert_eq!(s.default_profile, Some(p.id));
     assert!(report.warnings.iter().any(|w| w.contains("4455")));
 }

@@ -93,44 +93,6 @@ fn samples() -> Vec<Action> {
             op: TimerOp::Add { minutes: 5 },
         },
         Action::Multi { steps: vec![] },
-        Action::Obs(ObsAction::SetScene {
-            scene: "A".into(),
-            preview: false,
-        }),
-        Action::Obs(ObsAction::ToggleScenes {
-            a: "A".into(),
-            b: "B".into(),
-        }),
-        Action::Obs(ObsAction::ToggleSource {
-            scene: "A".into(),
-            source: "Cam".into(),
-        }),
-        Action::Obs(ObsAction::ToggleRecord),
-        Action::Obs(ObsAction::ToggleStream),
-        Action::Obs(ObsAction::StartRecord),
-        Action::Obs(ObsAction::StopRecord),
-        Action::Obs(ObsAction::PauseRecord),
-        Action::Obs(ObsAction::StartStream),
-        Action::Obs(ObsAction::StopStream),
-        Action::Obs(ObsAction::ToggleReplay),
-        Action::Obs(ObsAction::SaveReplay),
-        Action::Obs(ObsAction::ToggleVirtualCam),
-        Action::Obs(ObsAction::ToggleMute { input: "Mic".into() }),
-        Action::Obs(ObsAction::InputVolume {
-            input: "Mic".into(),
-            op: VolumeOp::Up,
-            step: 2,
-        }),
-        Action::Obs(ObsAction::ToggleFilter {
-            source: "Cam".into(),
-            filter: "Blur".into(),
-        }),
-        Action::Obs(ObsAction::StudioTransition),
-        Action::Obs(ObsAction::SetCollection { name: "Main".into() }),
-        Action::Obs(ObsAction::SetProfile {
-            name: "Twitch".into(),
-        }),
-        Action::Obs(ObsAction::Screenshot),
         Action::Seek {
             seconds: 10,
             player: None,
@@ -248,7 +210,6 @@ fn problems_name_what_is_missing() {
         file_exists: &|p| p == "/sounds/ding.oga",
         pages: &[page],
         profiles: &[],
-        obs_scenes: Some(&["Live".to_string()]),
         plugin: &|_, _| None,
     };
     let app = |id: &str| Action::LaunchApp {
@@ -273,21 +234,6 @@ fn problems_name_what_is_missing() {
         )
         .is_some()
     );
-    let scene = |s: &str| {
-        Action::Obs(ObsAction::SetScene {
-            scene: s.into(),
-            preview: false,
-        })
-    };
-    assert_eq!(problem(&scene("Live"), &ctx), None);
-    assert!(problem(&scene("Gone"), &ctx).is_some_and(|p| p.contains("Gone")));
-    assert!(problem(&scene(""), &ctx).is_some());
-    // OBS not connected: scene names can't be checked, so no warning for them.
-    let offline = Problems {
-        obs_scenes: None,
-        ..ctx
-    };
-    assert_eq!(problem(&scene("Gone"), &offline), None);
     // Inside a multi-action too.
     let multi = Action::Multi {
         steps: vec![Step {
@@ -316,7 +262,6 @@ fn plugin_problem_comes_from_the_callback() {
         file_exists: &|_| true,
         pages: &[],
         profiles: &[],
-        obs_scenes: None,
         plugin: &|p, a| Some(format!("{p}/{a}")),
     };
     let act = Action::Plugin {

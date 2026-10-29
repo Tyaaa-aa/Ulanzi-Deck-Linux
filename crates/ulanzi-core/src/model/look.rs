@@ -118,15 +118,31 @@ impl KeyLook {
     /// The look with the first state whose condition holds put in. `resolve` turns a label text
     /// (with `$<param>` already filled in) into its current value.
     pub fn with_state(&self, params: &toml::Table, resolve: impl Fn(&str) -> String) -> KeyLook {
+        self.with_states(&self.states, params, resolve)
+    }
+
+    /// Like [`KeyLook::with_state`] with `states` instead of the key's own (a plugin action's
+    /// looks, for a key without any). `$<param>` is filled in in the values compared too, so a
+    /// scene key can ask whether `{obs.scene}` is its own `$scene`.
+    pub fn with_states(
+        &self,
+        states: &[LookState],
+        params: &toml::Table,
+        resolve: impl Fn(&str) -> String,
+    ) -> KeyLook {
         let mut look = self.clone();
         if !self.dynamic {
             return look;
         }
-        if let Some(st) = self
-            .states
-            .iter()
-            .find(|st| st.when.holds(&resolve(&fill_params(&st.when.value, params))))
-        {
+        let holds = |st: &&LookState| {
+            let when = When {
+                value: fill_params(&st.when.value, params),
+                is: st.when.is.iter().map(|v| fill_params(v, params)).collect(),
+                not: st.when.not.iter().map(|v| fill_params(v, params)).collect(),
+            };
+            when.holds(&resolve(&when.value))
+        };
+        if let Some(st) = states.iter().find(holds) {
             st.look.apply(&mut look);
         }
         look

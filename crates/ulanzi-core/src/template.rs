@@ -226,10 +226,7 @@ fn volume(target: AudioTarget, op: VolumeOp) -> Action {
 }
 
 fn scene(name: &str) -> Action {
-    Action::Obs(ObsAction::SetScene {
-        scene: name.into(),
-        preview: false,
-    })
+    Action::obs("set_scene", &[("scene", name)])
 }
 
 fn profile(name: &str, keys: Vec<Key>, dials: [Dial; 3], screen: ScreenConfig) -> Profile {
@@ -302,16 +299,13 @@ fn streaming() -> Profile {
                     exec: None,
                 },
             ),
-            key("radio", "Go Live", RED, Action::Obs(ObsAction::ToggleStream)),
-            key("circle-dot", "Record", RED, Action::Obs(ObsAction::ToggleRecord)),
+            key("radio", "Go Live", RED, Action::obs("toggle_stream", &[])),
+            key("circle-dot", "Record", RED, Action::obs("toggle_record", &[])),
             key(
                 "video",
                 "Camera",
                 BLUE,
-                Action::Obs(ObsAction::ToggleSource {
-                    scene: "Main".into(),
-                    source: "Camera".into(),
-                }),
+                Action::obs("toggle_source", &[("scene", "Main"), ("source", "Camera")]),
             ),
             key(
                 "mic-off",

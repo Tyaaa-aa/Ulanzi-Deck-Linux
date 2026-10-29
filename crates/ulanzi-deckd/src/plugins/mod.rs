@@ -232,6 +232,37 @@ impl PluginHost {
         self.inner.set_secret(id, key, value).await
     }
 
+    /// Move the secrets of installed plugins found in `settings` (a password typed into
+    /// settings.toml, or the OBS password 2.0 kept there) into each plugin's secret store. True
+    /// when any moved: save `settings` then, so they leave the file.
+    pub async fn adopt_secrets(&self, settings: &mut ulanzi_core::model::Settings) -> bool {
+        let manifests = self.manifests();
+        let mut moved = false;
+        for (id, entry) in settings.plugins.iter_mut() {
+            let Some(m) = manifests.get(id) else { continue };
+            for key in m.secret_keys() {
+                let Some(value) = entry
+                    .settings
+                    .get(key)
+                    .and_then(toml::Value::as_str)
+                    .filter(|v| !v.is_empty())
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                match self.set_secret(id, key, Some(value)).await {
+                    Ok(()) => {
+                        entry.settings.remove(key);
+                        moved = true;
+                        tracing::info!(plugin = %id, "moved {key} from settings.toml into the secret store");
+                    }
+                    Err(e) => tracing::warn!(plugin = %id, "cannot store {key}: {e}"),
+                }
+            }
+        }
+        moved
+    }
+
     /// Stop the plugin and delete its folder and secrets. Its settings are kept.
     pub async fn remove(&self, id: &str) -> Result<(), PluginError> {
         self.inner.remove(id).await

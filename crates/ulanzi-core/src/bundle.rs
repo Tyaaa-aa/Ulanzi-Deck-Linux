@@ -160,7 +160,6 @@ pub fn export_with(
     }
     let settings = if include_settings {
         let mut s = store.load_settings()?;
-        s.obs.password = None;
         s.strip_plugin_secrets(declared);
         Some(s)
     } else {
@@ -204,7 +203,6 @@ pub fn to_bytes(b: &Bundle) -> Result<Vec<u8>, BundleError> {
     put("manifest.toml", to_toml(&b.manifest)?.as_bytes())?;
     if let Some(s) = &b.settings {
         let mut s = s.clone();
-        s.obs.password = None;
         s.strip_plugin_secrets(&Default::default());
         put("settings.toml", to_toml(&s)?.as_bytes())?;
     }
@@ -454,9 +452,7 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
     if opts.settings
         && let Some(s) = &bundle.settings
     {
-        let mut s = s.clone();
-        s.obs.password = store.load_settings()?.obs.password;
-        store.save_settings(&s)?;
+        store.save_settings(s)?;
     }
     Ok(report)
 }

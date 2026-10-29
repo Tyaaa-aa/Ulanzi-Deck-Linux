@@ -3,10 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{Action, Background, KeyLook, MediaTakeover, ObsAction, Rotation, Widget};
+use super::{Action, Background, KeyLook, MediaTakeover, Rotation, Widget};
 use crate::Color;
 
-pub const FORMAT_VERSION: u32 = 1;
+/// The file format version written. 2 (Ulanzi Deck 2.1): OBS lives in the OBS plugin; older
+/// files are upgraded when read (see [`crate::upgrade`]).
+pub const FORMAT_VERSION: u32 = 2;
 /// Screen keys are 0..=12.
 pub const KEY_COUNT: u8 = 13;
 
@@ -216,53 +218,6 @@ impl Key {
     }
 }
 
-/// Which kind of OBS name changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObsRename {
-    Scene,
-    /// An input or other source.
-    Input,
-}
-
-fn rename_in(a: &mut Action, kind: ObsRename, old: &str, new: &str) -> bool {
-    let mut hit = false;
-    let mut swap = |s: &mut String| {
-        if s == old {
-            *s = new.to_string();
-            hit = true;
-        }
-    };
-    match a {
-        Action::Multi { steps } => {
-            for st in steps {
-                hit |= rename_in(&mut st.action, kind, old, new);
-            }
-        }
-        Action::Cycle { steps, .. } => {
-            for st in steps {
-                hit |= rename_in(&mut st.action, kind, old, new);
-            }
-        }
-        Action::Obs(o) => match (kind, o) {
-            (ObsRename::Scene, ObsAction::SetScene { scene, .. }) => swap(scene),
-            (ObsRename::Scene, ObsAction::ToggleScenes { a, b }) => {
-                swap(a);
-                swap(b);
-            }
-            (ObsRename::Scene, ObsAction::ToggleSource { scene, .. }) => swap(scene),
-            // Scenes can be sources inside other scenes, so sources follow scene renames too.
-            (_, ObsAction::ToggleSource { source, .. }) | (_, ObsAction::ToggleFilter { source, .. }) => {
-                swap(source)
-            }
-            (ObsRename::Input, ObsAction::ToggleMute { input })
-            | (ObsRename::Input, ObsAction::InputVolume { input, .. }) => swap(input),
-            _ => {}
-        },
-        _ => {}
-    }
-    hit
-}
-
 impl Profile {
     /// "Hide All Labels" for labels drawn into the key pictures (the deck hides its own).
     pub fn hide_drawn_labels(&mut self) {
@@ -336,35 +291,6 @@ impl Profile {
             }
         }
         out
-    }
-
-    /// Follow a name change in OBS everywhere in this profile; true if anything changed.
-    pub fn rename_obs(&mut self, kind: ObsRename, old: &str, new: &str) -> bool {
-        let mut hit = false;
-        let mut each = |a: &mut Option<Action>| {
-            if let Some(a) = a {
-                hit |= rename_in(a, kind, old, new);
-            }
-        };
-        for page in &mut self.pages {
-            for k in page.keys.values_mut() {
-                each(&mut k.tap);
-                each(&mut k.hold);
-            }
-            for d in &mut page.dials {
-                each(&mut d.press);
-                each(&mut d.left);
-                each(&mut d.right);
-                each(&mut d.hold);
-            }
-        }
-        each(&mut self.small_buttons.left);
-        each(&mut self.small_buttons.right);
-        if let ScreenConfig::Custom { tap, hold, .. } = &mut self.screen {
-            each(tap);
-            each(hold);
-        }
-        hit
     }
 }
 

@@ -377,9 +377,6 @@ fn integrations_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
     }
     plugins.add(&open);
     page.add(&plugins);
-    let obs = crate::ui::obs_setup::group(state, |st, f| change_boxed(st, f));
-    obs.set_title("OBS Studio (built in)");
-    page.add(&obs);
 
     let input = adw::PreferencesGroup::builder().title("Keyboard").build();
     let ok = std::fs::OpenOptions::new()

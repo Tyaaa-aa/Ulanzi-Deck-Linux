@@ -331,7 +331,6 @@ fn main() -> glib::ExitCode {
                     ui::plugins_window::open(&state2, &window, Some("installed"))
                 }
                 Some("discover") => ui::plugins_window::open(&state2, &window, Some("discover")),
-                Some("obs-setup") => ui::obs_setup::open_dialog(&state2, &window),
                 Some("backups") => {
                     ui::preferences::open(&state2, &window);
                     if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {

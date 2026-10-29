@@ -29,7 +29,6 @@ pub struct Settings {
     pub label_style: LabelStyleCfg,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<Uuid>,
-    pub obs: ObsSettings,
     /// Kept so older settings files still load. "Start at Login" is the systemd unit's
     /// enabled state (`systemctl --user is-enabled ulanzi-deckd`), not this value.
     pub autostart: bool,
@@ -110,7 +109,6 @@ impl Default for Settings {
             hide_labels: false,
             label_style: LabelStyleCfg::default(),
             default_profile: None,
-            obs: ObsSettings::default(),
             autostart: true,
             tray: true,
             auto_switch: true,
@@ -155,27 +153,6 @@ impl LabelStyleCfg {
             show_title,
             size: self.size,
             weight: self.weight,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ObsSettings {
-    pub host: String,
-    pub port: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub password: Option<String>,
-    pub auto_detect: bool,
-}
-
-impl Default for ObsSettings {
-    fn default() -> Self {
-        Self {
-            host: "localhost".into(),
-            port: 4455,
-            password: None,
-            auto_detect: true,
         }
     }
 }

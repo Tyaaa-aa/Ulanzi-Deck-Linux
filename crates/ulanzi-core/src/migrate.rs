@@ -347,27 +347,23 @@ impl Migrator {
             }
             "obs" => {
                 let s = |k: &str| get(k).unwrap_or_default().to_string();
-                let obs = match get("action")? {
-                    "toggle_scene" => ObsAction::ToggleScenes {
-                        a: s("scene1"),
-                        b: s("scene2"),
-                    },
-                    "set_scene" => ObsAction::SetScene {
-                        scene: s("scene"),
-                        preview: false,
-                    },
-                    "toggle_source" => ObsAction::ToggleSource {
-                        scene: s("scene"),
-                        source: s("source"),
-                    },
-                    "toggle_recording" => ObsAction::ToggleRecord,
-                    "toggle_streaming" => ObsAction::ToggleStream,
+                // The OBS plugin's actions (install it from the plugin store).
+                match get("action")? {
+                    "toggle_scene" => {
+                        Action::obs("toggle_scenes", &[("a", &s("scene1")), ("b", &s("scene2"))])
+                    }
+                    "set_scene" => Action::obs("set_scene", &[("scene", &s("scene"))]),
+                    "toggle_source" => Action::obs(
+                        "toggle_source",
+                        &[("scene", &s("scene")), ("source", &s("source"))],
+                    ),
+                    "toggle_recording" => Action::obs("toggle_record", &[]),
+                    "toggle_streaming" => Action::obs("toggle_stream", &[]),
                     other => {
                         self.warn(format!("{ctx}: unknown OBS action \"{other}\""));
                         return None;
                     }
-                };
-                Action::Obs(obs)
+                }
             }
             other => {
                 self.warn(format!("{ctx}: unknown action type \"{other}\""));
@@ -409,12 +405,14 @@ impl Migrator {
                 }
             }
         }
+        // OBS now lives in the OBS plugin: its settings go where the plugin reads them.
         if let Some(obs) = root.get("obs") {
+            let plugin = &mut s.plugins.entry("obs".into()).or_default().settings;
             if let Some(h) = obs.get("host").and_then(Value::as_str) {
-                s.obs.host = h.to_string();
+                plugin.insert("host".into(), h.into());
             }
             if let Some(p) = obs.get("port").and_then(Value::as_u64) {
-                s.obs.port = p.min(u16::MAX as u64) as u16;
+                plugin.insert("port".into(), toml::Value::Integer(p.min(u16::MAX as u64) as i64));
                 if p == 4444 {
                     self.warn(
                         "OBS port 4444 kept from the old config; OBS 28 and newer listen on 4455 by default"
@@ -422,7 +420,13 @@ impl Migrator {
                     );
                 }
             }
-            s.obs.password = obs.get("password").and_then(Value::as_str).map(str::to_string);
+            if let Some(pw) = obs
+                .get("password")
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty())
+            {
+                plugin.insert("password".into(), pw.into());
+            }
         }
     }
 }

@@ -235,7 +235,7 @@ impl ScreenRuntime {
             now: chrono::Local::now().naive_local(),
             stats: dynamic.stats.clone(),
             media: dynamic.media.clone(),
-            obs: dynamic.obs.clone(),
+            obs: ulanzi_core::obs::ObsLive::from_plugin(&dynamic.plugin_vars),
             ..ScreenData::default()
         };
         // The timer follows the first Timer widget's settings and keeps running while another shows.

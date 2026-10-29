@@ -72,23 +72,11 @@ async fn main() -> ExitCode {
 
     // Calls that arrive before the deck starts wait in this channel.
     let (tx, rx) = mpsc::channel(256);
-    // OBS: connects in the background and keeps trying (it is fine for OBS to be closed).
-    let obs_settings = store.load_settings().map(|s| s.obs).unwrap_or_default();
-    let (renames_tx, renames_rx) = mpsc::unbounded_channel();
-    let probe = ulanzi_deckd::obs::system_probe();
-    let obs = ulanzi_deckd::obs::ObsHandle::spawn(
-        obs_settings,
-        probe.clone(),
-        ulanzi_deckd::obs::Timing::default(),
-        renames_tx,
-    );
     if let Err(e) = conn
         .object_server()
         .at(
             OBJECT_PATH,
-            DeckService::new(tx.clone(), store.clone())
-                .with_obs(obs.clone(), probe)
-                .with_plugins_dir(plugins_dir(&store)),
+            DeckService::new(tx.clone(), store.clone()).with_plugins_dir(plugins_dir(&store)),
         )
         .await
     {
@@ -113,6 +101,15 @@ async fn main() -> ExitCode {
     tracing::info!("ulanzi-deckd {} starting", env!("CARGO_PKG_VERSION"));
 
     first_run(&store);
+    // Version 2.1 reads 2.0's files and saves them in its own format: keep the originals once.
+    match store.keep_v1_copy() {
+        Ok(Some(dir)) => tracing::info!(
+            "kept a copy of the 2.0 settings and profiles in {}",
+            dir.display()
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::warn!("cannot keep a copy of the 2.0 settings and profiles: {e}"),
+    }
     if ulanzi_core::snapshot::due_daily(&store)
         && let Err(e) = ulanzi_core::snapshot::take(&store, "daily")
     {
@@ -138,11 +135,7 @@ async fn main() -> ExitCode {
         PluginSlot::start(async move { start_plugins(&store, &settings, deck).await })
     };
     tokio::spawn(plugins_ready(conn.clone(), plugins.clone(), store.clone()));
-    let executor = Arc::new(
-        Executor::new(Some(conn.clone()))
-            .with_obs(obs.clone())
-            .with_plugin_slot(plugins.clone()),
-    );
+    let executor = Arc::new(Executor::new(Some(conn.clone())).with_plugin_slot(plugins.clone()));
     {
         let ex = executor.clone();
         tokio::task::spawn_blocking(move || ex.prepare_keyboard());
@@ -151,23 +144,6 @@ async fn main() -> ExitCode {
     let events = start_deck(store.clone(), settings, executor, rx);
 
     tokio::spawn(forward_signals(conn.clone(), events.resubscribe()));
-    tokio::spawn(ulanzi_deckd::dbus::forward_obs(
-        conn.clone(),
-        obs.clone(),
-        renames_rx,
-    ));
-    {
-        // OBS's state goes to the deck (live keys, variables, the OBS widget).
-        let (tx, mut live) = (tx.clone(), obs.watch_live());
-        tokio::spawn(async move {
-            while live.changed().await.is_ok() {
-                let l = live.borrow_and_update().clone();
-                if tx.send(DeckMsg::Obs(Box::new(l))).await.is_err() {
-                    break;
-                }
-            }
-        });
-    }
     let quit = Arc::new(tokio::sync::Notify::new());
     tokio::spawn(ulanzi_deckd::tray::run(
         tx.clone(),
@@ -239,7 +215,12 @@ async fn plugins_ready(conn: zbus::Connection, plugins: PluginSlot, store: Store
     if let Some(service) = service.as_mut() {
         service.set_plugins(host.clone());
     }
-    if let Ok(s) = store.load_settings() {
+    if let Ok(mut s) = store.load_settings() {
+        if host.adopt_secrets(&mut s).await
+            && let Err(e) = store.save_settings(&s)
+        {
+            tracing::warn!("cannot save the settings without the moved secrets: {e}");
+        }
         host.apply_settings(&s).await;
     }
     drop(service);

@@ -522,30 +522,6 @@ fn reload_settings_soon(state: &State) {
     });
 }
 
-/// Record the OBS state; when connected, fetch the scene list (for pickers and warnings).
-pub fn set_obs(state: &State, st: String, title: String, detail: String) {
-    let connected = st == "connected";
-    {
-        let mut o = state.obs.borrow_mut();
-        o.state = st;
-        o.title = title;
-        o.detail = detail;
-        if !connected {
-            o.scenes.clear();
-        }
-    }
-    state.notify(Change::Obs);
-    if connected && let Some(c) = state.client.borrow().clone() {
-        let s = state.clone();
-        runtime::run(async move { c.obs_list("scenes", "").await }, move |r| {
-            if let Ok(list) = r {
-                s.obs.borrow_mut().scenes = list;
-                s.notify(Change::Obs);
-            }
-        });
-    }
-}
-
 /// Fetch the plugin list and manifests. The list counts as known (key badges show) only once
 /// both arrived; a failure (the plugin host still coming up) leaves it as it was. Only the newest
 /// fetch is stored, and none that was in flight when the service went away.
@@ -607,14 +583,6 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
                     state.notify(Change::Profiles);
                     state.notify(Change::Settings);
                     refresh_plugins(&state);
-                    if let Some(c) = state.client.borrow().clone() {
-                        let s = state.clone();
-                        runtime::run(async move { c.obs_status().await }, move |r| {
-                            if let Ok((st, title, detail)) = r {
-                                set_obs(&s, st, title, detail);
-                            }
-                        });
-                    }
                 }
                 Err(e) => {
                     tracing::warn!("{e}");
@@ -713,13 +681,6 @@ fn follow_events(state: &State, c: &Client) {
                     }
                 }
                 ClientEvent::SettingsChanged => reload_settings_soon(&state),
-                ClientEvent::Obs {
-                    state: st,
-                    title,
-                    detail,
-                } => {
-                    set_obs(&state, st, title, detail);
-                }
                 ClientEvent::ActionFailed { control, message } => {
                     tracing::info!("{control}: {message}");
                     crate::ui::toast(&state, &message);

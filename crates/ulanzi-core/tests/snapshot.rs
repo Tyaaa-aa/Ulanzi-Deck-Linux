@@ -65,19 +65,19 @@ fn restore_snapshots_current_state_first() {
 }
 
 #[test]
-fn restore_keeps_obs_password() {
+fn restore_puts_the_settings_back() {
     let d = tempfile::tempdir().expect("tmp");
     let s = store(d.path());
     s.save_profile(&Profile::new_default("A", Model::D200X))
         .expect("save");
     let snap = take(&s, "daily").expect("take");
-    let mut settings = Settings::default();
-    settings.obs.password = Some("pw".into());
-    settings.brightness = 33;
+    let settings = Settings {
+        brightness: 33,
+        ..Settings::default()
+    };
     s.save_settings(&settings).expect("settings");
     restore(&s, &snap.name).expect("restore");
     let now = s.load_settings().expect("load");
-    assert_eq!(now.obs.password.as_deref(), Some("pw"));
     assert_eq!(now.brightness, Settings::default().brightness);
 }
 

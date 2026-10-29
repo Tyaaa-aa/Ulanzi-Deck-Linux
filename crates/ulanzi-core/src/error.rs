@@ -6,7 +6,7 @@ pub enum CoreError {
     Io { path: PathBuf, source: std::io::Error },
     #[error("{path}: {message}")]
     Parse { path: PathBuf, message: String },
-    #[error("{path}: file format version {found} is not supported (this build reads version 1)")]
+    #[error("{path}: made with a newer Ulanzi Deck (file format version {found}); update the app to open it")]
     UnsupportedVersion { path: PathBuf, found: i64 },
     #[error("could not write settings: {0}")]
     Serialize(String),

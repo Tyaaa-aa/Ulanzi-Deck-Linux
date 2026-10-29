@@ -2,8 +2,15 @@
 
 use std::collections::BTreeMap;
 
-/// Names the Python version used, mapped to the current ones.
-const ALIASES: [(&str, &str); 2] = [("cpu_usage", "cpu"), ("ram_usage", "ram")];
+/// Older names, mapped to the current ones: the Python version's, and 2.0's built-in OBS ones,
+/// now the OBS plugin's.
+const ALIASES: [(&str, &str); 5] = [
+    ("cpu_usage", "cpu"),
+    ("ram_usage", "ram"),
+    ("obs_scene", "obs.scene"),
+    ("obs_rec_time", "obs.rec_time"),
+    ("obs_stream_time", "obs.stream_time"),
+];
 
 /// Replace every `{name}` whose name (or legacy alias) is in `vars`; anything else is left as
 /// written. One pass: a value that itself looks like `{name}` is not expanded again.

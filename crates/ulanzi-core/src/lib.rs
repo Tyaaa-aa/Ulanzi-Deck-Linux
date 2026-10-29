@@ -21,6 +21,7 @@ pub mod snapshot;
 pub mod steam;
 pub mod store;
 pub mod template;
+pub mod upgrade;
 
 pub use color::{Color, ColorParseError};
 pub use error::CoreError;

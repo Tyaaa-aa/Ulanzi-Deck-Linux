@@ -406,8 +406,8 @@ mod tests {
         let labels: Vec<&str> = tabs.iter().map(|t| t.label.as_str()).collect();
         let mut want = vec!["All"];
         want.extend(Category::ALL.iter().map(|c| c.title()));
-        // The plugin shares its name with the built-in OBS category: it says it is a plugin.
-        want.extend(["Home Assistant", "OBS Studio (plugin)"]);
+        // Plugins after the built-in categories, by name.
+        want.extend(["Home Assistant", "OBS Studio"]);
         assert_eq!(labels, want);
         assert_eq!(tabs[0].id, ALL);
         let ids: HashSet<&str> = tabs.iter().map(|t| t.id.as_str()).collect();
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(v.len(), builtin_count(true) + 4);
         let names: Vec<&str> = v.groups.iter().map(|g| g.title.as_str()).collect();
         let mut want: Vec<&str> = Category::ALL.iter().map(|c| c.title()).collect();
-        want.extend(["Home Assistant", "OBS Studio (plugin)"]);
+        want.extend(["Home Assistant", "OBS Studio"]);
         assert_eq!(names, want);
         for g in &v.groups {
             let t: Vec<String> = g.entries.iter().map(|e| e.title.to_lowercase()).collect();
@@ -477,10 +477,7 @@ mod tests {
         let v = c.view("plugin:obs", "");
         assert_eq!(
             titles(&v),
-            vec![(
-                "OBS Studio (plugin)".to_string(),
-                vec!["Toggle recording".to_string()]
-            )]
+            vec![("OBS Studio".to_string(), vec!["Toggle recording".to_string()])]
         );
         assert!(v.groups[0].plugin);
     }
@@ -520,11 +517,11 @@ mod tests {
             titles(&c.view(ALL, "home toggle")),
             vec![("Home Assistant".to_string(), vec!["Toggle an entity".to_string()])]
         );
-        // "obs" finds the built-in OBS actions and the plugin's.
+        // "obs" finds the OBS plugin's actions (OBS is a plugin only).
         let obs = c.view(ALL, "obs");
         assert_eq!(
             obs.groups.iter().map(|g| g.title.as_str()).collect::<Vec<_>>(),
-            vec!["OBS Studio", "OBS Studio (plugin)"]
+            vec!["OBS Studio"]
         );
         assert!(obs.headers, "search results keep their section headers");
         assert!(c.view(ALL, "nothing like this").is_empty());

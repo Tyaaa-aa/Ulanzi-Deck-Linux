@@ -58,12 +58,6 @@ impl KeySet {
             .iter()
             .filter(|k| extras || !k.extra)
             .map(|k| {
-                let action = manifest.action(&k.action);
-                let states = if k.states.is_empty() {
-                    action.map(|a| a.states.as_slice()).unwrap_or_default()
-                } else {
-                    &k.states
-                };
                 let icon = k
                     .icon
                     .clone()
@@ -84,7 +78,8 @@ impl KeySet {
                             text: fill(&k.label, &item.id, &item.name),
                             ..Label::default()
                         },
-                        states: states.iter().map(|st| st.to_look(&manifest.id)).collect(),
+                        // Only the key's own looks; otherwise it uses its action's when drawn.
+                        states: k.states.iter().map(|st| st.to_look(&manifest.id)).collect(),
                         ..KeyLook::default()
                     },
                     tap: Some(Action::Plugin {

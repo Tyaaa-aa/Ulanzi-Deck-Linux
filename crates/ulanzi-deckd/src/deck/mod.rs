@@ -75,8 +75,6 @@ pub enum DeckMsg {
     PrevPage,
     Brightness(BrightnessOp),
     Dynamic(Box<DynamicState>),
-    /// OBS's state changed (or a second passed while recording or streaming).
-    Obs(Box<ulanzi_core::obs::ObsLive>),
     Query(oneshot::Sender<DeckSnapshot>),
     /// The desktop says another window is in front (auto profile switching).
     Focus(ulanzi_core::autoswitch::Window),
@@ -438,11 +436,6 @@ impl Deck {
                     self.push_page(false).await;
                 }
             }
-            DeckMsg::Obs(live) => {
-                self.dynamic.set_obs(*live);
-                self.update_screen();
-                self.push_page(false).await;
-            }
             DeckMsg::Query(reply) => {
                 let p = self.profile();
                 let _ = reply.send(DeckSnapshot {
@@ -470,6 +463,10 @@ impl Deck {
             }
             DeckMsg::PluginState { plugin, key, value } => {
                 if self.dynamic.set_plugin_var(&plugin, &key, value) {
+                    // The OBS widget on the wide screen shows the OBS plugin's values.
+                    if plugin == "obs" {
+                        self.update_screen();
+                    }
                     self.push_page(false).await;
                 }
             }

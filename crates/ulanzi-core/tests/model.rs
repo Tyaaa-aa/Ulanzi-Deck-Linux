@@ -80,11 +80,8 @@ fn every_action() -> Vec<Action> {
                 },
             ],
         },
-        Action::Obs(ObsAction::ToggleScenes {
-            a: "Gaming".into(),
-            b: "Desktop".into(),
-        }),
-        Action::Obs(ObsAction::ToggleRecord),
+        Action::obs("toggle_scenes", &[("a", "Gaming"), ("b", "Desktop")]),
+        Action::obs("toggle_record", &[]),
     ]
 }
 
@@ -93,7 +90,6 @@ fn settings_default_roundtrip() {
     let (_d, s) = store();
     let def = s.load_settings().expect("missing file gives defaults");
     assert_eq!(def, Settings::default());
-    assert_eq!(def.obs.port, 4455);
     assert_eq!(def.hold_ms, 500);
     let mut changed = def.clone();
     changed.brightness = 10;
@@ -224,13 +220,40 @@ fn unknown_version_rejected() {
     let path = s.profile_dir(p.id).join("profile.toml");
     let text = std::fs::read_to_string(&path)
         .expect("read")
-        .replacen("version = 1", "version = 2", 1);
+        .replacen("version = 2", "version = 3", 1);
     std::fs::write(&path, text).expect("write");
-    let err = s.load_profile(p.id).expect_err("version 2 must fail");
+    let err = s.load_profile(p.id).expect_err("version 3 must fail");
     assert!(
-        matches!(err, CoreError::UnsupportedVersion { found: 2, .. }),
+        matches!(err, CoreError::UnsupportedVersion { found: 3, .. }),
         "{err}"
     );
+    assert!(err.to_string().contains("newer Ulanzi Deck"), "{err}");
+}
+
+#[test]
+fn version_1_profiles_load_with_obs_as_the_plugin() {
+    let (_d, s) = store();
+    let p = Profile::new_default("V", Model::D200);
+    s.save_profile(&p).expect("save");
+    let path = s.profile_dir(p.id).join("profile.toml");
+    let text = std::fs::read_to_string(&path)
+        .expect("read")
+        .replacen("version = 2", "version = 1", 1)
+        + "\n[pages.keys.4.tap]\ntype = \"obs\"\nobs = \"toggle_mute\"\ninput = \"Mic\"\n";
+    std::fs::write(&path, text).expect("write");
+    let back = s.load_profile(p.id).expect("version 1 loads");
+    assert_eq!(back.version, FORMAT_VERSION);
+    match &back.pages[0].keys[&4].tap {
+        Some(Action::Plugin {
+            plugin,
+            action,
+            params,
+        }) => {
+            assert_eq!((plugin.as_str(), action.as_str()), ("obs", "toggle_mute"));
+            assert_eq!(params["input"].as_str(), Some("Mic"));
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -434,88 +457,6 @@ fn widget_defaults_and_actions() {
 }
 
 #[test]
-fn obs_actions_round_trip_and_old_ones_parse() {
-    // Written by earlier versions: no `preview` field.
-    let old: Key = toml::from_str("[tap]\ntype = \"obs\"\nobs = \"set_scene\"\nscene = \"Live\"\n")
-        .expect("old set_scene");
-    assert_eq!(
-        old.tap,
-        Some(Action::Obs(ObsAction::SetScene {
-            scene: "Live".into(),
-            preview: false
-        }))
-    );
-    for a in [
-        Action::Obs(ObsAction::InputVolume {
-            input: "Mic/Aux".into(),
-            op: VolumeOp::Down,
-            step: 3,
-        }),
-        Action::Obs(ObsAction::ToggleFilter {
-            source: "Cam".into(),
-            filter: "Blur".into(),
-        }),
-        Action::Obs(ObsAction::PauseRecord),
-        Action::Obs(ObsAction::Screenshot),
-    ] {
-        let k = Key {
-            tap: Some(a),
-            ..Key::default()
-        };
-        let text = toml::to_string(&k).expect("serialize");
-        assert_eq!(toml::from_str::<Key>(&text).expect("parse"), k, "{text}");
-    }
-}
-
-#[test]
-fn obs_renames_reach_every_action() {
-    let mut p = Profile::new_default("T", Model::D200X);
-    let scene = |s: &str| {
-        Action::Obs(ObsAction::SetScene {
-            scene: s.into(),
-            preview: false,
-        })
-    };
-    p.pages[0].keys.insert(
-        0,
-        Key {
-            tap: Some(scene("Game")),
-            hold: Some(Action::Multi {
-                steps: vec![Step {
-                    action: Action::Obs(ObsAction::ToggleMute { input: "Mic".into() }),
-                    delay_ms: 0,
-                }],
-            }),
-            ..Key::default()
-        },
-    );
-    p.pages[0].dials[1].left = Some(Action::Obs(ObsAction::InputVolume {
-        input: "Mic".into(),
-        op: VolumeOp::Down,
-        step: 2,
-    }));
-    p.small_buttons.left = Some(Action::Obs(ObsAction::ToggleScenes {
-        a: "Game".into(),
-        b: "Chat".into(),
-    }));
-    assert!(p.rename_obs(ObsRename::Scene, "Game", "Gaming"));
-    assert!(p.rename_obs(ObsRename::Input, "Mic", "Microphone"));
-    assert!(!p.rename_obs(ObsRename::Scene, "Nope", "X"));
-    let k = &p.pages[0].keys[&0];
-    assert_eq!(k.tap, Some(scene("Gaming")));
-    assert!(
-        matches!(&k.hold, Some(Action::Multi { steps }) if matches!(&steps[0].action,
-        Action::Obs(ObsAction::ToggleMute { input }) if input == "Microphone"))
-    );
-    assert!(
-        matches!(&p.pages[0].dials[1].left, Some(Action::Obs(ObsAction::InputVolume { input, .. })) if input == "Microphone")
-    );
-    assert!(
-        matches!(&p.small_buttons.left, Some(Action::Obs(ObsAction::ToggleScenes { a, b })) if a == "Gaming" && b == "Chat")
-    );
-}
-
-#[test]
 fn hiding_labels_reaches_drawn_labels() {
     let mut p = Profile::new_default("T", Model::D200X);
     let mut drawn = Key::default();
@@ -611,4 +552,26 @@ fn live_states_pick_the_first_match_and_fill_params() {
     .expect("toml");
     let back: Key = toml::from_str(&text).expect("parse");
     assert_eq!(back.tap, Some(a));
+}
+
+#[test]
+fn version_1_files_are_copied_once_before_the_upgrade() {
+    let (d, s) = store();
+    let p = Profile::new_default("V", Model::D200);
+    s.save_profile(&p).expect("save");
+    assert_eq!(
+        s.keep_v1_copy().expect("check"),
+        None,
+        "already version 2: nothing to keep"
+    );
+    let path = s.profile_dir(p.id).join("profile.toml");
+    let v1 = std::fs::read_to_string(&path)
+        .expect("read")
+        .replacen("version = 2", "version = 1", 1);
+    std::fs::write(&path, &v1).expect("write");
+    let kept = s.keep_v1_copy().expect("copy").expect("copied");
+    assert!(kept.starts_with(d.path()));
+    let copy = kept.join("profiles").join(p.id.to_string()).join("profile.toml");
+    assert_eq!(std::fs::read_to_string(copy).expect("copy"), v1);
+    assert_eq!(s.keep_v1_copy().expect("again"), None, "only once");
 }

@@ -387,14 +387,11 @@ pub fn key_problem(state: &State, key: &ulanzi_core::model::Key) -> Option<Strin
             .collect(),
         state.profiles.borrow().iter().map(|(id, _)| *id).collect(),
     );
-    let obs = state.obs.borrow();
-    let scenes = obs.connected().then_some(obs.scenes.as_slice());
     let ctx = ulanzi_core::catalog::Problems {
         app_installed: &app_installed,
         file_exists: &file_exists,
         pages: &pages,
         profiles: &profiles,
-        obs_scenes: scenes,
         plugin: &|p, a| state.plugins.borrow().action_problem(p, a),
     };
     [&key.tap, &key.hold]
@@ -895,7 +892,6 @@ pub fn build(state: &State) -> Canvas {
             | Change::Page
             | Change::Settings
             | Change::Preview
-            | Change::Obs
             | Change::Plugins
             | Change::Profiles => {
                 let dir = profile_dir(&state);

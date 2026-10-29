@@ -86,7 +86,6 @@ pub enum Action {
         #[serde(default)]
         show: CycleShows,
     },
-    Obs(ObsAction),
     /// An action a plugin provides. Kept as written when the plugin is missing or off.
     Plugin {
         plugin: String,
@@ -186,63 +185,18 @@ pub enum BrightnessOp {
     Down { step: u8 },
 }
 
-fn two_db() -> u8 {
-    2
-}
-
-/// What the deck can do in OBS Studio (obs-websocket 5).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "obs", rename_all = "snake_case")]
-pub enum ObsAction {
-    /// Show a scene (on the preview instead, in studio mode, with `preview`).
-    SetScene {
-        scene: String,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        preview: bool,
-    },
-    ToggleScenes {
-        a: String,
-        b: String,
-    },
-    ToggleSource {
-        scene: String,
-        source: String,
-    },
-    ToggleRecord,
-    StartRecord,
-    StopRecord,
-    /// Pause or resume the recording.
-    PauseRecord,
-    ToggleStream,
-    StartStream,
-    StopStream,
-    ToggleReplay,
-    SaveReplay,
-    ToggleVirtualCam,
-    ToggleMute {
-        input: String,
-    },
-    /// Change an input's volume; `step` is in dB.
-    InputVolume {
-        input: String,
-        op: VolumeOp,
-        #[serde(default = "two_db")]
-        step: u8,
-    },
-    ToggleFilter {
-        source: String,
-        filter: String,
-    },
-    /// Studio mode: send the preview to the program.
-    StudioTransition,
-    SetCollection {
-        name: String,
-    },
-    SetProfile {
-        name: String,
-    },
-    /// OBS's own screenshot of the program (saved where OBS saves them).
-    Screenshot,
+impl Action {
+    /// An action of the OBS plugin (`plugin = "obs"`) with `params`.
+    pub fn obs(action: &str, params: &[(&str, &str)]) -> Action {
+        Action::Plugin {
+            plugin: "obs".into(),
+            action: action.into(),
+            params: params
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), toml::Value::String((*v).to_string())))
+                .collect(),
+        }
+    }
 }
 
 /// A TOML table as JSON, for handing to a plugin. Datetimes become their TOML text form (RFC 3339 when they carry an offset).

@@ -118,6 +118,58 @@ impl Store {
         write_atomic_mode(&path, to_toml(s)?.as_bytes(), 0o600).map_err(|e| CoreError::io(&path, e))
     }
 
+    /// Copy the settings and every profile folder, as they are on disk, to `<config>/before-2.1/`
+    /// when any of them is in the version-1 format, before the app first saves them as version 2.
+    /// Once only: an existing copy is left alone. Returns the folder when it copied.
+    pub fn keep_v1_copy(&self) -> Result<Option<PathBuf>, CoreError> {
+        let dest = self.root.join("before-2.1");
+        if dest.exists() {
+            return Ok(None);
+        }
+        let v1 = |path: &Path| {
+            fs::read_to_string(path).ok().is_some_and(|t| {
+                toml::from_str::<toml::Table>(&t)
+                    .ok()
+                    .and_then(|t| t.get("version").and_then(toml::Value::as_integer))
+                    == Some(1)
+            })
+        };
+        let settings = self.root.join(SETTINGS_FILE);
+        let profiles: Vec<PathBuf> = fs::read_dir(self.profiles_dir())
+            .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        if !v1(&settings) && !profiles.iter().any(|p| v1(&p.join(PROFILE_FILE))) {
+            return Ok(None);
+        }
+        fn copy_dir(from: &Path, to: &Path) -> io::Result<()> {
+            fs::create_dir_all(to)?;
+            for e in fs::read_dir(from)? {
+                let e = e?;
+                let kind = e.file_type()?;
+                if kind.is_dir() {
+                    copy_dir(&e.path(), &to.join(e.file_name()))?;
+                } else if kind.is_file() {
+                    fs::copy(e.path(), to.join(e.file_name()))?;
+                }
+            }
+            Ok(())
+        }
+        let io = |p: &Path| {
+            let p = p.to_path_buf();
+            move |e| CoreError::io(&p, e)
+        };
+        fs::create_dir_all(dest.join("profiles")).map_err(io(&dest))?;
+        if settings.is_file() {
+            fs::copy(&settings, dest.join(SETTINGS_FILE)).map_err(io(&settings))?;
+        }
+        for p in profiles {
+            if let Some(name) = p.file_name() {
+                copy_dir(&p, &dest.join("profiles").join(name)).map_err(io(&p))?;
+            }
+        }
+        Ok(Some(dest))
+    }
+
     pub fn load_profile(&self, id: Uuid) -> Result<Profile, CoreError> {
         self.load_profile_at(&self.profile_dir(id).join(PROFILE_FILE))
     }
@@ -211,18 +263,24 @@ fn parse_versioned<T: DeserializeOwned>(path: &Path, text: &str) -> Result<T, Co
         path: path.to_path_buf(),
         message: e.to_string(),
     };
-    let table: toml::Table = toml::from_str(text).map_err(parse_err)?;
+    let mut table: toml::Table = toml::from_str(text).map_err(parse_err)?;
     let found = table
         .get("version")
         .and_then(|v| v.as_integer())
         .unwrap_or(FORMAT_VERSION as i64);
-    if found != FORMAT_VERSION as i64 {
-        return Err(CoreError::UnsupportedVersion {
+    match found {
+        1 => {
+            crate::upgrade::v1_to_v2(&mut table);
+            // Read back as text: a table converted directly turns dates into strings.
+            let text = toml::to_string(&table).map_err(|e| CoreError::Serialize(e.to_string()))?;
+            toml::from_str(&text).map_err(parse_err)
+        }
+        f if f == FORMAT_VERSION as i64 => toml::from_str(text).map_err(parse_err),
+        _ => Err(CoreError::UnsupportedVersion {
             path: path.to_path_buf(),
             found,
-        });
+        }),
     }
-    toml::from_str(text).map_err(parse_err)
 }
 
 /// Write via a temp file in the same directory, fsync, then rename over the target.

@@ -125,12 +125,6 @@ pub enum ClientEvent {
     ProfilesChanged,
     /// Settings changed outside the app.
     SettingsChanged,
-    /// The OBS connection changed: (state id, title, detail).
-    Obs {
-        state: String,
-        title: String,
-        detail: String,
-    },
     /// The plugin list or a plugin's status changed: fetch the list again.
     PluginsChanged,
     /// The service went away; edits are kept and sent when it returns.
@@ -442,29 +436,6 @@ impl Client {
         }))
     }
 
-    /// The OBS connection: (state id, title, detail).
-    pub async fn obs_status(&self) -> Result<(String, String, String)> {
-        Ok(self.inner.proxy.call("ObsStatus", &()).await?)
-    }
-
-    /// Names from OBS: scenes, inputs, sources (of a scene), filters (of a source), collections, profiles.
-    pub async fn obs_list(&self, kind: &str, arg: &str) -> Result<Vec<String>> {
-        Ok(self.inner.proxy.call("ObsList", &(kind, arg)).await?)
-    }
-
-    /// Use OBS's own WebSocket settings; returns what was found, in words.
-    pub async fn obs_use_detected(&self) -> Result<String> {
-        Ok(self.inner.proxy.call("ObsUseDetected", &()).await?)
-    }
-
-    pub async fn obs_enable_server(&self) -> Result<String> {
-        Ok(self.inner.proxy.call("ObsEnableServer", &()).await?)
-    }
-
-    pub async fn obs_reconnect(&self) -> Result<()> {
-        Ok(self.inner.proxy.call("ObsReconnect", &()).await?)
-    }
-
     /// Installed plugins (and plugin folders that could not be loaded).
     pub async fn plugin_list(&self) -> Result<Vec<PluginRow>> {
         let list: Vec<(String, String, String, String, String)> =
@@ -773,10 +744,6 @@ impl Client {
                 "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
                 "SettingsChanged" => Some(ClientEvent::SettingsChanged),
                 "PluginsChanged" => Some(ClientEvent::PluginsChanged),
-                "ObsStatusChanged" => body
-                    .deserialize::<(String, String, String)>()
-                    .ok()
-                    .map(|(state, title, detail)| ClientEvent::Obs { state, title, detail }),
                 _ => None,
             };
             if let Some(e) = event {
