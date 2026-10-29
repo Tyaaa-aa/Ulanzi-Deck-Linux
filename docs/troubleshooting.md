@@ -71,16 +71,15 @@ Right-click a profile → **Auto-Switch**: the top line says what your desktop s
 
 ## OBS won't connect
 
-Open **Preferences → Integrations**: the first row says exactly what's wrong.
+OBS works through the OBS Studio plugin. Open **Plugins → OBS Studio**: its status says what's wrong.
 
 | It says | Do this |
 |---|---|
-| OBS is closed | Start OBS; Ulanzi Deck connects within a few seconds |
-| OBS's WebSocket server is off | In OBS: Tools → WebSocket Server Settings → Enable WebSocket server, or press **Turn On WebSocket Server** while OBS is closed |
-| Wrong port | Press **Find OBS Settings** |
-| Password needed / Wrong password | Press **Find OBS Settings** (it reads the password from OBS) |
+| Not installed | **Plugins → Discover → OBS Studio → Install** |
+| OBS is closed or its WebSocket server is off | Start OBS; in OBS: Tools → WebSocket Server Settings → Enable WebSocket server |
+| Password needed / rejected | OBS: Tools → WebSocket Server Settings → Show Connect Info; type the password in **Plugins → OBS Studio** |
+| Wrong port | Use the port Show Connect Info shows (4455 unless you changed it) |
 | OBS 28 or newer needed | Update OBS |
-| OBS Studio not found | Install OBS (Flatpak or native both work) |
 
 ## Now Playing shows nothing
 

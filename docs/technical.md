@@ -34,7 +34,6 @@ flowchart LR
         Deck["Deck actor<br/>pages, input, uploads"]
         Act["Actions<br/>media, audio, keys, commands"]
         Screen["Wide screen<br/>widgets, overlay"]
-        OBS["OBS client<br/>obs-websocket 5"]
         Plug["Plugin host<br/>wasmtime sandbox"]
         Focus["Focus watcher<br/>KWin · GNOME · Hyprland · Sway · X11"]
     end
@@ -49,7 +48,6 @@ flowchart LR
     Deck <-->|1025-byte reports| HID
     Deck --> Act
     Deck --> Screen
-    OBS --> Deck
     Plug <-->|actions, state| Deck
     Focus --> Deck
     Act -->|MPRIS, wpctl/pactl, uinput| session
@@ -84,7 +82,7 @@ album art), ksni (tray), x11rb (X11 focus), evdev (virtual keyboard).
 
 | Path | What |
 |---|---|
-| `~/.config/ulanzi-deck/settings.toml` | Settings (mode 0600: it can hold the OBS password) |
+| `~/.config/ulanzi-deck/settings.toml` | Settings (mode 0600; plugin passwords found in it move to the plugin's secret store) |
 | `~/.config/ulanzi-deck/profiles/<uuid>/profile.toml` | One profile |
 | `~/.config/ulanzi-deck/profiles/<uuid>/icons/` | Pictures used by that profile |
 | `~/.local/state/ulanzi-deck/snapshots/` | Backups (`YYYYmmdd-HHMMSS-NNN-reason.ulanzideck`, newest 20 kept) |
@@ -101,8 +99,8 @@ All paths follow `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `XDG_
 A profile file that doesn't parse is moved aside as `profile.toml.invalid-<time>` and reported, never
 silently dropped.
 
-A **`.ulanzideck` bundle** is a ZIP with `manifest.toml`, optionally `settings.toml` (never with the
-OBS password) and `profiles/<uuid>/{profile.toml, icons/…}`. Imports check every path, cap the total
+A **`.ulanzideck` bundle** is a ZIP with `manifest.toml`, optionally `settings.toml` (never with plugin
+passwords) and `profiles/<uuid>/{profile.toml, icons/…}`. Imports check every path, cap the total
 size at 50 MB and decode every image before accepting it.
 
 ## Profile format
@@ -154,15 +152,14 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). Explore it with
 | Group | Methods |
 |---|---|
 | State | `Hello`, `Firmware`, `ListProfiles`, `GetProfile`, `ApplyProfile` (with revision), `ProfileRevision`, `CreateProfile`, `DeleteProfile`, `SwitchProfile`, `SetPage`, `NextPage`, `PrevPage`, `SetBrightness`, `Reload` |
-| Settings | `GetSettings`, `ApplySettings` (TOML; the OBS password is never sent back, a placeholder keeps it) |
+| Settings | `GetSettings`, `ApplySettings` (TOML; plugin secrets are never sent back, a placeholder keeps them) |
 | Sharing and backups | `PreviewBundle`, `BundleCommands`, `ImportBundle`, `ExportBundle`, `ListSnapshots`, `TakeSnapshot`, `RestoreSnapshot`, `Migrate` |
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
-| OBS | `ObsStatus`, `ObsList`, `ObsUseDetected`, `ObsEnableServer`, `ObsReconnect` |
 | Widgets | `NowPlaying`, `WeatherPlaces`, `WeatherNow` |
 | Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginInstallFile` / `PluginInspectFile` (the same for a `.ulanziplugin` package: an absolute path; installing needs Developer mode, inspecting does not; the package is unpacked into a hidden `.unpack-*` folder inside the plugins folder, limits 64 MiB file, 1000 entries, 64 MiB unpacked), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
 
 Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
-`ActionFailed`, `ObsStatusChanged`, `PluginsChanged`.
+`ActionFailed`, `PluginsChanged`.
 
 ## Plugins
 
@@ -204,9 +201,8 @@ ulanzictl probe …                talk to the deck directly (stop the service f
 
 | Variable | Effect |
 |---|---|
-| `ULANZI_LOG` | Log filter for the service, e.g. `debug` or `ulanzi_deckd::obs=debug` |
+| `ULANZI_LOG` | Log filter for the service, e.g. `debug` or `ulanzi_deckd::plugins=debug` |
 | `ULANZI_DEMO=1` | The service uses a pretend deck: nothing touches the hardware (screenshots, tests) |
-| `ULANZI_OBS_CONFIG_HOME` | Where to read OBS's settings when it differs from `XDG_CONFIG_HOME` (the sandbox uses it) |
 | `ULANZI_BIN` | `scripts/sandbox.sh`: which folder's binaries to run |
 
 ## Logs
@@ -240,8 +236,8 @@ scripts/sandbox.sh --demo  # the app with a pretend deck and throwaway profiles
 scripts/sandbox.sh --showcase   # the real deck on throwaway profiles (your service pauses)
 ```
 
-Tests never touch your configuration. The OBS client is tested against a mock obs-websocket server
-covering every connection state; the deck actor against a mock transport with a paused clock.
+Tests never touch your configuration. Plugins are tested in the plugins repo, in the real plugin host
+against mock OBS and Home Assistant servers; the deck actor against a mock transport with a paused clock.
 [TESTING.md](../TESTING.md) is the hands-on checklist before a release.
 
 ## Packaging and releases

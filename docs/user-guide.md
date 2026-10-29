@@ -64,7 +64,8 @@ click from key to key); picking an action already gives the key a matching icon 
   - **Apps** (the icons of apps on your computer),
   - **Emoji**, **Steam** games, or a **File** of your own (or drag a picture onto a key).
 - **Label**: text on the key. It can show live values: insert `{cpu}`, `{ram}`, `{time}`,
-  `{media_title}`, `{obs_scene}`, `{obs_rec_time}`, `{timer}` and more with the **{ }** button.
+  `{media_title}`, `{timer}` and more with the **{ }** button. Plugin keys can show their own live
+  values (an OBS scene, a temperature): pick one in **Label Shows**.
   **Label Position** moves it to the top, middle or bottom of that key, or hides it (**Hidden**).
 - **Show Live State** (in Look): lets the key change with what it controls. A play key turns into pause, a
   recording key turns red and shows the time, a muted mic turns red.
@@ -194,15 +195,19 @@ While auto-switch is on, the tray icon shows a coloured dot.
 
 ## OBS Studio
 
-1. In OBS (version 28 or newer): **Tools → WebSocket Server Settings → Enable WebSocket server**.
-2. In Ulanzi Deck: **Preferences → Integrations → Find OBS Settings**. It reads the port and
-   password from OBS for you. The top row turns to **Connected · OBS … · N scenes**.
-3. Drag OBS actions onto keys and pick scenes, sources, inputs and filters from the list button next
-   to each field, or type a name.
+OBS Studio works through the **OBS Studio plugin**:
 
-If OBS is closed, the keys dim and Ulanzi Deck connects again by itself when OBS starts. Any other
-problem is explained in plain words on that same Preferences page. Rename a scene in OBS and your
-keys follow the new name.
+1. **Plugins** (the puzzle piece) → **Discover** → **OBS Studio** → **Install**.
+2. In OBS (version 28 or newer): **Tools → WebSocket Server Settings → Enable WebSocket server**, then
+   **Show Connect Info** for the password.
+3. In **Plugins → OBS Studio**, type the password (and the port if it isn't 4455). Its status turns to
+   running once it is connected.
+4. Drag OBS actions onto keys and pick scenes, sources, inputs and filters from the lists.
+
+Keys show what's happening: the scene on air green, REC and LIVE with their times, a muted mic red,
+a hidden source dimmed, and every OBS key dimmed while OBS is closed. The plugin connects again by
+itself when OBS starts. Keys from Ulanzi Deck 2.0 move to the plugin by themselves; install the plugin
+and enter the password once.
 
 ## Templates, sharing and backups
 

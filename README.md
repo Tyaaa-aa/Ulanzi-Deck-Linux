@@ -44,9 +44,9 @@ Changes reach the deck as you make them.
 Media and seeking, volume for any output, app or microphone, output switching, shortcuts,
 typing, commands, apps, websites, sounds and multi-step actions.
 
-**🎬 OBS Studio**
-Scenes, sources, filters, audio, recording, streaming, replay buffer and virtual camera.
-Keys show what's on air, with REC and LIVE times.
+**🧩 Plugins**
+OBS Studio, Home Assistant and more from the built-in plugin store, signed and sandboxed.
+Keys follow what they control: what's on air, REC and LIVE times, lights on, the aircon cooling.
 
 </td>
 <td width="50%" valign="top">

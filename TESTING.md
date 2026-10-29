@@ -94,8 +94,8 @@ Start some music or a video in any player (browser tab is fine).
 
 - [ ] 6.1 In OBS: **Scene Collection → New** → name it `Deck Test`. Add scenes **Test A** and **Test B**;
   in Test A add a **Color Source** named `Test Box`.
-- [ ] 6.2 Menu → **Preferences → Integrations**. → The OBS row explains the current state in words.
-  Press **Find OBS Settings**. → Within a few seconds: **Connected · OBS … · 2 scenes**.
+- [ ] 6.2 **Plugins → Discover → OBS Studio → Install**, then in **Plugins → OBS Studio** type the
+  password from OBS's Show Connect Info. → Its status turns to running.
 - [ ] 6.3 Switch to **Streaming**. Click its first scene key, use the list button to pick **Test A**; set
   the next one to **Test B**. Press them on the deck. → OBS switches; the key of the scene on air turns
   green.
@@ -104,9 +104,8 @@ Start some music or a video in any player (browser tab is fine).
 - [ ] 6.5 Press the **Record** key. → OBS records; the key turns red and counts `REC 00:01…`. Press
   again → stops (delete the test file afterwards if you like).
 - [ ] 6.6 Add the **OBS Studio** widget to the screen. → It shows Test A / Test B and REC while recording.
-- [ ] 6.7 In OBS, rename **Test B** to **Test C**. → The key keeps working (its scene now says Test C).
-- [ ] 6.8 Quit OBS. → Keys dim and Preferences says **OBS is closed**. Start OBS again → it reconnects
-  by itself within a few seconds.
+- [ ] 6.7 Quit OBS. → Keys dim and Plugins → OBS Studio says **OBS is closed**. Start OBS again → it
+  reconnects by itself within a few seconds.
 
 ## 7. Templates, sharing, backups (4 min)
 

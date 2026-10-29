@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+**Ulanzi Deck 2.1 is needed for plugins, live keys and the profiles it saves.** It reads 2.0's profiles
+and settings and saves them in a new format (2) that 2.0 cannot open; the 2.0 files are kept once in
+`~/.config/ulanzi-deck/before-2.1/`.
+
+### Removed
+- The built-in OBS Studio integration. OBS is the OBS Studio plugin now (install it from Plugins →
+  Discover): keys from 2.0 move to it by themselves, `{obs_scene}`, `{obs_rec_time}` and
+  `{obs_stream_time}` keep working, and the OBS password moves into the plugin's secret store. Find OBS
+  Settings (reading the port and password from OBS) is gone for now: copy them from OBS's Show Connect
+  Info.
+
 ### Added
 - Plugins: sandboxed WebAssembly programs that add actions to keys. They can use timers, secrets (system
   keyring), status, WebSocket, TCP/TLS and HTTP connections limited to the hosts and local-network access
@@ -41,7 +52,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   from. Settings are in `[plugins.ha.settings]`; the token moves to the secret store.
 - OBS Studio plugin (in Ulanzi-Deck-Plugins, like every plugin): the built-in OBS actions and live state (`{obs.scene}`,
   `{obs.rec_time}`, ...) as a sandboxed plugin, with lists for scenes, inputs, sources, filters,
-  collections and profiles. It runs next to the built-in integration. Settings are in
+  collections and profiles, and the live looks the built-in integration had. Settings are in
   `[plugins.obs.settings]`.
 
 - Plugin icons: a plugin brings a full-colour `icon`, a one-colour `symbolic_icon`, a `color` and an
