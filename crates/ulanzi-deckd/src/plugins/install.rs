@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::package;
+use super::signature;
 use super::supervisor::{Host, read_manifest, stop_run};
 use ulanzi_core::plugin::Inspected;
 
@@ -139,22 +140,86 @@ fn swap_in(dir: &Path, id: &str) -> Result<(), PluginError> {
     Ok(())
 }
 
-/// Unpack the package `file` into a fresh hidden folder inside `plugins` (hidden, so the plugin
-/// scan ignores it, and inside the plugins folder so it is never somewhere unexpected) and [`validate`] it. The folder is removed when
-/// the returned guard drops, whatever happens.
-fn unpack_and_validate(
-    file: &Path,
+/// A checked package: its unpacked folder (removed when dropped), the plugin and whether a trusted
+/// key signed it.
+pub(super) struct Unpacked {
+    pub tmp: tempfile::TempDir,
+    pub loaded: LoadedPlugin,
+    pub verified: bool,
+}
+
+/// The signature next to a package file (`<file>.minisig`), if there is one.
+fn sidecar_signature(file: &Path) -> Result<Option<String>, PluginError> {
+    let mut path = file.as_os_str().to_owned();
+    path.push(".minisig");
+    let path = PathBuf::from(path);
+    match fs::symlink_metadata(&path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_err("cannot read", &path)(e)),
+        Ok(m) if !m.is_file() || m.len() > 4096 => Err(PluginError::Invalid(format!(
+            "{} is not a signature file",
+            path.display()
+        ))),
+        Ok(_) => fs::read_to_string(&path)
+            .map(Some)
+            .map_err(io_err("cannot read", &path)),
+    }
+}
+
+/// Unpack the package `file` (signed by `<file>.minisig` when that exists) into a fresh hidden
+/// folder inside `plugins` and [`validate`] it.
+fn unpack_and_validate(file: &Path, plugins: &Path, engine: &PluginEngine) -> Result<Unpacked, PluginError> {
+    let meta = fs::metadata(file).map_err(io_err("cannot read", file))?;
+    if !meta.is_file() {
+        return Err(PluginError::Io(format!(
+            "{} is not a regular file",
+            file.display()
+        )));
+    }
+    if meta.len() > package::MAX_PACKAGE_BYTES {
+        return Err(PluginError::Invalid("The package is too large".into()));
+    }
+    let bytes = fs::read(file).map_err(io_err("cannot read", file))?;
+    let sig = sidecar_signature(file)?;
+    unpack_bytes(&bytes, sig.as_deref(), plugins, engine)
+}
+
+/// Unpack and [`validate`] a package held in memory; with `signature`, it must check out for this
+/// plugin's id and version (a bad signature is refused, never ignored). The bytes checked are the
+/// bytes unpacked: they are written to a private file first.
+pub(super) fn unpack_bytes(
+    bytes: &[u8],
+    signature: Option<&str>,
     plugins: &Path,
     engine: &PluginEngine,
-) -> Result<(tempfile::TempDir, LoadedPlugin), PluginError> {
+) -> Result<Unpacked, PluginError> {
     fs::create_dir_all(plugins).map_err(io_err("cannot create", plugins))?;
+    // Hidden, so the plugin scan ignores it, and inside the plugins folder so it is never
+    // somewhere unexpected. Removed when the guard drops, whatever happens.
     let tmp = tempfile::Builder::new()
         .prefix(".unpack-")
         .tempdir_in(plugins)
         .map_err(io_err("cannot make a temporary folder in", plugins))?;
-    package::unpack(file, tmp.path())?;
+    let copy = tempfile::Builder::new()
+        .prefix(".package-")
+        .tempfile_in(plugins)
+        .map_err(io_err("cannot make a temporary file in", plugins))?;
+    fs::write(copy.path(), bytes).map_err(io_err("cannot write", copy.path()))?;
+    package::unpack(copy.path(), tmp.path())?;
     let loaded = validate(tmp.path(), engine)?;
-    Ok((tmp, loaded))
+    let verified = match signature {
+        Some(sig) => {
+            let m = &loaded.manifest;
+            signature::verify(bytes, sig, &signature::package_name(&m.id, &m.version))?;
+            true
+        }
+        None => false,
+    };
+    Ok(Unpacked {
+        tmp,
+        loaded,
+        verified,
+    })
 }
 
 impl Host {
@@ -171,9 +236,10 @@ impl Host {
     pub(super) async fn inspect_file(&self, file: &Path) -> Result<Inspected, PluginError> {
         let engine = self.engine.clone().map_err(PluginError::Load)?;
         let (file, dir) = (file.to_path_buf(), self.dir.clone());
-        let loaded =
-            blocking(move || unpack_and_validate(&file, &dir, &engine).map(|(_tmp, loaded)| loaded)).await?;
-        Ok(self.inspected(loaded))
+        let u = blocking(move || unpack_and_validate(&file, &dir, &engine)).await?;
+        let mut i = self.inspected(u.loaded);
+        i.verified = u.verified;
+        Ok(i)
     }
 
     fn inspected(&self, loaded: LoadedPlugin) -> Inspected {
@@ -181,6 +247,7 @@ impl Host {
         Inspected {
             manifest: loaded.manifest.clone(),
             installed_version,
+            verified: false,
         }
     }
 
@@ -194,7 +261,38 @@ impl Host {
             let src = src.clone();
             blocking(move || validate(&src, &engine)).await?
         };
-        self.install_checked(src, loaded).await
+        self.install_checked(src, loaded, false).await
+    }
+
+    pub(super) async fn store_index(&self) -> Result<super::store::Listing, PluginError> {
+        let dir = self.dir.clone();
+        blocking(move || super::store::fetch_index(&dir)).await
+    }
+
+    pub(super) async fn store_install(&self, id: &str) -> Result<String, PluginError> {
+        let engine = self.engine.clone().map_err(PluginError::Load)?;
+        let listing = self.store_index().await?;
+        let entry = listing
+            .index
+            .plugins
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or_else(|| PluginError::Invalid(format!("The plugin store has no plugin \"{id}\"")))?;
+        let dir = self.dir.clone();
+        let u = blocking(move || {
+            let (bytes, sig) = super::store::download(&entry)?;
+            unpack_bytes(&bytes, Some(&sig), &dir, &engine)
+        })
+        .await?;
+        self.install_unpacked(u, false).await
+    }
+
+    pub(super) fn verified(&self) -> Vec<String> {
+        self.list()
+            .into_iter()
+            .filter(|p| self.dir.join(&p.id).join(signature::VERIFIED_MARKER).is_file())
+            .map(|p| p.id)
+            .collect()
     }
 
     /// Install (or replace) the plugin in a `.ulanziplugin` file.
@@ -203,13 +301,29 @@ impl Host {
         file: &Path,
         developer_mode: bool,
     ) -> Result<String, PluginError> {
-        if !developer_mode {
-            return Err(PluginError::Permission(DEVELOPER_ONLY_FILE.into()));
-        }
         let engine = self.engine.clone().map_err(PluginError::Load)?;
         let (file, dir) = (file.to_path_buf(), self.dir.clone());
-        let (tmp, loaded) = blocking(move || unpack_and_validate(&file, &dir, &engine)).await?;
-        let installed = self.install_checked(tmp.path().to_path_buf(), loaded).await;
+        let u = blocking(move || unpack_and_validate(&file, &dir, &engine)).await?;
+        self.install_unpacked(u, developer_mode).await
+    }
+
+    /// Install a checked package: signed ones always, unsigned ones in Developer mode only.
+    pub(super) async fn install_unpacked(
+        &self,
+        u: Unpacked,
+        developer_mode: bool,
+    ) -> Result<String, PluginError> {
+        if !u.verified && !developer_mode {
+            return Err(PluginError::Permission(DEVELOPER_ONLY_FILE.into()));
+        }
+        let Unpacked {
+            tmp,
+            loaded,
+            verified,
+        } = u;
+        let installed = self
+            .install_checked(tmp.path().to_path_buf(), loaded, verified)
+            .await;
         // Removing the unpacked copy may take a moment; keep it off the async runtime.
         let _ = blocking(move || {
             drop(tmp);
@@ -220,7 +334,12 @@ impl Host {
     }
 
     /// Install the already validated plugin folder `src` (copied, so `src` stays as it is).
-    async fn install_checked(&self, src: PathBuf, loaded: LoadedPlugin) -> Result<String, PluginError> {
+    async fn install_checked(
+        &self,
+        src: PathBuf,
+        loaded: LoadedPlugin,
+        verified: bool,
+    ) -> Result<String, PluginError> {
         let id = loaded.manifest.id.clone();
 
         let _ops = self.ops.lock().await;
@@ -244,7 +363,21 @@ impl Host {
             self.resume(&id);
             return Err(e);
         }
-        tracing::info!(plugin = %id, "installed");
+        // Says the package was signed; written by the host, never taken from a package.
+        let marker = self.dir.join(&id).join(signature::VERIFIED_MARKER);
+        let _ = if verified {
+            fs::write(&marker, "signed with a key Ulanzi Deck trusts\n")
+        } else {
+            fs::remove_file(&marker).or_else(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+        }
+        .inspect_err(|e| tracing::warn!(plugin = %id, "cannot record whether it is signed: {e}"));
+        tracing::info!(plugin = %id, verified, "installed");
         self.installed(loaded);
         Ok(id)
     }

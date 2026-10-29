@@ -20,7 +20,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Plugins as one file: `<id>-<version>.ulanziplugin`, a ZIP with `plugin.toml`, `plugin.wasm` and optional
   `assets/`. `scripts/package-plugin.sh <plugin-dir>` builds one, `ulanzictl plugin install` takes a file
   or a folder, and the D-Bus methods `PluginInspectFile` and `PluginInstallFile` unpack it with strict
-  limits and no links. Installing needs Developer Mode, since packages are unsigned.
+  limits and no links. Signed packages (a valid `.minisig` from the plugin store) install without
+  Developer Mode and show as verified; unsigned ones need it; a bad signature is always refused.
+- The plugin store: `ulanzictl plugin store` lists the plugins in the signed store index and `ulanzictl
+  plugin get <id>` installs or updates one (D-Bus `PluginStoreIndex`, `PluginStoreInstall`,
+  `PluginVerified`). Nothing comes preinstalled: you add only the plugins you want.
 - Settings → Integrations: a page for each plugin, built from its manifest, with its status, on/off,
   Restart and Remove…. Passwords and tokens go straight into its secret store. **Install Plugin…**
   installs a `.ulanziplugin` file and shows what the plugin may do, with an "Unverified plugin"

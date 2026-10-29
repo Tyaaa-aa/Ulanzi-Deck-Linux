@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "plugins": [
+    {
+      "categories": [
+        "smart-home"
+      ],
+      "contract": "1.2",
+      "description": "Toggle, run and set Home Assistant entities and call any service, with live entity state on key labels.",
+      "icon": "https://raw.githubusercontent.com/Tyaaa-aa/Ulanzi-Deck-Plugins/ha-v1.2.0/plugins/ha/assets/icon.svg",
+      "id": "ha",
+      "min_app": "2.1.0",
+      "name": "Home Assistant",
+      "package": {
+        "sha256": "f8f504096fa307e481e4fc2ea8029e3e61e2f23b8fa2fe8189023b77b7319570",
+        "signature": "https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/releases/download/ha-v1.2.0/ha-1.2.0.ulanziplugin.minisig",
+        "size": 176207,
+        "url": "https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/releases/download/ha-v1.2.0/ha-1.2.0.ulanziplugin"
+      },
+      "readme": "https://raw.githubusercontent.com/Tyaaa-aa/Ulanzi-Deck-Plugins/ha-v1.2.0/plugins/ha/README.md",
+      "tested_on_hardware": false,
+      "version": "1.2.0"
+    },
+    {
+      "categories": [
+        "streaming"
+      ],
+      "contract": "1.2",
+      "description": "Scenes, recording, streaming, replay buffer, virtual camera and audio, with live state on key labels.",
+      "icon": "https://raw.githubusercontent.com/Tyaaa-aa/Ulanzi-Deck-Plugins/obs-v1.1.0/plugins/obs/assets/icon.svg",
+      "id": "obs",
+      "min_app": "2.1.0",
+      "name": "OBS Studio",
+      "package": {
+        "sha256": "197007e1cc8b3a2369488957eb9e318108d3810340b0a1a0958df0c5ba52928c",
+        "signature": "https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/releases/download/obs-v1.1.0/obs-1.1.0.ulanziplugin.minisig",
+        "size": 185491,
+        "url": "https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/releases/download/obs-v1.1.0/obs-1.1.0.ulanziplugin"
+      },
+      "readme": "https://raw.githubusercontent.com/Tyaaa-aa/Ulanzi-Deck-Plugins/obs-v1.1.0/plugins/obs/README.md",
+      "tested_on_hardware": false,
+      "version": "1.1.0"
+    }
+  ]
+}

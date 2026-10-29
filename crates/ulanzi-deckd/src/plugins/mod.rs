@@ -7,6 +7,8 @@ mod instance;
 mod net;
 mod package;
 mod secrets;
+pub mod signature;
+pub mod store;
 mod supervisor;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -183,6 +185,22 @@ impl PluginHost {
     /// developer mode (the package is unsigned).
     pub async fn install_file(&self, file: &Path, developer_mode: bool) -> Result<String, PluginError> {
         self.inner.install_file(file, developer_mode).await
+    }
+
+    /// The plugin store's signed list (the kept copy when the store can't be reached).
+    pub async fn store_index(&self) -> Result<store::Listing, PluginError> {
+        self.inner.store_index().await
+    }
+
+    /// Download plugin `id` from the store, check it and install it (no Developer mode needed:
+    /// store packages are signed).
+    pub async fn store_install(&self, id: &str) -> Result<String, PluginError> {
+        self.inner.store_install(id).await
+    }
+
+    /// Installed plugins whose package was signed with a trusted key.
+    pub fn verified(&self) -> Vec<String> {
+        self.inner.verified()
     }
 
     /// Check the `.ulanziplugin` file `file` like an install would (unpacking it to a temporary

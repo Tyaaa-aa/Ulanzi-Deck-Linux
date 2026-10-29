@@ -502,8 +502,11 @@ scripts/package-plugin.sh examples/plugins/hello   # dist/plugins/hello-1.0.0.ul
 ulanzictl plugin install dist/plugins/hello-1.0.0.ulanziplugin
 ```
 
-Packages are not signed, so installing one needs Developer mode, like installing from a folder
-("Turn on Developer mode to install unverified plugins"). Inspecting one (the check an installer
+A package from the plugin store comes with a signature, `<file>.minisig` next to it. When that
+signature checks out against the key built into the app and names this plugin's id and version, the
+package installs without Developer mode and shows as "Verified plugin"; a signature that does not check
+out is refused, even in Developer mode. Packages without a signature need Developer mode, like
+installing from a folder ("Turn on Developer mode to install unverified plugins"). Inspecting one (the check an installer
 shows before it asks) works without. The service unpacks the file into a hidden temporary folder next
 to the installed plugins, checks it like a plugin folder and installs it; the temporary folder is
 removed whatever the outcome. A package is refused, with the reason, when:
@@ -567,6 +570,15 @@ Walk-through:
 4. Its test ([`tests/hello.rs`](../examples/plugins/hello/tests/hello.rs)) uses the `Harness` and runs
    with `cargo test -p ulanzi-plugin-hello`.
 
+## The plugin store
+
+The store is the plugins repo's signed `index.json` (on its `index` release). The service checks the
+index's signature against the built-in key before using it, keeps the last good copy for offline use,
+and installs a plugin only when its download matches the SHA-256 the index lists and its own signature
+checks out. `PluginStoreIndex`, `PluginStoreInstall` and `PluginVerified` on D-Bus do the same as
+`ulanzictl plugin store` and `get`. The app trusts one key today; the list allows a new key to be added
+in an update before the old one is retired.
+
 ## Where plugins live
 
 Every plugin, the OBS and Home Assistant ones included, lives in
@@ -626,7 +638,9 @@ From the command line:
 
 ```text
 ulanzictl plugin list                 id, name, version, status and the reason when there is one
-ulanzictl plugin install <file|folder>  a .ulanziplugin file or a plugin folder; needs developer mode
+ulanzictl plugin store                the plugin store's list, with what is installed or has an update
+ulanzictl plugin get <id>             install or update a plugin from the store (signed: no developer mode)
+ulanzictl plugin install <file|folder>  a .ulanziplugin file (signed ones without developer mode) or a folder
 ulanzictl plugin remove <id>          deletes the plugin and its secrets (settings are kept)
 ulanzictl plugin enable <id>          ulanzictl plugin disable <id>
 ulanzictl plugin restart <id>         stop and start again; also clears a "failed" status

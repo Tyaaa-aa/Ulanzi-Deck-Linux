@@ -289,9 +289,8 @@ async fn plugin_pickers_and_file_installs_reach_the_service() {
         Err(ClientError::Service(_))
     ));
     match c.plugin_install_file(&missing).await {
-        Err(ClientError::Service(m)) => {
-            assert_eq!(m, "Turn on Developer mode to install unverified plugins")
-        }
+        // Read first: a signed package needs no Developer mode.
+        Err(ClientError::Service(m)) => assert!(m.starts_with("cannot read"), "{m}"),
         other => panic!("{other:?}"),
     }
 }

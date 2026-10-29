@@ -23,6 +23,7 @@ uuid.workspace = true
 zbus.workspace = true
 oo7.workspace = true
 evdev.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 ureq = "3"
 toml.workspace = true
@@ -42,6 +43,7 @@ wasmtime-wasi.workspace = true
 wasmtime-wasi-io.workspace = true
 tempfile.workspace = true
 zip.workspace = true
+minisign-verify = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

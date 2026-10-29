@@ -357,9 +357,11 @@ mod typed_fields {
         let i = Inspected {
             manifest: m,
             installed_version: Some("0.9.0".into()),
+            verified: true,
         };
         let back: Inspected = serde_json::from_str(&serde_json::to_string(&i).expect("json")).expect("back");
         assert_eq!(back.installed_version.as_deref(), Some("0.9.0"));
+        assert!(back.verified);
     }
 
     #[test]

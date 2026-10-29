@@ -761,7 +761,8 @@ impl DeckService {
     }
 
     /// Install (or replace) the plugin in the `.ulanziplugin` file at `path` (absolute); returns
-    /// its id. Only in Developer mode (packages are unsigned).
+    /// its id. Signed packages (a valid `<path>.minisig` next to it) install any time; unsigned ones
+    /// only in Developer mode.
     async fn plugin_install_file(&self, path: String) -> Result<String> {
         absolute_file(&path)?;
         let developer_mode = self
@@ -773,6 +774,22 @@ impl DeckService {
             .install_file(std::path::Path::new(&path), developer_mode)
             .await
             .map_err(plugin_err)
+    }
+
+    /// The plugin store's signed list as JSON (`{ "index": …, "offline": bool }`).
+    async fn plugin_store_index(&self) -> Result<String> {
+        let listing = self.plugins()?.store_index().await.map_err(plugin_err)?;
+        serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// Install plugin `id` from the store (signed: no Developer mode needed); returns its id.
+    async fn plugin_store_install(&self, id: String) -> Result<String> {
+        self.plugins()?.store_install(&id).await.map_err(plugin_err)
+    }
+
+    /// Installed plugins whose package was signed with a key the app trusts.
+    async fn plugin_verified(&self) -> Result<Vec<String>> {
+        Ok(self.plugins()?.verified())
     }
 
     /// Stop the plugin and delete it and its secrets. Its settings are kept.

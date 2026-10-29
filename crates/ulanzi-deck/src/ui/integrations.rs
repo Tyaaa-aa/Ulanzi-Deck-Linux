@@ -19,15 +19,26 @@ use crate::ui::{plugin_fields, preferences};
 /// Why the install dialog's Install button is off.
 const NEEDS_DEVELOPER_MODE: &str = "Turn on Developer Mode to install unverified plugins";
 
-/// The rows of the install dialog, in order: (title, subtitle). Without Developer Mode a row says
-/// it is needed (the dialog's Install button is off then).
+const VERIFIED: &str = "Verified plugin";
+const UNVERIFIED: &str = "Unverified plugin";
+
+/// The rows of the install dialog, in order: (title, subtitle). A signed plugin says so; an
+/// unsigned one warns, and without Developer Mode a row says it is needed (the dialog's Install
+/// button is off then).
 pub fn install_rows(i: &Inspected, developer_mode: bool) -> Vec<(String, String)> {
     let m = &i.manifest;
-    let mut rows = vec![(
-        "Unverified plugin".to_string(),
-        "Not from the Ulanzi Deck marketplace. Only install plugins you trust.".to_string(),
-    )];
-    if !developer_mode {
+    let mut rows = vec![if i.verified {
+        (
+            VERIFIED.to_string(),
+            "From the Ulanzi Deck plugin store, signed and unchanged".to_string(),
+        )
+    } else {
+        (
+            UNVERIFIED.to_string(),
+            "Not from the Ulanzi Deck plugin store. Only install plugins you trust.".to_string(),
+        )
+    }];
+    if !developer_mode && !i.verified {
         rows.push((NEEDS_DEVELOPER_MODE.to_string(), String::new()));
     }
     rows.push((format!("{} {}", m.name, m.version), m.description.clone()));
@@ -358,7 +369,11 @@ fn confirm_install(
         if !subtitle.is_empty() {
             row.set_subtitle(&escape(&subtitle));
         }
-        if n == 0 {
+        if n == 0 && title == VERIFIED {
+            let icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            icon.add_css_class("success");
+            row.add_prefix(&icon);
+        } else if n == 0 {
             let icon = gtk::Image::from_icon_name("dialog-warning-symbolic");
             icon.add_css_class("warning");
             row.add_prefix(&icon);
@@ -371,7 +386,7 @@ fn confirm_install(
     alert.add_response("cancel", "Cancel");
     alert.add_response("install", "Install");
     alert.set_response_appearance("install", adw::ResponseAppearance::Suggested);
-    alert.set_response_enabled("install", developer_mode);
+    alert.set_response_enabled("install", developer_mode || i.verified);
     {
         let (state, dialog) = (state.clone(), dialog.clone());
         alert.connect_response(Some("install"), move |_, _| {
@@ -873,12 +888,13 @@ mod tests {
         let i = Inspected {
             manifest,
             installed_version: Some("0.9.0".into()),
+            verified: false,
         };
         let s = |a: &str, b: &str| (a.to_string(), b.to_string());
         let want = vec![
             s(
                 "Unverified plugin",
-                "Not from the Ulanzi Deck marketplace. Only install plugins you trust.",
+                "Not from the Ulanzi Deck plugin store. Only install plugins you trust.",
             ),
             ("OBS Studio 1.1.0".to_string(), description),
             s("Replaces version 0.9.0", ""),
@@ -889,5 +905,10 @@ mod tests {
         let mut off = want.clone();
         off.insert(1, s("Turn on Developer Mode to install unverified plugins", ""));
         assert_eq!(install_rows(&i, false), off);
+        // Signed: no warning, and no Developer Mode needed.
+        let signed = Inspected { verified: true, ..i };
+        let rows = install_rows(&signed, false);
+        assert_eq!(rows[0].0, "Verified plugin");
+        assert!(rows.iter().all(|r| r.0 != NEEDS_DEVELOPER_MODE));
     }
 }

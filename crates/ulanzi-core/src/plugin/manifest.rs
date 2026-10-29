@@ -255,6 +255,9 @@ impl ManifestState {
 pub struct Inspected {
     pub manifest: Manifest,
     pub installed_version: Option<String>,
+    /// Signed with a key the app trusts (installs without Developer mode).
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

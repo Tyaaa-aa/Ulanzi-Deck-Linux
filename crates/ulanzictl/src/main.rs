@@ -97,7 +97,12 @@ enum ProfileCmd {
 enum PluginCmd {
     /// Show installed plugins and how they are doing.
     List,
-    /// Install (or replace) a plugin from a .ulanziplugin file or a folder (needs Developer mode).
+    /// List the plugins in the plugin store.
+    Store,
+    /// Install or update a plugin from the plugin store (signed: no Developer mode needed).
+    Get { id: String },
+    /// Install (or replace) a plugin from a .ulanziplugin file or a folder (unsigned ones need
+    /// Developer mode).
     Install {
         /// A .ulanziplugin file, or a folder that holds plugin.toml.
         dir: PathBuf,
@@ -144,6 +149,42 @@ async fn plugin_list_items(
         .await
         .map_err(not_running)?;
     serde_json::from_str(&json).map_err(|e| format!("unexpected answer from the service: {e}"))
+}
+
+/// `plugin store` output: id, version, name and whether it is installed, one plugin per line.
+fn store_table(listing: &serde_json::Value, installed: &[PluginRow]) -> String {
+    let plugins = listing["index"]["plugins"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut out = String::new();
+    if listing["offline"].as_bool() == Some(true) {
+        out.push_str("(the plugin store can't be reached: this is the last list seen)\n");
+    }
+    if plugins.is_empty() {
+        out.push_str("the plugin store is empty\n");
+        return out;
+    }
+    let text = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
+    let width = plugins
+        .iter()
+        .map(|p| text(p, "id").chars().count())
+        .max()
+        .unwrap_or(0);
+    for p in &plugins {
+        let (id, version) = (text(p, "id"), text(p, "version"));
+        let state = match installed.iter().find(|r| r.0 == id) {
+            Some(r) if r.2 == version => "installed".to_string(),
+            Some(r) => format!("installed {}, update available", r.2),
+            None => String::new(),
+        };
+        out.push_str(&format!(
+            "{id:<width$}  {version:<8}  {}  {state}\n",
+            text(p, "name")
+        ));
+    }
+    out.push_str("install or update one with: ulanzictl plugin get <id>\n");
+    out
 }
 
 /// `plugin items` output: one entry per line, id first, then the label and what else it has.
@@ -505,6 +546,20 @@ async fn plugin(cmd: PluginCmd) -> Result<(), String> {
             let path = dir.to_string_lossy().into_owned();
             let id: String = p
                 .call(install_method(&dir), &(path.as_str(),))
+                .await
+                .map_err(not_running)?;
+            println!("installed {id}");
+        }
+        PluginCmd::Store => {
+            let json: String = p.call("PluginStoreIndex", &()).await.map_err(not_running)?;
+            let listing: serde_json::Value = serde_json::from_str(&json)
+                .map_err(|e| format!("unexpected answer from the service: {e}"))?;
+            let rows: Vec<PluginRow> = p.call("PluginList", &()).await.map_err(not_running)?;
+            print!("{}", store_table(&listing, &rows));
+        }
+        PluginCmd::Get { id } => {
+            let id: String = p
+                .call("PluginStoreInstall", &(id.as_str(),))
                 .await
                 .map_err(not_running)?;
             println!("installed {id}");
