@@ -10,7 +10,7 @@ use crate::state::{Change, State};
 /// Icon and style for an OBS state.
 pub fn state_icon(state: &str) -> (&'static str, &'static str) {
     match state {
-        "connected" => ("emblem-ok-symbolic", "success"),
+        "connected" => ("object-select-symbolic", "success"),
         "connecting" | "" => ("content-loading-symbolic", "dim-label"),
         "not-running" | "dropped" => ("media-playback-pause-symbolic", "dim-label"),
         "not-installed" => ("dialog-information-symbolic", "dim-label"),

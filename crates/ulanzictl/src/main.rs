@@ -551,7 +551,7 @@ async fn plugin(cmd: PluginCmd) -> Result<(), String> {
             println!("installed {id}");
         }
         PluginCmd::Store => {
-            let json: String = p.call("PluginStoreIndex", &()).await.map_err(not_running)?;
+            let json: String = p.call("PluginStoreIndex", &(true,)).await.map_err(not_running)?;
             let listing: serde_json::Value = serde_json::from_str(&json)
                 .map_err(|e| format!("unexpected answer from the service: {e}"))?;
             let rows: Vec<PluginRow> = p.call("PluginList", &()).await.map_err(not_running)?;

@@ -350,6 +350,7 @@ mod tests {
             loaded: true,
             list: rows,
             manifests: ms.into_iter().map(|m| (m.id.clone(), m)).collect(),
+            verified: Vec::new(),
         }
     }
 

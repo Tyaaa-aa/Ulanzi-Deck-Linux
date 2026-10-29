@@ -7,7 +7,6 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::PluginError;
@@ -25,48 +24,7 @@ const MAX_SIGNATURE_BYTES: u64 = 4096;
 /// Index formats this app reads.
 const FORMAT: u32 = 1;
 
-/// The store's list of plugins, as the plugins repo's CI writes it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StoreIndex {
-    pub format: u32,
-    pub plugins: Vec<StoreEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StoreEntry {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub categories: Vec<String>,
-    pub contract: String,
-    #[serde(default)]
-    pub min_app: Option<String>,
-    #[serde(default)]
-    pub tested_on_hardware: bool,
-    #[serde(default)]
-    pub icon: Option<String>,
-    #[serde(default)]
-    pub readme: Option<String>,
-    pub package: StorePackage,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StorePackage {
-    pub url: String,
-    pub signature: String,
-    pub sha256: String,
-    pub size: u64,
-}
-
-/// What was read: the index, and whether it came from the kept copy (offline).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Listing {
-    pub index: StoreIndex,
-    pub offline: bool,
-}
+pub use ulanzi_core::plugin::store::{Listing, StoreEntry, StoreIndex, StorePackage};
 
 fn net_err(what: &str) -> impl Fn(String) -> PluginError + '_ {
     move |e| PluginError::Io(format!("Can't reach the plugin store ({what}): {e}"))
@@ -108,8 +66,37 @@ pub fn read_index(data: &[u8], sig: &str) -> Result<StoreIndex, PluginError> {
     Ok(index)
 }
 
-/// The store's index: fresh when the store answers (and kept in `plugins`), else the kept copy.
-pub fn fetch_index(plugins: &Path) -> Result<Listing, PluginError> {
+/// How long a kept index is used without asking the store again.
+const FRESH_FOR: Duration = Duration::from_secs(30 * 60);
+
+/// The kept index, checked again (it is a file anyone with access could edit).
+fn kept_index(cache: &Path) -> Option<StoreIndex> {
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(cache).ok()?).ok()?;
+    let data = v.get("data")?.as_str()?.as_bytes().to_vec();
+    let sig = v.get("sig")?.as_str()?.to_string();
+    read_index(&data, &sig).ok()
+}
+
+/// The store's index: the kept copy while it is under [`FRESH_FOR`] old (unless `refresh`), else
+/// a fresh one (kept in `plugins`), else the kept copy marked offline.
+pub fn fetch_index(plugins: &Path, refresh: bool) -> Result<Listing, PluginError> {
+    let cache = plugins.join(CACHE);
+    let recent = fs::metadata(&cache)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age < FRESH_FOR);
+    if recent
+        && !refresh
+        && let Some(index) = kept_index(&cache)
+    {
+        let icons = icons(plugins, &index, false);
+        return Ok(Listing {
+            index,
+            offline: false,
+            icons,
+        });
+    }
     let fresh = (|| {
         let data = get(INDEX_URL, MAX_INDEX_BYTES).map_err(net_err("list"))?;
         let sig = get(&format!("{INDEX_URL}.minisig"), MAX_SIGNATURE_BYTES).map_err(net_err("signature"))?;
@@ -118,34 +105,74 @@ pub fn fetch_index(plugins: &Path) -> Result<Listing, PluginError> {
         let index = read_index(&data, &sig)?;
         Ok::<_, PluginError>((index, data, sig))
     })();
-    let cache = plugins.join(CACHE);
     match fresh {
         Ok((index, data, sig)) => {
             let kept = serde_json::json!({ "data": String::from_utf8_lossy(&data), "sig": sig });
             if fs::create_dir_all(plugins).is_ok() {
                 let _ = fs::write(&cache, kept.to_string());
             }
+            let icons = icons(plugins, &index, true);
             Ok(Listing {
                 index,
                 offline: false,
+                icons,
             })
         }
-        Err(e) => {
-            // Checked again: the kept copy is a file anyone with access could edit.
-            let kept = fs::read(&cache)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                .and_then(|v| {
-                    let data = v.get("data")?.as_str()?.as_bytes().to_vec();
-                    let sig = v.get("sig")?.as_str()?.to_string();
-                    read_index(&data, &sig).ok()
-                });
-            match kept {
-                Some(index) => Ok(Listing { index, offline: true }),
-                None => Err(e),
+        Err(e) => match kept_index(&cache) {
+            Some(index) => {
+                let icons = icons(plugins, &index, false);
+                Ok(Listing {
+                    index,
+                    offline: true,
+                    icons,
+                })
             }
+            None => Err(e),
+        },
+    }
+}
+
+/// Kept store icons, in the plugins folder (hidden).
+const ICONS: &str = ".store-icons";
+const MAX_ICON_BYTES: u64 = 512 * 1024;
+
+/// The store plugins' icons as local files (id → file): those kept from before, plus, when
+/// `download`, the missing ones fetched now. One file per version; best effort.
+fn icons(
+    plugins: &Path,
+    index: &StoreIndex,
+    download: bool,
+) -> std::collections::BTreeMap<String, std::path::PathBuf> {
+    let dir = plugins.join(ICONS);
+    let mut out = std::collections::BTreeMap::new();
+    for e in &index.plugins {
+        let Some(url) = e.icon.as_deref() else { continue };
+        let ext = match url.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+            Some("svg") => "svg",
+            Some("png") => "png",
+            _ => continue,
+        };
+        // Ids and versions are checked by the manifest rules; keep the name plain anyway.
+        let plain = |s: &str| {
+            s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        };
+        if !plain(&e.id) || !plain(&e.version) {
+            continue;
+        }
+        let file = dir.join(format!("{}-{}.{ext}", e.id, e.version));
+        if !file.is_file()
+            && download
+            && let Ok(bytes) = get(url, MAX_ICON_BYTES)
+            && fs::create_dir_all(&dir).is_ok()
+        {
+            let _ = fs::write(&file, bytes);
+        }
+        if file.is_file() {
+            out.insert(e.id.clone(), file);
         }
     }
+    out
 }
 
 /// Download `entry`'s package and signature and check the package against the index's hash.

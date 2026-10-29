@@ -776,9 +776,10 @@ impl DeckService {
             .map_err(plugin_err)
     }
 
-    /// The plugin store's signed list as JSON (`{ "index": …, "offline": bool }`).
-    async fn plugin_store_index(&self) -> Result<String> {
-        let listing = self.plugins()?.store_index().await.map_err(plugin_err)?;
+    /// The plugin store's signed list as JSON (`{ "index": …, "offline": bool, "icons": … }`); a
+    /// copy under 30 minutes old unless `refresh`.
+    async fn plugin_store_index(&self, refresh: bool) -> Result<String> {
+        let listing = self.plugins()?.store_index(refresh).await.map_err(plugin_err)?;
         serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 

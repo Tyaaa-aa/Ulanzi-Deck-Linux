@@ -196,6 +196,12 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .tooltip_text("Main Menu")
         .build();
     header.pack_end(&menu);
+    let plugins = gtk::Button::builder()
+        .icon_name("application-x-addon-symbolic")
+        .tooltip_text("Plugins")
+        .action_name("win.plugins")
+        .build();
+    header.pack_end(&plugins);
     let redo = gtk::Button::builder()
         .icon_name("edit-redo-symbolic")
         .tooltip_text("Redo (Ctrl+Shift+Z)")
@@ -333,6 +339,11 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
         a.connect_activate(move |_, _| f());
         window.add_action(&a);
     };
+    let (s, w) = (state.clone(), window.clone());
+    action(
+        "plugins",
+        Box::new(move || crate::ui::plugins_window::open(&s, &w, None)),
+    );
     let s = state.clone();
     action("undo", Box::new(move || s.undo()));
     let s = state.clone();
@@ -548,12 +559,15 @@ pub fn refresh_plugins(state: &State) {
         async move {
             let list = c.plugin_list().await?;
             let manifests = c.plugin_manifests().await?;
-            Ok::<_, crate::client::ClientError>((list, manifests))
+            // An older service has no such call: nothing shows as verified then.
+            let verified = c.plugin_verified().await.unwrap_or_default();
+            Ok::<_, crate::client::ClientError>((list, manifests, verified))
         },
         move |r| match r {
-            Ok((list, manifests)) => {
+            Ok((list, manifests, verified)) => {
                 // An older fetch, or one from before the service went away, is dropped.
                 if s.plugins_fetched(generation, list, manifests) {
+                    s.plugins.borrow_mut().verified = verified;
                     s.notify(Change::Plugins);
                 }
             }

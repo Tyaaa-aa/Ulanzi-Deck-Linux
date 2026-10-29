@@ -518,13 +518,30 @@ impl Client {
     }
 
     /// Install (or replace) the plugin in the `.ulanziplugin` file at `path` (absolute); returns
-    /// its id. Needs Developer mode.
+    /// its id. Unsigned packages need Developer mode.
     pub async fn plugin_install_file(&self, path: &Path) -> Result<String> {
         Ok(self
             .inner
             .proxy
             .call("PluginInstallFile", &(path.to_string_lossy().as_ref(),))
             .await?)
+    }
+
+    /// The plugin store's signed list (the last one seen when the store can't be reached).
+    /// A copy under 30 minutes old is used unless `refresh`.
+    pub async fn plugin_store_index(&self, refresh: bool) -> Result<ulanzi_core::plugin::store::Listing> {
+        let text: String = self.inner.proxy.call("PluginStoreIndex", &(refresh,)).await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Install or update plugin `id` from the store; returns its id.
+    pub async fn plugin_store_install(&self, id: &str) -> Result<String> {
+        Ok(self.inner.proxy.call("PluginStoreInstall", &(id,)).await?)
+    }
+
+    /// Installed plugins whose package was signed with a key the app trusts.
+    pub async fn plugin_verified(&self) -> Result<Vec<String>> {
+        Ok(self.inner.proxy.call("PluginVerified", &()).await?)
     }
 
     /// The entries of the plugin's picker matching `query` (`""`: all), only `group` unless it is

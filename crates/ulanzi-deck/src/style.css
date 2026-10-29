@@ -311,3 +311,8 @@ row.drop-target {
   margin: 5px;
   -gtk-icon-size: 14px;
 }
+
+/* The Plugins window's store cards */
+.store-card {
+  padding: 14px;
+}

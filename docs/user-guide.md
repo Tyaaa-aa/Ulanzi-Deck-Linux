@@ -43,7 +43,7 @@ No technical knowledge needed. If something doesn't work, see [Troubleshooting](
 | **Left: sidebar** | The **Auto-Switch** toggle, your **profiles** and the current profile's **pages**. Brightness at the bottom. |
 | **Middle: the deck** | A drawing of your deck. Click a key, dial, small button or the wide screen to edit it. |
 | **Right: action list / key editor** | With nothing selected, the **action list** to drag from. Click a key to edit it; **×** at the top of the panel (or **Escape**) closes the editor and brings the list back. |
-| **Header** | Connection status, undo/redo and the main menu (☰). |
+| **Header** | Connection status, undo/redo, **Plugins** (the puzzle piece) and the main menu (☰). |
 
 Narrow window? The sidebar folds away; the button at the top left brings it back.
 
@@ -224,8 +224,20 @@ Menu (☰) → **Preferences** (**Ctrl+,**):
 |---|---|
 | **General** | Light/dark style, **Start at Login**, tray icon, switch profiles by app, hold time |
 | **Device** | Brightness, sleep after inactivity and how dim, **Show Volume Changes**, label style (hide all, position, colour) |
-| **Integrations** | OBS Studio connection; whether keyboard shortcuts and typing are allowed; plugins (status, settings, **Install Plugin…** from a `.ulanziplugin` file, which needs **Developer Mode** since packages are unsigned) |
+| **Integrations** | OBS Studio connection; whether keyboard shortcuts and typing are allowed; a link to **Plugins** |
 | **Backups** | Back up now, restore, open the backups folder |
+
+## Plugins
+
+The puzzle piece in the header opens **Plugins**. Nothing comes preinstalled: add what you use.
+
+- **Discover** is the plugin store: search, pick a category, and press **Install**. Store plugins are
+  signed and checked before they install (**Verified**). **Update** appears when a newer version is out;
+  a plugin made for a newer Ulanzi Deck says which version it needs.
+- **Installed** lists your plugins with their status, an on/off switch and a check mark for verified
+  ones. Click one for its settings (a password or token, an address), Restart and Remove.
+  **Install Plugin…** installs a `.ulanziplugin` file: signed ones right away, unsigned ones only with
+  **Developer Mode** on.
 
 ## The tray icon
 

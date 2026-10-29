@@ -25,7 +25,9 @@ and the project uses [Semantic Versioning](https://semver.org).
 - The plugin store: `ulanzictl plugin store` lists the plugins in the signed store index and `ulanzictl
   plugin get <id>` installs or updates one (D-Bus `PluginStoreIndex`, `PluginStoreInstall`,
   `PluginVerified`). Nothing comes preinstalled: you add only the plugins you want.
-- Settings → Integrations: a page for each plugin, built from its manifest, with its status, on/off,
+- The Plugins window (the puzzle button in the header): **Discover** is the plugin store (search,
+  category chips, cards with Install, Update or Open) and **Installed** lists your plugins. Each plugin
+  has a page, built from its manifest, with its status, on/off,
   Restart and Remove…. Passwords and tokens go straight into its secret store. **Install Plugin…**
   installs a `.ulanziplugin` file and shows what the plugin may do, with an "Unverified plugin"
   warning; with Developer Mode on, **Install from Folder (developers)…** does the same for a folder.
@@ -43,7 +45,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   `[plugins.obs.settings]`.
 
 - Plugin icons: a plugin brings a full-colour `icon`, a one-colour `symbolic_icon`, a `color` and an
-  icon per action, all from its own `assets/` folder, so lists, the Integrations page and fresh keys show
+  icon per action, all from its own `assets/` folder, so lists, the Plugins window and fresh keys show
   them. Keys can show a plugin's icon (`source = { kind = "plugin", … }`), drawn in the key's colour.
   Installing checks that every icon the manifest names is in the plugin.
 - Ready-made keys (`[[key_sets]]`): pick items from a plugin's list and get keys that fit each one, on

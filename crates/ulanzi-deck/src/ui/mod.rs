@@ -17,6 +17,7 @@ pub mod library;
 pub mod obs_setup;
 pub mod onboarding;
 pub mod plugin_fields;
+pub mod plugins_window;
 pub mod preferences;
 pub mod shortcuts;
 pub mod sidebar;

@@ -645,7 +645,7 @@ fn valid_semver(v: &str) -> bool {
 }
 
 /// `MAJOR.MINOR.PATCH` as numbers (a pre-release suffix such as `-beta` is ignored).
-fn semver(v: &str) -> (u64, u64, u64) {
+pub(crate) fn semver(v: &str) -> (u64, u64, u64) {
     let mut parts = v
         .split(['-', '+'])
         .next()

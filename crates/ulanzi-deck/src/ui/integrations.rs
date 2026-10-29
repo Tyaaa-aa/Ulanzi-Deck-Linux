@@ -141,6 +141,12 @@ fn plugin_row(state: &State, dialog: &adw::PreferencesDialog, p: &PluginRow) -> 
         .activatable(true)
         .build();
     row.add_prefix(&crate::ui::plugin_logo(state, &p.id, 32));
+    if state.plugins.borrow().verified.contains(&p.id) {
+        let v = gtk::Image::from_icon_name("object-select-symbolic");
+        v.set_tooltip_text(Some("Verified: signed by the Ulanzi Deck plugin store"));
+        v.add_css_class("success");
+        row.add_suffix(&v);
+    }
     row.add_suffix(&status_icon(&w));
     let switch = gtk::Switch::builder()
         .active(p.status != "off")
@@ -370,7 +376,7 @@ fn confirm_install(
             row.set_subtitle(&escape(&subtitle));
         }
         if n == 0 && title == VERIFIED {
-            let icon = gtk::Image::from_icon_name("emblem-ok-symbolic");
+            let icon = gtk::Image::from_icon_name("object-select-symbolic");
             icon.add_css_class("success");
             row.add_prefix(&icon);
         } else if n == 0 {

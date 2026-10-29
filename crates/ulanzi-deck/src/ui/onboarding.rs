@@ -268,7 +268,7 @@ fn check_row(c: &Check) -> adw::ActionRow {
         .subtitle(c.detail)
         .build();
     let (icon, class) = match c.ok {
-        Some(true) => ("emblem-ok-symbolic", "success"),
+        Some(true) => ("object-select-symbolic", "success"),
         Some(false) => ("dialog-warning-symbolic", "warning"),
         None => ("content-loading-symbolic", "dim-label"),
     };
@@ -466,7 +466,7 @@ fn connect_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationPage
                 ),
                 Status::Device { state: st, model, .. } => match st.as_str() {
                     "ready" => (
-                        "emblem-ok-symbolic",
+                        "object-select-symbolic",
                         format!("{} Connected", if model.is_empty() { "Deck" } else { model }),
                         "Your deck is ready.".into(),
                         false,
@@ -687,7 +687,7 @@ fn import_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationPage 
     match (&legacy, imported) {
         (Some(_), true) => {
             body.append(&status_body(
-                "emblem-ok-symbolic",
+                "object-select-symbolic",
                 "Your Setup Is Here",
                 "Your keys from the previous Ulanzi app were imported into the profile “Default”.",
             ));

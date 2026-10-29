@@ -357,8 +357,26 @@ fn integrations_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
         .icon_name("application-x-addon-symbolic")
         .build();
 
-    page.add(&crate::ui::integrations::plugins_group(state, dialog));
-    page.add(&crate::ui::integrations::developer_group(state, dialog));
+    // Plugins have their own window (the puzzle button in the top bar).
+    let plugins = adw::PreferencesGroup::new();
+    let open = adw::ButtonRow::builder()
+        .title("Plugins")
+        .start_icon_name("application-x-addon-symbolic")
+        .end_icon_name("go-next-symbolic")
+        .build();
+    {
+        let (state, dialog) = (state.clone(), dialog.downgrade());
+        open.connect_activated(move |_| {
+            let Some(d) = dialog.upgrade() else { return };
+            let parent = d.root().and_downcast::<gtk::Window>();
+            d.close();
+            if let Some(w) = parent {
+                crate::ui::plugins_window::open(&state, &w, None);
+            }
+        });
+    }
+    plugins.add(&open);
+    page.add(&plugins);
     let obs = crate::ui::obs_setup::group(state, |st, f| change_boxed(st, f));
     obs.set_title("OBS Studio (built in)");
     page.add(&obs);

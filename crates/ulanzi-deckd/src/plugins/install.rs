@@ -264,14 +264,15 @@ impl Host {
         self.install_checked(src, loaded, false).await
     }
 
-    pub(super) async fn store_index(&self) -> Result<super::store::Listing, PluginError> {
+    pub(super) async fn store_index(&self, refresh: bool) -> Result<super::store::Listing, PluginError> {
         let dir = self.dir.clone();
-        blocking(move || super::store::fetch_index(&dir)).await
+        blocking(move || super::store::fetch_index(&dir, refresh)).await
     }
 
     pub(super) async fn store_install(&self, id: &str) -> Result<String, PluginError> {
         let engine = self.engine.clone().map_err(PluginError::Load)?;
-        let listing = self.store_index().await?;
+        // Fresh: an install should get the version the store offers now.
+        let listing = self.store_index(true).await?;
         let entry = listing
             .index
             .plugins

@@ -146,7 +146,7 @@ pub fn open(state: &State, near: &impl IsA<gtk::Widget>, id: Uuid, name: &str) {
                 _ => "This desktop",
             };
             let (title, icon_name, class) = match st.as_str() {
-                "active" => (format!("Works on {desktop}"), "emblem-ok-symbolic", "success"),
+                "active" => (format!("Works on {desktop}"), "object-select-symbolic", "success"),
                 "waiting" => (
                     format!("{desktop}: almost ready"),
                     "dialog-information-symbolic",

@@ -4,6 +4,7 @@ mod field;
 pub mod key_set;
 mod manifest;
 pub mod permission;
+pub mod store;
 
 pub use field::{Choice, Field, FieldKind, ShowIf, UNBOUNDED};
 pub use manifest::{

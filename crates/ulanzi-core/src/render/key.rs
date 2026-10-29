@@ -121,7 +121,13 @@ fn draw_plugin_icon(pix: &mut Pixmap, plugin: &str, icon: &str, fg: Color, scale
 /// Plugin `plugin`'s icon file `icon` as a `px`-square PNG with a clear background: tinted with
 /// `tint` (one-colour icons), else in its own colours.
 pub fn plugin_icon_png(plugin: &str, icon: &str, px: u32, tint: Option<Color>) -> Option<Vec<u8>> {
-    let path = crate::store::plugin_asset(plugin, icon)?;
+    icon_file_png(&crate::store::plugin_asset(plugin, icon)?, px, tint)
+}
+
+/// An icon file (`.svg` or `.png`, such as a store plugin's icon) as a `px`-square PNG with a
+/// clear background, tinted with `tint` or in its own colours.
+pub fn icon_file_png(path: &Path, px: u32, tint: Option<Color>) -> Option<Vec<u8>> {
+    let path = path.to_path_buf();
     if std::fs::metadata(&path).ok()?.len() > MAX_PLUGIN_ICON_BYTES {
         return None;
     }

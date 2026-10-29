@@ -37,6 +37,8 @@ pub struct Plugins {
     pub loaded: bool,
     pub list: Vec<PluginRow>,
     pub manifests: BTreeMap<String, Manifest>,
+    /// Installed plugins whose package was signed with a trusted key.
+    pub verified: Vec<String>,
 }
 
 impl Plugins {
@@ -159,7 +161,7 @@ pub struct StatusWords {
 }
 
 pub fn status_words(row: &PluginRow) -> StatusWords {
-    const OK: (&str, &str) = ("emblem-ok-symbolic", "success");
+    const OK: (&str, &str) = ("object-select-symbolic", "success");
     const PAUSED: (&str, &str) = ("media-playback-pause-symbolic", "dim-label");
     const LOADING: (&str, &str) = ("content-loading-symbolic", "dim-label");
     const WARNING: (&str, &str) = ("dialog-warning-symbolic", "warning");
@@ -718,6 +720,7 @@ mod tests {
             loaded: true,
             list: vec![row(status, detail)],
             manifests: [("obs".to_string(), obs_manifest())].into_iter().collect(),
+            verified: Vec::new(),
         }
     }
 
@@ -874,7 +877,7 @@ mod tests {
         let running = row("running", "");
         let w = status_words(&running);
         assert_eq!(w.title, "Running");
-        assert_eq!((w.icon, w.css), ("emblem-ok-symbolic", "success"));
+        assert_eq!((w.icon, w.css), ("object-select-symbolic", "success"));
         assert_eq!(banner(&running), None);
         assert_eq!(
             status_words(&row("ready", "")).title,
@@ -1000,6 +1003,7 @@ mod tests {
             .into_iter()
             .map(|m| (m.id.clone(), m))
             .collect(),
+            verified: Vec::new(),
         }
     }
 

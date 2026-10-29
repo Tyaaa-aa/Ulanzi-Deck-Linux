@@ -24,7 +24,7 @@ struct Shot {
     size: (i32, i32),
     dark: Option<bool>,
     select: Option<String>,
-    /// `library`, `picker:<tab>`, `integrations`, `integrations:<plugin id>`, `action-picker`, ….
+    /// `library`, `picker:<tab>`, `plugins`, `discover`, `integrations:<plugin id>`, `action-picker`, ….
     open: Option<String>,
     /// 1-based page to show.
     page: Option<usize>,
@@ -324,19 +324,13 @@ fn main() -> glib::ExitCode {
                 }
                 Some("preferences") => ui::preferences::open(&state2, &window),
                 Some(o) if o.starts_with("integrations:") => {
-                    ui::preferences::open(&state2, &window);
-                    if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {
-                        d.set_visible_page_name("integrations");
-                        let id = &o["integrations:".len()..];
-                        d.push_subpage(&ui::integrations::subpage(&state2, &d, id));
-                    }
+                    let id = format!("plugin:{}", &o["integrations:".len()..]);
+                    ui::plugins_window::open(&state2, &window, Some(&id));
                 }
-                Some("integrations") => {
-                    ui::preferences::open(&state2, &window);
-                    if let Some(d) = window.visible_dialog().and_downcast::<adw::PreferencesDialog>() {
-                        d.set_visible_page_name("integrations");
-                    }
+                Some("integrations" | "plugins") => {
+                    ui::plugins_window::open(&state2, &window, Some("installed"))
                 }
+                Some("discover") => ui::plugins_window::open(&state2, &window, Some("discover")),
                 Some("obs-setup") => ui::obs_setup::open_dialog(&state2, &window),
                 Some("backups") => {
                     ui::preferences::open(&state2, &window);

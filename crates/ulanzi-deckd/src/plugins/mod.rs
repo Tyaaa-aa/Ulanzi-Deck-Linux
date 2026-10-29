@@ -188,8 +188,8 @@ impl PluginHost {
     }
 
     /// The plugin store's signed list (the kept copy when the store can't be reached).
-    pub async fn store_index(&self) -> Result<store::Listing, PluginError> {
-        self.inner.store_index().await
+    pub async fn store_index(&self, refresh: bool) -> Result<store::Listing, PluginError> {
+        self.inner.store_index(refresh).await
     }
 
     /// Download plugin `id` from the store, check it and install it (no Developer mode needed:

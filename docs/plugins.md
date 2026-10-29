@@ -307,7 +307,7 @@ Picker searches should match every word of the query anywhere in the name, id or
 `[[settings]]` entries and the entries of an action's `params` are fields. Each has a `key` (required,
 unique in its list), a `kind` (default `text`), and optionally `label` (the row's title; the key when
 missing), `help` (shown under the row or as its tooltip), `default`, `min`, `max`, `step` and `choices`.
-The app builds one row per field: the plugin's page under Settings → Integrations for `[[settings]]`, and
+The app builds one row per field: the plugin's page in the Plugins window for `[[settings]]`, and
 the rows under the action in the key editor for `params`.
 
 | `kind` | Row in the app | Value written |
@@ -594,7 +594,7 @@ plugin. It shows what the small hello example leaves out:
 
 - A WebSocket client (`network = ["127.0.0.1", "localhost"]`) that signs in with obs-websocket 5 and
   never blocks: every handler sends and returns, answers arrive as events.
-- The password in the secret store. The user types it under Settings → Integrations → OBS Studio, which
+- The password in the secret store. The user types it under Plugins → OBS Studio, which
   writes it into the store. A `password` line under `[plugins.obs.settings]` still works: `init` moves it
   into the store and warns until the line is deleted.
 - Reconnect with timers (1 s, doubling to 10 s) and `background = true`, so labels stay live without a
@@ -620,12 +620,16 @@ cooler, warmer, with the `climate` action), covers, media players, scripts, scen
 
 ## Managing plugins
 
-In the app: Settings → Integrations lists the installed plugins with their status and an on/off switch.
+In the app: the Plugins window (the puzzle button in the header) has two pages. **Discover** is the
+plugin store (search, category chips, a card per plugin with Install, Update or Open, and "Needs Ulanzi
+Deck x.y.z" when the app is too old). **Installed** lists the installed plugins with their status, an
+on/off switch and a check mark for verified ones.
 Each plugin's page shows its status (with a banner and Restart when it needs attention or stopped
 working), Turned On, Restart, its settings from `[[settings]]`, and Remove… (which also deletes its
 secrets; keys that use it keep their settings and show "Needs the “<id>” plugin"). Install Plugin… opens a
-`.ulanziplugin` file and shows what the plugin is and what it may do, with an "Unverified plugin" warning;
-packages are unsigned, so its Install button works only with Developer Mode on (the dialog says so). With
+`.ulanziplugin` file and shows what the plugin is and what it may do: "Verified plugin" for a signed
+package, else an "Unverified plugin" warning, and then its Install button works only with Developer
+Mode on (the dialog says so). With
 Developer Mode on, Install from Folder (developers)… does the same for a folder that contains
 `plugin.toml`. Plugin actions appear in the action list (the side panel and the key editor's action
 picker) under a category of their own (the menu next to the search field) and a section per plugin, A–Z,
