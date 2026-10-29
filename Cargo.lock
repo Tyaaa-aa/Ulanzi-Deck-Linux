@@ -3810,15 +3810,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ulanzi-plugin-ha"
-version = "1.0.0"
-dependencies = [
- "serde_json",
- "ulanzi-core",
- "ulanzi-plugin",
-]
-
-[[package]]
 name = "ulanzi-plugin-hello"
 version = "1.0.0"
 dependencies = [
@@ -3830,17 +3821,6 @@ name = "ulanzi-plugin-legacy"
 version = "1.0.0"
 dependencies = [
  "wit-bindgen 0.63.0",
-]
-
-[[package]]
-name = "ulanzi-plugin-obs"
-version = "1.0.0"
-dependencies = [
- "base64 0.23.1",
- "serde_json",
- "sha2 0.11.1",
- "ulanzi-core",
- "ulanzi-plugin",
 ]
 
 [[package]]

@@ -498,8 +498,8 @@ Build one from a plugin folder with the script (it runs the release build for `w
 needs `zip` or `python3`, and prints the path of the package, written to `dist/plugins/`):
 
 ```sh
-scripts/package-plugin.sh plugins/obs     # dist/plugins/obs-1.0.0.ulanziplugin
-ulanzictl plugin install dist/plugins/obs-1.0.0.ulanziplugin
+scripts/package-plugin.sh examples/plugins/hello   # dist/plugins/hello-1.0.0.ulanziplugin
+ulanzictl plugin install dist/plugins/hello-1.0.0.ulanziplugin
 ```
 
 Packages are not signed, so installing one needs Developer mode, like installing from a folder
@@ -567,9 +567,17 @@ Walk-through:
 4. Its test ([`tests/hello.rs`](../examples/plugins/hello/tests/hello.rs)) uses the `Harness` and runs
    with `cargo test -p ulanzi-plugin-hello`.
 
+## Where plugins live
+
+Every plugin, the OBS and Home Assistant ones included, lives in
+[Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins). Its CI tests each plugin in the
+real plugin host, and on `main` signs and releases every new version and the index the app reads.
+Only the hello example and the host's own test plugins stay in this repo. To add a plugin, open a pull
+request there.
+
 ## The OBS Studio plugin
 
-[`plugins/obs`](../plugins/obs/README.md) is a larger, real-world plugin: the OBS integration as a sandboxed
+[`plugins/obs`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/obs/README.md) is a larger, real-world plugin: the OBS integration as a sandboxed
 plugin. It shows what the small hello example leaves out:
 
 - A WebSocket client (`network = ["127.0.0.1", "localhost"]`) that signs in with obs-websocket 5 and
@@ -585,13 +593,13 @@ plugin. It shows what the small hello example leaves out:
 - Bursts of scene or input events are coalesced into one reload per tick, so they cannot flood the host's
   event queue; a send that fails on a live socket is treated as a lost connection.
 
-Its tests ([`plugins/obs/tests/plugin.rs`](../plugins/obs/tests/plugin.rs)) are a model for `Harness` tests of a
+Its tests ([`plugins/obs/tests/plugin.rs`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/obs/tests/plugin.rs)) are a model for `Harness` tests of a
 plugin with a network connection: they open and close sockets, deliver messages and fire timers by hand,
 with no real OBS and no waiting.
 
 ## The Home Assistant plugin
 
-[`plugins/ha`](../plugins/ha/README.md) is the second real plugin. It talks to Home Assistant over one WebSocket
+[`plugins/ha`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/ha/README.md) is the second real plugin. It talks to Home Assistant over one WebSocket
 with a filtered `subscribe_entities`, so only the entities listed in its settings are sent (never the whole
 install), and shows them as `{ha.<entity_id>}` labels. The access token goes into the secret store like the OBS
 password, and `lan = true` limits it to Home Assistant on the local network. Its "Keys for your devices" key

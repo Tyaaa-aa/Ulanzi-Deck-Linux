@@ -30,10 +30,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   showing a stored value the list lacks, and offers typing by hand only when the plugin can't list.
   Such rows show the names the plugin gives (Kitchen, not `light.kitchen`), asked in the background.
   Keys show a warning when their plugin is missing, turned off, stopped working or can't be loaded.
-- Home Assistant plugin (`plugins/ha`): toggle, run, set level and call any action (service), with live
+- Home Assistant plugin (in [Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins)): toggle, run, set level and call any action (service), with live
   entity state on key labels (`{ha.light.desk}`, `{ha.sensor.temp.unit}`) and a list to pick entities
   from. Settings are in `[plugins.ha.settings]`; the token moves to the secret store.
-- OBS Studio plugin (`plugins/obs`): the built-in OBS actions and live state (`{obs.scene}`,
+- OBS Studio plugin (in Ulanzi-Deck-Plugins, like every plugin): the built-in OBS actions and live state (`{obs.scene}`,
   `{obs.rec_time}`, ...) as a sandboxed plugin, with lists for scenes, inputs, sources, filters,
   collections and profiles. It runs next to the built-in integration. Settings are in
   `[plugins.obs.settings]`.

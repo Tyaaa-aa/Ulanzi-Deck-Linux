@@ -2,7 +2,7 @@
 # Build a plugin and pack it into dist/plugins/<id>-<version>.ulanziplugin
 # (a ZIP with plugin.toml, plugin.wasm and, if the plugin has them, assets/).
 #
-#   scripts/package-plugin.sh plugins/obs
+#   scripts/package-plugin.sh examples/plugins/hello
 #
 # Prints the path of the package. Needs cargo with the wasm32-wasip2 target and either zip or
 # python3. Install the result with: ulanzictl plugin install <package>

@@ -12,7 +12,10 @@ cd "$(dirname "$0")/.."
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 cargo build -q --bins
-cargo build -q --release --target wasm32-wasip2 -p ulanzi-plugin-obs -p ulanzi-plugin-ha
+# The OBS and Home Assistant plugins live in the plugins repo, next to this one by default.
+plugins_repo="${ULANZI_PLUGINS_REPO:-$PWD/../Ulanzi-Deck-Plugins}"
+[ -d "$plugins_repo/plugins/obs" ] || { echo "no plugins repo at $plugins_repo (set ULANZI_PLUGINS_REPO)" >&2; exit 1; }
+(cd "$plugins_repo" && cargo build -q --release --target wasm32-wasip2 -p ulanzi-plugin-obs -p ulanzi-plugin-ha)
 box="$(mktemp -d -t ulanzi-plugin-shots.XXXXXX)"
 trap 'rm -rf "$box"' EXIT
 cargo run -q -p ulanzi-core --example showcase -- "$box" >/dev/null
@@ -32,9 +35,9 @@ printf '\n[plugins.ha]\nenabled = true\n\n[plugins.ha.settings]\nurl = "http://1
 for p in obs ha; do
   dest="$box/data/ulanzi-deck/plugins/$p"
   mkdir -p "$dest"
-  cp "plugins/$p/plugin.toml" "$dest/plugin.toml"
-  cp "target/wasm32-wasip2/release/ulanzi_plugin_$p.wasm" "$dest/plugin.wasm"
-  cp -r "plugins/$p/assets" "$dest/assets"
+  cp "$plugins_repo/plugins/$p/plugin.toml" "$dest/plugin.toml"
+  cp "$plugins_repo/target/wasm32-wasip2/release/ulanzi_plugin_$p.wasm" "$dest/plugin.wasm"
+  cp -r "$plugins_repo/plugins/$p/assets" "$dest/assets"
 done
 
 shot() { # name app-args...
