@@ -530,7 +530,7 @@ pub const PREFERRED_DOMAINS: &[&str] = &[
 ///
 /// Iterating `states` makes Home Assistant render it at most once a minute.
 pub const ENTITY_LIST_TEMPLATE: &str = r#"{%- set ns = namespace(n=0, w=0, full=false) -%}
-{%- set pref = ['light', 'switch', 'fan', 'cover', 'media_player', 'input_boolean', 'scene', 'script', 'automation', 'button', 'input_button', 'siren', 'humidifier', 'remote', 'group'] -%}
+{%- set pref = ['light', 'fan', 'climate', 'switch', 'cover', 'media_player', 'input_boolean', 'scene', 'script', 'automation', 'button', 'input_button', 'siren', 'humidifier', 'remote', 'group'] -%}
 {%- for s in (states | selectattr('domain', 'in', pref) | list) + (states | rejectattr('domain', 'in', pref) | list) -%}
 {%- if not ns.full -%}
 {%- set line = s.entity_id ~ '\t' ~ ((s.name | string | regex_replace('[\\x00-\\x1f\\x7f-\\x9f]', ' '))[:60]) ~ '\t' ~ ((s.state | string | regex_replace('[\\x00-\\x1f\\x7f-\\x9f]', ' '))[:24]) ~ '\n' -%}

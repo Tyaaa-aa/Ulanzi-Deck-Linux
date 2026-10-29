@@ -96,9 +96,15 @@ pub struct KeySetKey {
     pub icon: Option<String>,
     #[serde(default)]
     pub label: String,
+    /// The icon's colour (`#rrggbb`); the plugin's when missing.
+    #[serde(default)]
+    pub color: Option<String>,
     /// More control than the main key (brightness, speed); the user can leave these out.
     #[serde(default)]
     pub extra: bool,
+    /// Looks for live states; the action's own when missing.
+    #[serde(default)]
+    pub states: Vec<ManifestState>,
 }
 
 /// How the GUI lays out a picker's list.
@@ -164,6 +170,66 @@ pub struct ManifestAction {
     pub icon: Option<String>,
     #[serde(default)]
     pub params: Vec<Field>,
+    /// How a key with this action looks in live states (first match wins).
+    #[serde(default)]
+    pub states: Vec<ManifestState>,
+    /// Live values a key with this action can show as its label.
+    #[serde(default)]
+    pub labels: Vec<ManifestLabel>,
+    /// Settings to add the action's parameters to when a key gets it, so its state is
+    /// published (`value` may use `$<param>`).
+    #[serde(default)]
+    pub track: Vec<Track>,
+}
+
+/// A look for a live state. `when.value` and `label` may use `$<param>` for the key's action
+/// parameters; `icon` is a one-colour `assets/….svg`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestState {
+    pub when: crate::model::When,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub background: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// A live value a key can show: its name in the app and the label text (`$<param>` allowed).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestLabel {
+    pub name: String,
+    pub text: String,
+    /// Settings to add to so the value is published (`$<param>` allowed).
+    #[serde(default)]
+    pub track: Vec<Track>,
+}
+
+impl ManifestState {
+    /// As a key's look state, with the plugin's icon file.
+    pub fn to_look(&self, plugin: &str) -> crate::model::LookState {
+        let color = |c: &Option<String>| {
+            c.as_deref()
+                .and_then(parse_color)
+                .map(|[r, g, b]| crate::Color([r, g, b, 255]))
+        };
+        crate::model::LookState {
+            when: self.when.clone(),
+            look: crate::model::LookOverride {
+                source: self.icon.clone().filter(|i| is_asset(i)).map(|icon| {
+                    crate::model::ImageSource::Plugin {
+                        plugin: plugin.to_string(),
+                        icon,
+                    }
+                }),
+                foreground: color(&self.color),
+                background: color(&self.background),
+                label: self.label.clone(),
+            },
+        }
+    }
 }
 
 /// What the daemon returns when asked about a plugin folder before installing it.
@@ -320,14 +386,37 @@ impl Manifest {
             return Err(bad("symbolic_icon", i, "must be a file under assets/"));
         }
         check("symbolic_icon", &self.symbolic_icon, true)?;
+        let colors = |states: &[ManifestState]| {
+            states
+                .iter()
+                .flat_map(|st| [&st.color, &st.background])
+                .flatten()
+                .find(|c| parse_color(c).is_none())
+                .map(|c| ManifestError::BadColor(c.clone()))
+        };
         for a in &self.actions {
-            check(&format!("action \"{}\"", a.id), &a.icon, true)?;
+            let scope = format!("action \"{}\"", a.id);
+            check(&scope, &a.icon, true)?;
+            for st in &a.states {
+                check(&scope, &st.icon, true)?;
+            }
+            if let Some(e) = colors(&a.states) {
+                return Err(e);
+            }
         }
         for k in &self.key_sets {
-            check(&format!("key set \"{}\"", k.id), &k.icon, true)?;
-            for v in &k.variants {
-                for key in &v.keys {
-                    check(&format!("key set \"{}\"", k.id), &key.icon, true)?;
+            let scope = format!("key set \"{}\"", k.id);
+            check(&scope, &k.icon, true)?;
+            for key in k.variants.iter().flat_map(|v| &v.keys) {
+                check(&scope, &key.icon, true)?;
+                for st in &key.states {
+                    check(&scope, &st.icon, true)?;
+                }
+                if let Some(e) = colors(&key.states) {
+                    return Err(e);
+                }
+                if let Some(c) = key.color.as_ref().filter(|c| parse_color(c).is_none()) {
+                    return Err(ManifestError::BadColor(c.clone()));
                 }
             }
         }
@@ -378,6 +467,28 @@ impl Manifest {
     /// The colour from `color`, if it is valid.
     pub fn rgb(&self) -> Option<[u8; 3]> {
         self.color.as_deref().and_then(parse_color)
+    }
+
+    /// Every icon file the manifest names (plugin, actions, states, key sets).
+    pub fn icon_files(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = [&self.icon, &self.symbolic_icon]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        for a in &self.actions {
+            out.extend(a.icon.as_deref());
+            out.extend(a.states.iter().filter_map(|s| s.icon.as_deref()));
+        }
+        for k in &self.key_sets {
+            out.extend(k.icon.as_deref());
+            for key in k.variants.iter().flat_map(|v| &v.keys) {
+                out.extend(key.icon.as_deref());
+                out.extend(key.states.iter().filter_map(|s| s.icon.as_deref()));
+            }
+        }
+        out.retain(|i| is_asset(i));
+        out
     }
 
     pub fn key_set(&self, id: &str) -> Option<&KeySet> {
@@ -468,7 +579,7 @@ fn asset_icon_problem(icon: &str, symbolic: bool) -> Option<&'static str> {
 }
 
 /// `#rrggbb` as bytes.
-fn parse_color(c: &str) -> Option<[u8; 3]> {
+pub fn parse_color(c: &str) -> Option<[u8; 3]> {
     let hex = c.strip_prefix('#')?;
     if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;

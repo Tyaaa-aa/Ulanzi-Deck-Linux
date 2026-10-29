@@ -920,28 +920,33 @@ pub fn build(state: &State) -> Canvas {
                     };
                     match key {
                         Some(key) => {
+                            let mut shown = key.shown_look();
+                            shown.label.text = state
+                                .plugins
+                                .borrow()
+                                .shown_label(key.tap.as_ref(), &shown.label.text);
                             // "Hide All Labels" also hides labels drawn into the picture.
                             let drawn_hidden;
-                            let look = if hide && key.look.label.position.is_some() {
-                                let mut l = key.look.clone();
+                            let look = if hide && shown.label.position.is_some() {
+                                let mut l = shown.clone();
                                 l.label.visible = false;
                                 drawn_hidden = l;
                                 &drawn_hidden
                             } else {
-                                &key.look
+                                &shown
                             };
                             k.picture.set_paintable(Some(&or_blank(
                                 key_texture(look, &dir),
                                 ulanzi_core::render::KEY_PX as i32,
                                 ulanzi_core::render::KEY_PX as i32,
                             )));
-                            let text = &key.look.label.text;
+                            let text = &shown.label.text;
                             k.label.set_label(text);
                             // A label with its own position is part of the key image.
-                            let own = key.look.label.position.is_some();
+                            let own = shown.label.position.is_some();
                             k.label.set_valign(label_valign(&align));
                             k.label
-                                .set_visible(!hide && !own && key.look.label.visible && !text.is_empty());
+                                .set_visible(!hide && !own && shown.label.visible && !text.is_empty());
                             let what = key
                                 .tap
                                 .as_ref()

@@ -1,6 +1,6 @@
 id = "ha"
 name = "Home Assistant"
-version = "1.1.0"
+version = "1.2.0"
 contract = "1.1"
 icon = "assets/icon.svg"
 symbolic_icon = "assets/symbolic.svg"
@@ -91,6 +91,14 @@ groups = true
 id = "toggle"
 name = "Toggle an entity"
 icon = "assets/actions/toggle.svg"
+labels = [
+  { name = "State", text = "{ha.$entity_id}" },
+  { name = "Level", text = "{ha.$entity_id.pct}%" },
+]
+track = [{ setting = "entities", value = "$entity_id" }]
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["on", "open", "playing", "home"] }, color = "#ffc94a" },
+]
 params = [
   { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
@@ -99,6 +107,14 @@ params = [
 id = "turn_on"
 name = "Turn an entity on"
 icon = "assets/actions/turn_on.svg"
+labels = [
+  { name = "State", text = "{ha.$entity_id}" },
+  { name = "Level", text = "{ha.$entity_id.pct}%" },
+]
+track = [{ setting = "entities", value = "$entity_id" }]
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["on", "open", "playing", "home"] }, color = "#ffc94a" },
+]
 params = [
   { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
@@ -107,6 +123,14 @@ params = [
 id = "turn_off"
 name = "Turn an entity off"
 icon = "assets/actions/turn_off.svg"
+labels = [
+  { name = "State", text = "{ha.$entity_id}" },
+  { name = "Level", text = "{ha.$entity_id.pct}%" },
+]
+track = [{ setting = "entities", value = "$entity_id" }]
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["on", "open", "playing", "home"] }, color = "#ffc94a" },
+]
 params = [
   { key = "entity_id", kind = "item", picker = "toggleable", label = "Entity" },
 ]
@@ -115,6 +139,7 @@ params = [
 id = "run"
 name = "Run a scene, script, automation or button"
 icon = "assets/actions/run.svg"
+track = [{ setting = "entities", value = "$entity_id" }]
 params = [
   { key = "entity_id", kind = "item", picker = "runnable", label = "Entity" },
 ]
@@ -123,17 +148,39 @@ params = [
 id = "set_level"
 name = "Set or change a level (light, volume, fan, cover)"
 icon = "assets/actions/set_level.svg"
+labels = [
+  { name = "State", text = "{ha.$entity_id}" },
+  { name = "Level", text = "{ha.$entity_id.pct}%" },
+]
+track = [{ setting = "entities", value = "$entity_id" }]
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["on", "open", "playing", "home"] }, color = "#ffc94a" },
+]
 params = [
   { key = "entity_id", kind = "item", picker = "levels", label = "Entity" },
   { key = "op", kind = "choice", label = "Change", choices = ["set", "up", "down"] },
-  { key = "percent", kind = "number", label = "Level (percent, for Set)", min = 0, max = 100, default = 100 },
-  { key = "step", kind = "number", label = "Step (percent)", min = 1, max = 50, default = 5 },
+  { key = "percent", kind = "number", label = "Level (percent)", min = 0, max = 100, default = 100, show_if = { key = "op", is = ["set"] } },
+  { key = "step", kind = "number", label = "Step (percent)", min = 1, max = 50, default = 5, show_if = { key = "op", is = ["up", "down"] } },
 ]
 
 [[actions]]
 id = "climate"
 name = "Control an air conditioner or heater"
 icon = "assets/actions/climate.svg"
+labels = [
+  { name = "Target temperature", text = "{ha.$entity_id.attr.temperature}°", track = [{ setting = "attributes", value = "$entity_id:temperature" }] },
+  { name = "Room temperature", text = "{ha.$entity_id.attr.current_temperature}°", track = [{ setting = "attributes", value = "$entity_id:current_temperature" }] },
+  { name = "Mode", text = "{ha.$entity_id}" },
+]
+track = [{ setting = "entities", value = "$entity_id" }]
+# Cooling blue with a snowflake, heating orange, drying, fan; off: the plain thermometer.
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["cool"] }, icon = "assets/keys/cooling.svg", color = "#4fc3f7" },
+  { when = { value = "{ha.$entity_id}", is = ["heat"] }, icon = "assets/keys/heating.svg", color = "#ff9e44" },
+  { when = { value = "{ha.$entity_id}", is = ["dry"] }, icon = "assets/keys/drying.svg", color = "#4fc3f7" },
+  { when = { value = "{ha.$entity_id}", is = ["fan_only"] }, icon = "assets/keys/fan.svg", color = "#4fd1c5" },
+  { when = { value = "{ha.$entity_id}", is = ["auto", "heat_cool"] }, icon = "assets/keys/thermometer.svg", color = "#7bd88f" },
+]
 params = [
   { key = "entity_id", kind = "item", picker = "climate", label = "Entity" },
   { key = "op", kind = "choice", label = "Change", choices = [
@@ -143,8 +190,8 @@ params = [
     { value = "set", label = "Set the temperature" },
     { value = "mode", label = "Set the mode" },
   ] },
-  { key = "temperature", kind = "number", label = "Temperature (for Set the temperature)", min = 5, max = 35, default = 24 },
-  { key = "mode", kind = "choice", label = "Mode (for Set the mode)", choices = [
+  { key = "temperature", kind = "number", label = "Temperature", min = 5, max = 35, default = 24, show_if = { key = "op", is = ["set"] } },
+  { key = "mode", kind = "choice", label = "Mode", help = "Turn on or off switches to this mode", show_if = { key = "op", is = ["power", "mode"] }, choices = [
     "cool", "heat", "dry", { value = "fan_only", label = "Fan only" }, "auto", { value = "heat_cool", label = "Heat and cool" }, "off",
   ] },
 ]
@@ -186,25 +233,29 @@ track = [
 [[key_sets.variants]]
 groups = ["Lights"]
 keys = [
-  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/light.svg", label = "$name" },
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/light-off.svg", color = "#9a9996", label = "$name", states = [
+    { when = { value = "{ha.$entity_id}", is = ["on"] }, icon = "assets/keys/light.svg", color = "#ffc94a" },
+  ] },
   { action = "set_level", params = { entity_id = "$id", op = "down", step = 10 }, icon = "assets/keys/dimmer.svg", extra = true },
-  { action = "set_level", params = { entity_id = "$id", op = "up", step = 10 }, icon = "assets/keys/brighter.svg", label = "{ha.$id.pct}%", extra = true },
+  { action = "set_level", params = { entity_id = "$id", op = "up", step = 10 }, icon = "assets/keys/brighter.svg", label = "{ha.$entity_id.pct}%", extra = true },
 ]
 
 [[key_sets.variants]]
 groups = ["Fans"]
 keys = [
-  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/fan.svg", label = "$name" },
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/fan.svg", color = "#9a9996", label = "$name", states = [
+    { when = { value = "{ha.$entity_id}", is = ["on"] }, color = "#4fd1c5" },
+  ] },
   { action = "set_level", params = { entity_id = "$id", op = "down", step = 33 }, icon = "assets/keys/slower.svg", extra = true },
-  { action = "set_level", params = { entity_id = "$id", op = "up", step = 33 }, icon = "assets/keys/faster.svg", label = "{ha.$id.pct}%", extra = true },
+  { action = "set_level", params = { entity_id = "$id", op = "up", step = 33 }, icon = "assets/keys/faster.svg", label = "{ha.$entity_id.pct}%", extra = true },
 ]
 
 [[key_sets.variants]]
 groups = ["Climate"]
 keys = [
-  { action = "climate", params = { entity_id = "$id", op = "power" }, icon = "assets/keys/aircon.svg", label = "$name" },
+  { action = "climate", params = { entity_id = "$id", op = "power", mode = "cool" }, icon = "assets/keys/thermometer.svg", color = "#ffffff", label = "$name" },
   { action = "climate", params = { entity_id = "$id", op = "down" }, icon = "assets/keys/cooler.svg", extra = true },
-  { action = "climate", params = { entity_id = "$id", op = "up" }, icon = "assets/keys/warmer.svg", label = "{ha.$id.attr.temperature}°", extra = true },
+  { action = "climate", params = { entity_id = "$id", op = "up" }, icon = "assets/keys/warmer.svg", label = "{ha.$entity_id.attr.temperature}°", extra = true },
 ]
 
 [[key_sets.variants]]
@@ -240,5 +291,7 @@ keys = [
 # Switches, input booleans and anything else that turns on and off.
 [[key_sets.variants]]
 keys = [
-  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/switch.svg", label = "$name" },
+  { action = "toggle", params = { entity_id = "$id" }, icon = "assets/keys/switch-off.svg", color = "#9a9996", label = "$name", states = [
+    { when = { value = "{ha.$entity_id}", is = ["on"] }, icon = "assets/keys/switch.svg", color = "#57e389" },
+  ] },
 ]

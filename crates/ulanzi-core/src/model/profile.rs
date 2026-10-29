@@ -202,6 +202,19 @@ pub struct Key {
     pub hold: Option<Action>,
 }
 
+impl Key {
+    /// The look before any press: a cycling key shows its first step.
+    pub fn shown_look(&self) -> KeyLook {
+        let mut look = self.look.clone();
+        if let Some(Action::Cycle { steps }) = &self.tap
+            && let Some(first) = steps.first()
+        {
+            first.look.apply(&mut look);
+        }
+        look
+    }
+}
+
 /// Which kind of OBS name changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObsRename {
@@ -220,6 +233,11 @@ fn rename_in(a: &mut Action, kind: ObsRename, old: &str, new: &str) -> bool {
     };
     match a {
         Action::Multi { steps } => {
+            for st in steps {
+                hit |= rename_in(&mut st.action, kind, old, new);
+            }
+        }
+        Action::Cycle { steps } => {
             for st in steps {
                 hit |= rename_in(&mut st.action, kind, old, new);
             }
@@ -266,10 +284,10 @@ impl Profile {
         }
         fn push<'a>(out: &mut Vec<&'a Action>, a: &'a Action) {
             out.push(a);
-            if let Action::Multi { steps } = a {
-                for s in steps {
-                    push(out, &s.action);
-                }
+            match a {
+                Action::Multi { steps } => steps.iter().for_each(|s| push(out, &s.action)),
+                Action::Cycle { steps } => steps.iter().for_each(|s| push(out, &s.action)),
+                _ => {}
             }
         }
         let mut out = Vec::new();
@@ -302,6 +320,7 @@ impl Profile {
                     out.insert(plugin.clone());
                 }
                 Action::Multi { steps } => steps.iter().for_each(|s| add(out, &s.action)),
+                Action::Cycle { steps } => steps.iter().for_each(|s| add(out, &s.action)),
                 _ => {}
             }
         }

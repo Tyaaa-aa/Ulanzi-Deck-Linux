@@ -425,7 +425,35 @@ pub fn open_at(state: &State, parent: &impl IsA<gtk::Widget>, tab: Option<&str>)
         crate::ui::toast(state, "Select one or more keys first");
         return;
     }
-    let keys = Rc::new(keys);
+    let current = state.editor.borrow().key(keys[0]).map(|k| k.look.source.clone());
+    show(state, parent, tab, current, Target::Keys(Rc::new(keys)));
+}
+
+/// Open the picker and hand the chosen image to `on_pick` (a picture file is copied into the
+/// profile first), for images that are not a key's own (a cycle step's).
+pub fn choose(
+    state: &State,
+    parent: &impl IsA<gtk::Widget>,
+    current: Option<ImageSource>,
+    on_pick: impl Fn(ImageSource) + 'static,
+) {
+    show(state, parent, None, current, Target::Pick(Rc::new(on_pick)));
+}
+
+/// Where a picked image goes.
+#[derive(Clone)]
+enum Target {
+    Keys(Rc<Vec<u8>>),
+    Pick(Rc<dyn Fn(ImageSource)>),
+}
+
+fn show(
+    state: &State,
+    parent: &impl IsA<gtk::Widget>,
+    tab: Option<&str>,
+    current: Option<ImageSource>,
+    target: Target,
+) {
     let dialog = adw::Dialog::builder()
         .title("Choose an Image")
         .content_width(640)
@@ -454,9 +482,12 @@ pub fn open_at(state: &State, parent: &impl IsA<gtk::Widget>, tab: Option<&str>)
     dialog.set_child(Some(&view));
 
     let pick: Rc<dyn Fn(ImageSource)> = {
-        let (state, keys, dialog) = (state.clone(), keys.clone(), dialog.clone());
+        let (state, target, dialog) = (state.clone(), target.clone(), dialog.clone());
         Rc::new(move |source| {
-            state.edit(|e| e.set_field(&keys, Field::Source(source)));
+            match &target {
+                Target::Keys(keys) => state.edit(|e| e.set_field(keys, Field::Source(source))),
+                Target::Pick(f) => f(source),
+            }
             dialog.close();
         })
     };
@@ -545,7 +576,7 @@ pub fn open_at(state: &State, parent: &impl IsA<gtk::Widget>, tab: Option<&str>)
         .build();
     file_page.set_child(Some(&choose));
     {
-        let (state, keys, dialog) = (state.clone(), keys.clone(), dialog.clone());
+        let (state, target, dialog) = (state.clone(), target.clone(), dialog.clone());
         choose.connect_clicked(move |b| {
             let filter = gtk::FileFilter::new();
             filter.set_name(Some("Images"));
@@ -558,15 +589,32 @@ pub fn open_at(state: &State, parent: &impl IsA<gtk::Widget>, tab: Option<&str>)
                 .modal(true)
                 .build();
             let window = b.root().and_downcast::<gtk::Window>();
-            let (state, keys, dialog) = (state.clone(), keys.clone(), dialog.clone());
+            let (state, target, dialog) = (state.clone(), target.clone(), dialog.clone());
             fd.open(window.as_ref(), None::<&gio::Cancellable>, move |res| {
-                if let Some(path) = res.ok().and_then(|f| f.path()) {
-                    let dialog = dialog.clone();
-                    import_into(&state, &path, &keys, move |ok| {
+                let Some(path) = res.ok().and_then(|f| f.path()) else {
+                    return;
+                };
+                let dialog = dialog.clone();
+                match &target {
+                    Target::Keys(keys) => import_into(&state, &path, keys, move |ok| {
                         if ok {
                             dialog.close();
                         }
-                    });
+                    }),
+                    Target::Pick(f) => {
+                        let (f, dir, st) = (f.clone(), profile_dir(&state), state.clone());
+                        crate::runtime::run(
+                            async move { tokio::task::spawn_blocking(move || import_image(&path, &dir)).await },
+                            move |r| match r {
+                                Ok(Ok(rel)) => {
+                                    f(ImageSource::Image { path: rel });
+                                    dialog.close();
+                                }
+                                Ok(Err(e)) => crate::ui::toast(&st, &e.to_string()),
+                                Err(_) => {}
+                            },
+                        );
+                    }
                 }
             });
         });
@@ -581,7 +629,6 @@ pub fn open_at(state: &State, parent: &impl IsA<gtk::Widget>, tab: Option<&str>)
         });
     }
     // Start on the tab that matches the current image.
-    let current = state.editor.borrow().key(keys[0]).map(|k| k.look.source.clone());
     stack.set_visible_child_name(tab.unwrap_or(match current {
         Some(ImageSource::Icon {
             set: IconSet::Brands, ..

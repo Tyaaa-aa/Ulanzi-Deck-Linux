@@ -128,6 +128,7 @@ fn profile_roundtrip_all_action_variants() {
             position: None,
         },
         dynamic: true,
+        states: Vec::new(),
     };
     p.pages[0].dials[1].right = every_action().into_iter().nth(14);
     p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, Some(Action::NextPage));
@@ -528,4 +529,81 @@ fn hiding_labels_reaches_drawn_labels() {
     assert!(!p.pages[0].keys[&0].look.label.visible);
     // Firmware labels are hidden by the deck itself; their setting stays.
     assert!(p.pages[0].keys[&1].look.label.visible);
+}
+
+#[test]
+fn live_states_pick_the_first_match_and_fill_params() {
+    use ulanzi_core::Color;
+    let blue = Color([0x4f, 0xc3, 0xf7, 0xff]);
+    let look = KeyLook {
+        states: vec![
+            LookState {
+                when: When {
+                    value: "{ha.$entity_id}".into(),
+                    is: vec!["cool".into()],
+                    not: vec![],
+                },
+                look: LookOverride {
+                    foreground: Some(blue),
+                    ..LookOverride::default()
+                },
+            },
+            LookState {
+                when: When {
+                    value: "{ha.$entity_id}".into(),
+                    is: vec![],
+                    not: vec!["off".into()],
+                },
+                look: LookOverride {
+                    label: Some("On".into()),
+                    ..LookOverride::default()
+                },
+            },
+        ],
+        ..KeyLook::default()
+    };
+    let mut params = toml::Table::new();
+    params.insert("entity_id".into(), "climate.ac".into());
+    let with = |value: &'static str| {
+        look.with_state(&params, move |t| {
+            assert_eq!(t, "{ha.climate.ac}");
+            value.to_string()
+        })
+    };
+    assert_eq!(with("cool").foreground, blue);
+    assert_eq!(with("COOL").foreground, blue, "case does not matter");
+    assert_eq!(with("dry").label.text, "On");
+    assert_eq!(with("off"), look, "nothing holds: the key's own look");
+    assert_eq!(with(""), look, "not published yet: no state holds");
+    let fixed = KeyLook {
+        dynamic: false,
+        ..look.clone()
+    };
+    assert_eq!(
+        fixed.with_state(&params, |_| "cool".into()),
+        fixed,
+        "live state off"
+    );
+    assert_eq!(
+        fill_params("{ha.$entity_id.pct}%", &params),
+        "{ha.climate.ac.pct}%"
+    );
+    // A cycle step round-trips through TOML.
+    let a = Action::Cycle {
+        steps: vec![CycleStep {
+            action: Action::NextPage,
+            look: LookOverride {
+                label: Some("Next".into()),
+                ..LookOverride::default()
+            },
+        }],
+    };
+    let text = toml::to_string(&Key {
+        look: KeyLook::default(),
+        tap: Some(a.clone()),
+        hold: None,
+    })
+    .expect("toml");
+    let back: Key = toml::from_str(&text).expect("parse");
+    assert_eq!(back.tap, Some(a));
 }

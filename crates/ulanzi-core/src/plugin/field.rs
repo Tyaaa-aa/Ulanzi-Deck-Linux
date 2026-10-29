@@ -109,6 +109,23 @@ pub struct Field {
     pub picker: Option<String>,
     #[serde(default)]
     pub ask_first: bool,
+    /// Show the field only while another one has one of some values (`op` is `set`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_if: Option<ShowIf>,
+}
+
+/// `show_if = { key = "op", is = ["set", "up"] }`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShowIf {
+    pub key: String,
+    pub is: Vec<String>,
+}
+
+impl ShowIf {
+    /// Whether the field shows when the other field's value is `value` (its text).
+    pub fn holds(&self, value: &str) -> bool {
+        self.is.iter().any(|v| v == value)
+    }
 }
 
 impl Field {

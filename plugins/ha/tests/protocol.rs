@@ -857,8 +857,35 @@ fn climate_keys_step_on_the_devices_own_scale() {
     };
     assert_eq!(temp("up"), 24.5);
     assert_eq!(temp("down"), 23.5);
-    let power = call("climate", &json!({"entity_id": "climate.ac", "op": "power"}), &t);
-    assert_eq!(power.service, "toggle");
+    // On/off follows the tracked state: running goes off by mode; off turns on in the key's mode
+    // (turn_on without one); untracked: toggle.
+    let power = |p: Value, t: &Tracked| call("climate", &p, t);
+    let off_call = power(json!({"entity_id": "climate.ac", "op": "power"}), &t);
+    assert_eq!(
+        (off_call.service.as_str(), &off_call.data["hvac_mode"]),
+        ("set_hvac_mode", &json!("off"))
+    );
+    let off = tracked(&[("climate.ac", "off", json!({}))]);
+    let on = power(
+        json!({"entity_id": "climate.ac", "op": "power", "mode": "cool"}),
+        &off,
+    );
+    assert_eq!(
+        (on.service.as_str(), &on.data["hvac_mode"]),
+        ("set_hvac_mode", &json!("cool"))
+    );
+    assert_eq!(
+        power(json!({"entity_id": "climate.ac", "op": "power"}), &off).service,
+        "turn_on"
+    );
+    assert_eq!(
+        power(
+            json!({"entity_id": "climate.ac", "op": "power"}),
+            &Tracked::default()
+        )
+        .service,
+        "toggle"
+    );
     let set = call(
         "climate",
         &json!({"entity_id": "climate.ac", "op": "set", "temperature": 40}),
@@ -910,14 +937,17 @@ fn the_manifest_offers_device_keys() {
     let light = set.keys_for(&m, &item("light.lamp", "Lights"), true);
     assert_eq!(light.len(), 3);
     assert_eq!(light[0].look.label.text, "Lamp");
-    assert_eq!(light[2].look.label.text, "{ha.light.lamp.pct}%");
+    assert_eq!(
+        light[2].look.label.text, "{ha.$entity_id.pct}%",
+        "filled from the key's action when shown"
+    );
     assert_eq!(
         set.keys_for(&m, &item("light.lamp", "Lights"), false).len(),
         1,
         "extras left out"
     );
     let ac = set.keys_for(&m, &item("climate.ac", "Climate"), true);
-    assert_eq!(ac[2].look.label.text, "{ha.climate.ac.attr.temperature}°");
+    assert_eq!(ac[2].look.label.text, "{ha.$entity_id.attr.temperature}°");
     assert_eq!(
         set.tracking(&item("climate.ac", "Climate")),
         [

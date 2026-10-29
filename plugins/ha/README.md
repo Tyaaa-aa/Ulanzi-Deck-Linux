@@ -92,7 +92,7 @@ other requests get 5 s. An action whose entity is not chosen yet fails with "Cho
 | `toggle`, `turn_on`, `turn_off` | `entity_id` | `homeassistant.toggle` / `turn_on` / `turn_off` |
 | `run` | `entity_id` (a scene, script, automation, button or input_button) | `scene.turn_on`, `script.turn_on`, `automation.trigger`, `button.press`, `input_button.press` |
 | `set_level` | `entity_id`; `op` = `set` (default) / `up` / `down`; `percent` (0-100, for `set`; 100 for a key added in the app); `step` (1-50, default 5) | see below |
-| `climate` | `entity_id` (a climate entity); `op` = `power` (default) / `up` / `down` / `set` / `mode`; `temperature` (for `set`, kept in the device's range); `mode` (`cool`, `heat`, `dry`, `fan_only`, `auto`, `heat_cool`, `off`) | `climate.toggle`; `up`/`down` move the tracked target temperature by the device's `target_temp_step` (0.5 when unknown; the entity must be listed under `entities`); `climate.set_temperature`; `climate.set_hvac_mode` |
+| `climate` | `entity_id` (a climate entity); `op` = `power` (default) / `up` / `down` / `set` / `mode`; `temperature` (for `set`, kept in the device's range); `mode` (`cool`, `heat`, `dry`, `fan_only`, `auto`, `heat_cool`, `off`) | on/off by the tracked state: `set_hvac_mode` to off, or to `mode` (else `climate.turn_on`) when off; `climate.toggle` when untracked; `up`/`down` move the tracked target temperature by the device's `target_temp_step` (0.5 when unknown; the entity must be listed under `entities`); `climate.set_temperature`; `climate.set_hvac_mode` |
 | `call_service` ("Call an action (service)" in the app; Home Assistant now calls services actions) | `domain`, `service`, optional `entity_id`, optional `data` (a JSON object, as a table or a JSON string, up to 4096 bytes) | `<domain>.<service>` with the entity as target |
 | `reconnect` | none | |
 | `forget_token` | none | |
@@ -188,6 +188,15 @@ air conditioners and more, and each gets keys that fit it, with the plugin's own
 Names that start the same are shortened ("Bedroom Floor Lamp" and "Bedroom Fan" become "Floor Lamp" and
 "Fan"). The picked entities are added to `entities` (and air conditioners' `temperature` to `attributes`), so
 the labels stay live. Search matches every word anywhere, so "bedroom aircon" finds "Bedroom Aircon".
+
+## Keys that follow the device
+
+With Show Live State on (the default), keys follow their entity: on/off keys turn yellow when on; an
+air conditioner key shows a white thermometer when off, a blue snowflake while cooling, an orange sun
+while heating, droplets while drying and a fan in fan mode. Ready-made light and switch keys also swap
+to an "off" icon in grey. In the key editor, **Label Shows** offers State and Level for on/off and level
+keys, and Target temperature, Room temperature and Mode for air conditioners. Keys add their entity to
+`entities` (and the attributes their label uses to `attributes`) by themselves.
 
 ## Live state
 

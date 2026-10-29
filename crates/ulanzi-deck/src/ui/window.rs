@@ -430,6 +430,17 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
         });
         window.add_action(&deselect);
     }
+    {
+        // After an edit, and once the plugins are known, plugins publish what the keys show (an
+        // entity, an attribute).
+        let s = state.clone();
+        state.on(move |c| {
+            if matches!(c, Change::Profile | Change::Plugins) {
+                let profile = s.editor.borrow().profile().clone();
+                crate::ui::key_sets::track_profile(&s, &profile);
+            }
+        });
+    }
     if let Some(app) = window.application() {
         for (action, accels) in APP_ACCELS {
             app.set_accels_for_action(action, accels);

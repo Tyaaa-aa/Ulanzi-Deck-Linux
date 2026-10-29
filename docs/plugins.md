@@ -262,6 +262,37 @@ keys = [
 ]
 ```
 
+A key set key can also have `color` (its icon colour) and `states` (see below; the action's own when
+missing).
+
+### Live looks and label values
+
+An action can say how its keys look in live states and which live values they can show, so the user
+picks "Room temperature" from a menu instead of typing `{ha.climate.ac.attr.current_temperature}`:
+
+| Field of `[[actions]]` | Meaning |
+|---|---|
+| `states` | Looks for live states, first match wins: `when = { value, is, not }`, then `icon` (one-colour `assets/…` SVG), `color`, `background`, `label`. `value` is a label text such as `{ha.$entity_id}`; `is` lists values that match (any of them), `not` values that don't. An empty value (nothing published yet) never matches. |
+| `labels` | Values the key's label can show: `name` (shown in the app's Label Shows menu), `text` and optional `track`. |
+| `track` | Settings to add the key's parameters to whenever a key uses the action, so the plugin publishes its state. |
+
+In all of them `$<param>` is the key's own action parameter, filled in when the key is drawn, so a key
+keeps working when its entity changes. Keys store the states in their look
+(`[[pages.keys.N.look.states]]`) and use them while Show Live State is on. From the Home Assistant
+plugin:
+
+```toml
+[[actions]]
+id = "climate"
+labels = [
+  { name = "Room temperature", text = "{ha.$entity_id.attr.current_temperature}°", track = [{ setting = "attributes", value = "$entity_id:current_temperature" }] },
+]
+track = [{ setting = "entities", value = "$entity_id" }]
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["cool"] }, icon = "assets/keys/cooling.svg", color = "#4fc3f7" },
+]
+```
+
 Picker searches should match every word of the query anywhere in the name, id or group, in any order;
 `ulanzi_plugin::matches_query` does exactly that.
 

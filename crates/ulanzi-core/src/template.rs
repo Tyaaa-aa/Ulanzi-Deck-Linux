@@ -178,6 +178,7 @@ fn look(icon: &str, set: IconSet, label: &str, colour: &str) -> KeyLook {
             position: None,
         },
         dynamic: true,
+        states: Vec::new(),
     }
 }
 

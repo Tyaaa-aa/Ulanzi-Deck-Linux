@@ -440,6 +440,20 @@ fn key_look(state: &State, k: u8) -> KeyLook {
         .unwrap_or_default()
 }
 
+/// What the key preview shows: a cycling key's first step, a live label value by its name.
+fn shown_look(state: &State, k: u8) -> KeyLook {
+    let e = state.editor.borrow();
+    let Some(key) = e.key(k) else {
+        return KeyLook::default();
+    };
+    let mut look = key.shown_look();
+    look.label.text = state
+        .plugins
+        .borrow()
+        .shown_label(key.tap.as_ref(), &look.label.text);
+    look
+}
+
 // ---------------------------------------------------------------------------------------------
 // Single key
 
@@ -566,7 +580,7 @@ fn key_preview(ctx: &C, k: u8) -> gtk::Widget {
     let refresh = {
         let state = ctx.state.clone();
         move || {
-            let mut look = key_look(&state, k);
+            let mut look = shown_look(&state, k);
             if let Some(f) = state.preview.borrow().as_ref() {
                 ulanzi_core::edit::apply_field(&mut look, f);
             }
@@ -746,9 +760,18 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     }
 
     // Label text with a variables menu.
+    // A cycling key shows each step's label; this one only when a step has none.
+    let cycling = keys.iter().all(|k| {
+        matches!(
+            state.editor.borrow().key(*k).and_then(|k| k.tap.as_ref()),
+            Some(Action::Cycle { .. })
+        )
+    });
     let label_row = adw::EntryRow::builder()
         .title(if label == Mixed::Mixed {
             "Label (mixed)"
+        } else if cycling {
+            "Label (for steps without one)"
         } else {
             "Label"
         })
@@ -798,6 +821,39 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     }
     vars.set_popover(Some(&pop));
     label_row.add_suffix(&vars);
+    // Live values the keys' plugin action offers (a temperature, a state), picked by name
+    // instead of typed as {…} codes.
+    let choices = label_choices(&state, &keys);
+    if !choices.is_empty() {
+        let mut names = vec!["Text".to_string()];
+        names.extend(choices.iter().map(|c| c.name.clone()));
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let selected = match &label {
+            Mixed::One(t) => choices.iter().position(|c| &c.text == t).map_or(0, |i| i + 1),
+            _ => 0,
+        };
+        let shows = adw::ComboRow::builder()
+            .title("Label Shows")
+            .model(&gtk::StringList::new(&names))
+            .selected(selected as u32)
+            .build();
+        label_row.set_visible(selected == 0);
+        let (set, entry) = (set.clone(), label_row.clone());
+        shows.connect_selected_notify(move |r| match r.selected() as usize {
+            0 => {
+                entry.set_visible(true);
+                entry.set_text("");
+                entry.grab_focus();
+            }
+            i => {
+                entry.set_visible(false);
+                if let Some(c) = choices.get(i - 1) {
+                    set(How::Set, Field::LabelText(c.text.clone()));
+                }
+            }
+        });
+        label_group.add(&shows);
+    }
     label_group.add(&label_row);
 
     // Say what "Default" means right now (the position set in Preferences).
@@ -862,12 +918,35 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
 
     let live = adw::SwitchRow::builder()
         .title("Show Live State")
-        .subtitle("Play/pause, mute and similar actions update their icon")
+        .subtitle("The icon and colour follow what the key controls (on, off, playing, cooling)")
         .active(dynamic != Mixed::One(false))
         .build();
     live.connect_active_notify(move |r| set(How::Set, Field::Dynamic(r.is_active())));
     look.add_row(&live);
     (group, label_group)
+}
+
+/// The label values the keys' plugin action offers, when they all have the same one.
+fn label_choices(state: &State, keys: &[u8]) -> Vec<ulanzi_core::plugin::ManifestLabel> {
+    let e = state.editor.borrow();
+    let mut actions = keys.iter().map(|k| match e.key(*k).and_then(|k| k.tap.as_ref()) {
+        Some(Action::Plugin { plugin, action, .. }) => Some((plugin.clone(), action.clone())),
+        _ => None,
+    });
+    let Some(Some(first)) = actions.next() else {
+        return Vec::new();
+    };
+    if actions.any(|a| a.as_ref() != Some(&first)) {
+        return Vec::new();
+    }
+    state
+        .plugins
+        .borrow()
+        .manifests
+        .get(&first.0)
+        .and_then(|m| m.action(&first.1))
+        .map(|a| a.labels.clone())
+        .unwrap_or_default()
 }
 
 /// The Label Position entry for the keys' visibility and position: Default, Top, Middle, Bottom

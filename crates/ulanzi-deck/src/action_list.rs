@@ -151,7 +151,7 @@ impl Catalog {
         for cat in Category::ALL {
             let mut entries: Vec<Entry> = catalog::catalog()
                 .iter()
-                .filter(|s| s.category == cat && (include_multi || s.id != "multi"))
+                .filter(|s| s.category == cat && (include_multi || !matches!(s.id, "multi" | "cycle")))
                 .map(|s| Entry {
                     title: s.title.to_string(),
                     plugin: None,
@@ -394,7 +394,7 @@ mod tests {
     fn builtin_count(include_multi: bool) -> usize {
         catalog::catalog()
             .iter()
-            .filter(|s| include_multi || s.id != "multi")
+            .filter(|s| include_multi || !matches!(s.id, "multi" | "cycle"))
             .count()
     }
 

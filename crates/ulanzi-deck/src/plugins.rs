@@ -98,6 +98,21 @@ impl Plugins {
     }
 
     /// The plugin's name: from the list, else its manifest, else its id.
+    /// How the app shows a key's label: a live value the key's plugin action offers by its name
+    /// ("Room temperature"), since its value is only known on the deck.
+    pub fn shown_label(&self, tap: Option<&Action>, text: &str) -> String {
+        if let Some(Action::Plugin { plugin, action, .. }) = tap
+            && let Some(l) = self
+                .manifests
+                .get(plugin)
+                .and_then(|m| m.action(action))
+                .and_then(|a| a.labels.iter().find(|l| l.text == text))
+        {
+            return l.name.clone();
+        }
+        text.to_string()
+    }
+
     pub fn plugin_name(&self, plugin: &str) -> String {
         self.row(plugin)
             .map(|r| r.display_name().to_string())
@@ -704,6 +719,7 @@ mod tests {
             choices: Vec::new(),
             picker: None,
             ask_first: false,
+            show_if: None,
         }
     }
 

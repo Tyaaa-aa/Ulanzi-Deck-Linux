@@ -14,6 +14,123 @@ pub struct KeyLook {
     pub label: Label,
     /// Show live state from the action (e.g. play/pause swap).
     pub dynamic: bool,
+    /// Looks for live states, first match wins (a light that is on, an air conditioner that
+    /// cools). Used while `dynamic` is on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<LookState>,
+}
+
+/// Parts of a key's look that replace the key's own while something holds; `None` keeps it.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LookOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<ImageSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreground: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<Color>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl LookOverride {
+    pub fn is_empty(&self) -> bool {
+        *self == LookOverride::default()
+    }
+
+    /// `look` with these parts put in.
+    pub fn apply(&self, look: &mut KeyLook) {
+        if let Some(s) = &self.source {
+            look.source = s.clone();
+        }
+        if let Some(c) = self.foreground {
+            look.foreground = c;
+        }
+        if let Some(c) = self.background {
+            look.background = c;
+        }
+        if let Some(t) = &self.label {
+            look.label.text = t.clone();
+        }
+    }
+}
+
+/// A look used while a live value matches.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookState {
+    pub when: When,
+    #[serde(default)]
+    pub look: LookOverride,
+}
+
+/// A condition on a live value: `value` is a label text such as `{ha.$entity_id}` (`$<param>` is
+/// the key's action parameter), compared without case to `is` (any of them) and `not` (none of
+/// them). An empty value (nothing published yet) never matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct When {
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub is: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not: Vec<String>,
+}
+
+impl When {
+    /// Whether the resolved `value` meets the condition.
+    pub fn holds(&self, value: &str) -> bool {
+        let v = value.trim();
+        let any = |list: &[String]| list.iter().any(|x| x.trim().eq_ignore_ascii_case(v));
+        !v.is_empty() && (self.is.is_empty() || any(&self.is)) && !any(&self.not)
+    }
+}
+
+/// `text` with every `$<key>` of `params` (string, number or bool values) filled in, longest keys
+/// first so `$entity_id` wins over `$entity`.
+pub fn fill_params(text: &str, params: &toml::Table) -> String {
+    if !text.contains('$') {
+        return text.to_string();
+    }
+    let mut keys: Vec<(&String, String)> = params
+        .iter()
+        .filter_map(|(k, v)| {
+            let v = match v {
+                toml::Value::String(s) => s.clone(),
+                toml::Value::Integer(i) => i.to_string(),
+                toml::Value::Float(f) => f.to_string(),
+                toml::Value::Boolean(b) => b.to_string(),
+                _ => return None,
+            };
+            Some((k, v))
+        })
+        .collect();
+    keys.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
+    let mut out = text.to_string();
+    for (k, v) in keys {
+        out = out.replace(&format!("${k}"), &v);
+    }
+    out
+}
+
+impl KeyLook {
+    /// The look with the first state whose condition holds put in. `resolve` turns a label text
+    /// (with `$<param>` already filled in) into its current value.
+    pub fn with_state(&self, params: &toml::Table, resolve: impl Fn(&str) -> String) -> KeyLook {
+        let mut look = self.clone();
+        if !self.dynamic {
+            return look;
+        }
+        if let Some(st) = self
+            .states
+            .iter()
+            .find(|st| st.when.holds(&resolve(&fill_params(&st.when.value, params))))
+        {
+            st.look.apply(&mut look);
+        }
+        look
+    }
 }
 
 impl Default for KeyLook {
@@ -25,6 +142,7 @@ impl Default for KeyLook {
             icon_scale: 0.70,
             label: Label::default(),
             dynamic: true,
+            states: Vec::new(),
         }
     }
 }

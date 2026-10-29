@@ -286,6 +286,7 @@ impl Sampler {
             obs: None,
             screen_png: None,
             plugin_vars: Default::default(),
+            cycles: Default::default(),
         }
     }
 }

@@ -58,6 +58,12 @@ impl KeySet {
             .iter()
             .filter(|k| extras || !k.extra)
             .map(|k| {
+                let action = manifest.action(&k.action);
+                let states = if k.states.is_empty() {
+                    action.map(|a| a.states.as_slice()).unwrap_or_default()
+                } else {
+                    &k.states
+                };
                 let icon = k
                     .icon
                     .clone()
@@ -69,11 +75,16 @@ impl KeySet {
                             plugin: manifest.id.clone(),
                             icon,
                         }),
-                        foreground: fg,
+                        foreground: k
+                            .color
+                            .as_deref()
+                            .and_then(super::manifest::parse_color)
+                            .map_or(fg, |[r, g, b]| Color([r, g, b, 255])),
                         label: Label {
                             text: fill(&k.label, &item.id, &item.name),
                             ..Label::default()
                         },
+                        states: states.iter().map(|st| st.to_look(&manifest.id)).collect(),
                         ..KeyLook::default()
                     },
                     tap: Some(Action::Plugin {

@@ -237,6 +237,11 @@ impl ActionRunner for Executor {
                 limit_100,
             } => audio::volume(target, op, *step, *limit_100).await,
             Action::Multi { steps } => run_multi(self, steps).await,
+            // The deck picks a cycle's step (it knows which one is next); elsewhere, the first.
+            Action::Cycle { steps } => match steps.first() {
+                Some(s) => Box::pin(self.run(&s.action)).await,
+                None => Ok(()),
+            },
             Action::Plugin {
                 plugin,
                 action,

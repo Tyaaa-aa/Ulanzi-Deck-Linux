@@ -895,6 +895,231 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
     rows
 }
 
+/// A cycle step's thumbnail: a blank key with the step's look.
+fn step_thumb(state: &State, look: &LookOverride, size: i32) -> gtk::Widget {
+    let mut key = ulanzi_core::model::KeyLook::default();
+    look.apply(&mut key);
+    // The label is shown as the row's subtitle; the thumbnail is just the picture.
+    key.label.text.clear();
+    match crate::ui::canvas::key_texture(&key, &crate::ui::canvas::profile_dir(state)) {
+        Some(t) => {
+            let i = gtk::Image::from_paintable(Some(&t));
+            i.set_pixel_size(size);
+            i.set_valign(gtk::Align::Center);
+            i.set_overflow(gtk::Overflow::Hidden);
+            i.add_css_class("action-chip-img");
+            i.upcast()
+        }
+        None => action_chip(state, None, size),
+    }
+}
+
+/// The look a freshly added step gets: its action's icon, colour and name.
+fn step_look(a: &Action, state: &State) -> LookOverride {
+    let d = catalog::default_look(a);
+    let label = match a {
+        Action::Plugin { plugin, action, .. } => state.plugins.borrow().action_title(plugin, action),
+        _ => d.label.text.clone(),
+    };
+    LookOverride {
+        source: (d.source != ulanzi_core::model::ImageSource::None).then_some(d.source),
+        foreground: Some(d.foreground),
+        background: None,
+        label: (!label.is_empty()).then_some(label),
+    }
+}
+
+/// A cycle's steps: each press runs the next one. Each step row shows the step's own picture and
+/// label (the key shows them while that step is next) and opens to its action's settings, its
+/// image and its label.
+fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gtk::Widget> {
+    let mut rows: Vec<gtk::Widget> = Vec::new();
+    let n = steps.len();
+    for (i, step) in steps.iter().enumerate() {
+        let title = match &step.action {
+            Action::Plugin { plugin, action, .. } => state.plugins.borrow().action_title(plugin, action),
+            a => catalog::spec_for(a)
+                .map(|s| s.title)
+                .unwrap_or("Action")
+                .to_string(),
+        };
+        let exp = adw::ExpanderRow::builder()
+            .title(glib::markup_escape_text(&format!("{}. {title}", i + 1)).as_str())
+            .subtitle(glib::markup_escape_text(step.look.label.as_deref().unwrap_or("No label")).as_str())
+            .build();
+        exp.add_prefix(&step_thumb(state, &step.look, 32));
+        let step_path = format!("{path}/cycle{i}");
+        state.remember_expanded(&exp, &step_path);
+        // Moving and removing live inside the open step, so the closed rows stay calm.
+        let tool = |icon: &str, text: &str| {
+            let b = gtk::Button::builder().css_classes(["flat"]).build();
+            let line = gtk::Box::builder().spacing(6).build();
+            line.append(&gtk::Image::from_icon_name(icon));
+            line.append(&gtk::Label::new(Some(text)));
+            b.set_child(Some(&line));
+            b
+        };
+        let up = tool("go-up-symbolic", "Earlier");
+        let down = tool("go-down-symbolic", "Later");
+        let remove = tool("user-trash-symbolic", "Remove");
+        remove.add_css_class("destructive-action");
+        up.set_sensitive(i > 0);
+        down.set_sensitive(i + 1 < n);
+        let tools = gtk::Box::builder()
+            .spacing(6)
+            .halign(gtk::Align::Center)
+            .margin_top(6)
+            .margin_bottom(6)
+            .build();
+        for b in [&up, &down, &remove] {
+            tools.append(b);
+        }
+        let reorder = |delta: isize| {
+            let ed = ed.clone();
+            let (state, path) = (state.clone(), path.to_string());
+            move |_: &gtk::Button| {
+                let j = (i as isize + delta) as usize;
+                let (a, b) = (format!("{path}/cycle{i}"), format!("{path}/cycle{j}"));
+                {
+                    let mut set = state.expanded.borrow_mut();
+                    let (ha, hb) = (set.remove(&a), set.remove(&b));
+                    if ha {
+                        set.insert(b.clone());
+                    }
+                    if hb {
+                        set.insert(a.clone());
+                    }
+                }
+                ed.apply(How::Structure, |a| {
+                    if let Action::Cycle { steps } = a
+                        && j < steps.len()
+                    {
+                        steps.swap(i, j);
+                    }
+                })
+            }
+        };
+        up.connect_clicked(reorder(-1));
+        down.connect_clicked(reorder(1));
+        {
+            let ed = ed.clone();
+            remove.connect_clicked(move |_| {
+                ed.apply(How::Structure, |a| {
+                    if let Action::Cycle { steps } = a {
+                        steps.remove(i);
+                    }
+                })
+            });
+        }
+        let inner: OnChange = {
+            let ed = ed.clone();
+            Rc::new(move |new: Action, how: How| {
+                ed.apply(how, |a| {
+                    if let Action::Cycle { steps } = a
+                        && let Some(s) = steps.get_mut(i)
+                    {
+                        s.action = new;
+                    }
+                })
+            })
+        };
+        for r in rows_for(state, &step_path, &step.action, inner) {
+            exp.add_row(&r);
+        }
+        // The step's picture.
+        let image = adw::ActionRow::builder().title("Image").build();
+        image.add_prefix(&step_thumb(state, &step.look, 28));
+        let choose = gtk::Button::builder()
+            .label("Choose…")
+            .valign(gtk::Align::Center)
+            .build();
+        {
+            let (ed, state, current) = (ed.clone(), state.clone(), step.look.source.clone());
+            choose.connect_clicked(move |b| {
+                let ed = ed.clone();
+                crate::ui::icon_picker::choose(&state, b, current.clone(), move |src| {
+                    ed.apply(How::Structure, |a| {
+                        if let Action::Cycle { steps } = a
+                            && let Some(s) = steps.get_mut(i)
+                        {
+                            s.look.source = Some(src);
+                        }
+                    })
+                });
+            });
+        }
+        image.add_suffix(&choose);
+        exp.add_row(&image);
+        // Its colour.
+        let colour = adw::ActionRow::builder().title("Icon Colour").build();
+        {
+            let ed = ed.clone();
+            let button = crate::ui::color_popover::color_button(
+                step.look.foreground,
+                |_| {},
+                move |c| {
+                    ed.apply(How::Typing("cyclefg"), |a| {
+                        if let Action::Cycle { steps } = a
+                            && let Some(s) = steps.get_mut(i)
+                        {
+                            s.look.foreground = Some(c);
+                        }
+                    })
+                },
+            );
+            colour.add_suffix(&button);
+            colour.set_activatable_widget(Some(&button));
+        }
+        exp.add_row(&colour);
+        // Its label.
+        let label = adw::EntryRow::builder()
+            .title("Label")
+            .text(step.look.label.as_deref().unwrap_or(""))
+            .build();
+        {
+            let (ed, exp) = (ed.clone(), exp.clone());
+            label.connect_changed(move |r| {
+                let t = r.text().to_string();
+                exp.set_subtitle(&glib::markup_escape_text(if t.is_empty() {
+                    "No label"
+                } else {
+                    &t
+                }));
+                ed.apply(How::Typing("cyclelabel"), |a| {
+                    if let Action::Cycle { steps } = a
+                        && let Some(s) = steps.get_mut(i)
+                    {
+                        s.look.label = (!t.is_empty()).then_some(t);
+                    }
+                })
+            });
+        }
+        exp.add_row(&label);
+        exp.add_row(&tools);
+        rows.push(exp.upcast());
+    }
+    let add_row = adw::ActionRow::builder()
+        .title(if n == 0 { "No steps yet" } else { "Add a Step" })
+        .subtitle(if n < 2 {
+            "Each press runs the next step; the key shows the step it runs next"
+        } else {
+            ""
+        })
+        .build();
+    let (ed2, st) = (ed.clone(), state.clone());
+    let add = picker_button(state, "Add Step", false, move |action| {
+        let look = step_look(&action, &st);
+        ed2.apply(How::Structure, |a| {
+            if let Action::Cycle { steps } = a {
+                steps.push(CycleStep { action, look });
+            }
+        })
+    });
+    add_row.add_suffix(&add);
+    rows.push(add_row.upcast());
+    rows
+}
+
 fn step_subtitle(state: &State, s: &Step) -> String {
     let d = match &s.action {
         // The title is the action's name; say which plugin it comes from.
@@ -1023,6 +1248,7 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         }
         Action::SwitchProfile { profile } => vec![profile_combo(&ed, state, *profile)],
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
+        Action::Cycle { steps } => cycle_rows(&ed, state, path, steps),
         Action::Obs(o) => obs_rows(state, &ed, o),
         Action::Timer { op } => timer_rows(&ed, *op),
         Action::NextPage
@@ -1063,10 +1289,32 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
     let Some(m) = state.plugins.borrow().manifests.get(plugin).cloned() else {
         return Vec::new();
     };
-    let Some(a) = m.action(action) else {
+    let Some(a) = m.action(action).cloned() else {
         return Vec::new();
     };
-    a.params
+    // Rows with a `show_if`, shown or hidden as the field they depend on changes.
+    type Shown = Rc<RefCell<Vec<(ulanzi_core::plugin::ShowIf, gtk::Widget)>>>;
+    let conditional: Shown = Rc::default();
+    let fields = Rc::new(a.params.clone());
+    let update: Rc<dyn Fn(&toml::Table)> = {
+        let (conditional, fields) = (conditional.clone(), fields.clone());
+        Rc::new(move |params: &toml::Table| {
+            for (cond, row) in conditional.borrow().iter() {
+                let value = fields
+                    .iter()
+                    .find(|f| f.key == cond.key)
+                    .and_then(|f| current(f, params))
+                    .map(|v| match v {
+                        toml::Value::String(s) => s,
+                        other => other.to_string(),
+                    })
+                    .unwrap_or_default();
+                row.set_visible(cond.holds(&value));
+            }
+        })
+    };
+    let rows: Vec<gtk::Widget> = a
+        .params
         .iter()
         .map(|f| {
             let value = current(f, params);
@@ -1074,7 +1322,7 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
                 Control::Entry | Control::Json | Control::Spin { .. } => How::Typing(undo_tag(&f.key)),
                 _ => How::Set,
             };
-            let (ed, key) = (ed.clone(), f.key.clone());
+            let (ed, key, update) = (ed.clone(), f.key.clone(), update.clone());
             let on: crate::ui::plugin_fields::OnValue = Rc::new(move |v| {
                 // An error is shown on the row itself; nothing is written.
                 let Ok(v) = v else { return };
@@ -1090,17 +1338,26 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
                         }
                     }
                 });
+                if let Action::Plugin { params, .. } = &*ed.cur.borrow() {
+                    update(params);
+                }
             });
-            crate::ui::plugin_fields::row(
+            let row = crate::ui::plugin_fields::row(
                 state,
                 &m,
                 f,
                 value.as_ref(),
                 crate::ui::plugin_fields::Save::Live,
                 on,
-            )
+            );
+            if let Some(cond) = &f.show_if {
+                conditional.borrow_mut().push((cond.clone(), row.clone()));
+            }
+            row
         })
-        .collect()
+        .collect();
+    update(params);
+    rows
 }
 
 fn timer_rows(ed: &Ed, op: TimerOp) -> Vec<gtk::Widget> {

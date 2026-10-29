@@ -29,6 +29,14 @@ pub struct DynamicState {
     /// Values plugins set, by `<plugin>.<key>` (label variables like `{hello.count}`). Set by the
     /// deck, not the sampler.
     pub plugin_vars: BTreeMap<String, String>,
+    /// The step each cycling key runs next, by [`cycle_key`]. Set by the deck.
+    pub cycles: BTreeMap<String, usize>,
+}
+
+/// Where a cycling control's next step is kept: its page and the control (`key:3`, `dial:0`, with
+/// `:hold` for its hold action).
+pub fn cycle_key(page: uuid::Uuid, control: &str) -> String {
+    format!("{page}/{control}")
 }
 
 /// Rendered key images by look hash, plus which warnings were already logged. Holds only what
@@ -82,6 +90,7 @@ impl DynamicState {
         self.screen_png = old.screen_png.clone();
         self.obs = old.obs.clone();
         self.plugin_vars = old.plugin_vars.clone();
+        self.cycles = old.cycles.clone();
         for k in DECK_VARS {
             if let Some(v) = old.vars.get(k) {
                 self.vars.insert(k.to_string(), v.clone());
@@ -219,11 +228,40 @@ fn obs_look(look: &mut KeyLook, o: &ObsAction, l: &ulanzi_core::obs::ObsLive) {
     }
 }
 
-/// The key as it looks now: play/pause swaps, OBS state, the timer's time left.
-fn live_look(look: &KeyLook, tap: &Option<Action>, dynamic: &DynamicState) -> KeyLook {
+/// The parameters `$<param>` in labels and states refer to: a plugin action's.
+fn params_of(tap: &Option<Action>) -> Option<&toml::Table> {
+    match tap {
+        Some(Action::Plugin { params, .. }) => Some(params),
+        _ => None,
+    }
+}
+
+/// The key as it looks now: a cycling key's next step, play/pause swaps, OBS state, the timer's
+/// time left, then the first of its own live states that holds.
+fn live_look(
+    look: &KeyLook,
+    tap: &Option<Action>,
+    dynamic: &DynamicState,
+    vars: &BTreeMap<String, String>,
+    cycle: Option<&str>,
+) -> KeyLook {
     let mut look = look.clone();
+    if let (Some(Action::Cycle { steps }), Some(at)) = (tap, cycle)
+        && !steps.is_empty()
+    {
+        let next = dynamic.cycles.get(at).copied().unwrap_or(0) % steps.len();
+        steps[next].look.apply(&mut look);
+    }
     if !look.dynamic {
         return look;
+    }
+    if !look.states.is_empty() {
+        let empty = toml::Table::new();
+        look = look.with_state(params_of(tap).unwrap_or(&empty), |t| {
+            // A value nobody published yet counts as empty.
+            let v = resolve_vars(t, vars);
+            if v.contains('{') { String::new() } else { v }
+        });
     }
     if dynamic.playing == Some(true) && is_play_pause(tap) {
         swap_icon(&mut look, "play", "pause");
@@ -258,13 +296,18 @@ pub fn build_page(
     let mut images = Vec::new();
     let mut h = DefaultHasher::new();
     let keys = profile.pages.get(page).map(|p| &p.keys);
+    let page_id = profile.pages.get(page).map(|p| p.id);
     let vars = dynamic.label_vars();
     let mut used = HashSet::new();
 
     for i in 0..SCREEN_INDEX {
         let mut entry = ButtonEntry::default();
         if let Some(key) = keys.and_then(|k| k.get(&i)) {
-            let mut look = live_look(&key.look, &key.tap, dynamic);
+            let at = page_id.map(|id| cycle_key(id, &format!("key:{i}")));
+            let mut look = live_look(&key.look, &key.tap, dynamic, &vars, at.as_deref());
+            if let Some(params) = params_of(&key.tap) {
+                look.label.text = ulanzi_core::model::fill_params(&look.label.text, params);
+            }
             // A key with its own label position gets the label drawn into its picture.
             let own_label = look.label.position.is_some();
             if own_label {
@@ -553,20 +596,23 @@ mod tests {
         let rec = Some(Action::Obs(ObsAction::ToggleRecord));
         let mut d = DynamicState::default();
         // Nothing known about OBS: unchanged.
-        assert_eq!(live_look(&look("Record"), &rec, &d), look("Record"));
+        assert_eq!(
+            live_look(&look("Record"), &rec, &d, &d.vars, None),
+            look("Record")
+        );
         d.obs = Some(ObsLive {
             connected: true,
             recording: true,
             rec_secs: 83,
             ..ObsLive::default()
         });
-        let l = live_look(&look("Record"), &rec, &d);
+        let l = live_look(&look("Record"), &rec, &d, &d.vars, None);
         assert_eq!(l.label.text, "REC 01:23");
         assert_ne!(l.background, look("Record").background);
         // A key whose look is fixed stays as it is.
         let mut fixed = look("Record");
         fixed.dynamic = false;
-        assert_eq!(live_look(&fixed, &rec, &d), fixed);
+        assert_eq!(live_look(&fixed, &rec, &d, &d.vars, None), fixed);
         // The scene on air is highlighted; offline keys are dimmed.
         let scene = Some(Action::Obs(ObsAction::SetScene {
             scene: "A".into(),
@@ -577,9 +623,15 @@ mod tests {
             program: "A".into(),
             ..ObsLive::default()
         });
-        assert_ne!(live_look(&look("A"), &scene, &d).background, look("A").background);
+        assert_ne!(
+            live_look(&look("A"), &scene, &d, &d.vars, None).background,
+            look("A").background
+        );
         d.obs = Some(ObsLive::default());
-        assert_ne!(live_look(&look("A"), &scene, &d).foreground, look("A").foreground);
+        assert_ne!(
+            live_look(&look("A"), &scene, &d, &d.vars, None).foreground,
+            look("A").foreground
+        );
         // A muted input.
         let mute = Some(Action::Obs(ObsAction::ToggleMute { input: "Mic".into() }));
         let mut muted = ObsLive {
@@ -589,7 +641,7 @@ mod tests {
         muted.muted.insert("Mic".into());
         d.obs = Some(muted);
         assert_ne!(
-            live_look(&look("Mic"), &mute, &d).background,
+            live_look(&look("Mic"), &mute, &d, &d.vars, None).background,
             look("Mic").background
         );
         // The timer key shows the time left while it runs.
@@ -597,8 +649,80 @@ mod tests {
             op: TimerOp::StartPause,
         });
         d.vars.insert("timer".into(), "18:42".into());
-        assert_eq!(live_look(&look("Timer"), &t, &d).label.text, "Timer");
+        assert_eq!(
+            live_look(&look("Timer"), &t, &d, &d.vars, None).label.text,
+            "Timer"
+        );
         d.vars.insert("timer_running".into(), "1".into());
-        assert_eq!(live_look(&look("Timer"), &t, &d).label.text, "18:42");
+        assert_eq!(
+            live_look(&look("Timer"), &t, &d, &d.vars, None).label.text,
+            "18:42"
+        );
+    }
+
+    #[test]
+    fn plugin_keys_follow_their_live_state_and_cycles_their_step() {
+        use ulanzi_core::model::{CycleStep, LookOverride, LookState, When};
+        let blue = Color([0x4f, 0xc3, 0xf7, 0xff]);
+        let mut params = toml::Table::new();
+        params.insert("entity_id".into(), "climate.ac".into());
+        let tap = Some(Action::Plugin {
+            plugin: "ha".into(),
+            action: "climate".into(),
+            params,
+        });
+        let look = KeyLook {
+            states: vec![LookState {
+                when: When {
+                    value: "{ha.$entity_id}".into(),
+                    is: vec!["cool".into()],
+                    not: vec![],
+                },
+                look: LookOverride {
+                    foreground: Some(blue),
+                    ..LookOverride::default()
+                },
+            }],
+            ..KeyLook::default()
+        };
+        let mut d = DynamicState::default();
+        assert_eq!(
+            live_look(&look, &tap, &d, &d.vars, None),
+            look,
+            "nothing published yet"
+        );
+        d.plugin_vars.insert("ha.climate.ac".into(), "cool".into());
+        let vars = d.label_vars().into_owned();
+        assert_eq!(live_look(&look, &tap, &d, &vars, None).foreground, blue);
+        d.plugin_vars.insert("ha.climate.ac".into(), "off".into());
+        let vars = d.label_vars().into_owned();
+        assert_eq!(
+            live_look(&look, &tap, &d, &vars, None).foreground,
+            look.foreground
+        );
+
+        // A cycle shows the step its next press runs.
+        let step = |label: &str| CycleStep {
+            action: Action::NextPage,
+            look: LookOverride {
+                label: Some(label.into()),
+                ..LookOverride::default()
+            },
+        };
+        let cycle = Some(Action::Cycle {
+            steps: vec![step("One"), step("Two")],
+        });
+        let mut d = DynamicState::default();
+        let at = cycle_key(uuid::Uuid::nil(), "key:0");
+        let shown = |d: &DynamicState| {
+            live_look(&KeyLook::default(), &cycle, d, &d.vars, Some(&at))
+                .label
+                .text
+        };
+        assert_eq!(shown(&d), "One");
+        d.cycles.insert(at.clone(), 1);
+        assert_eq!(shown(&d), "Two");
+        d.cycles.insert(at.clone(), 5);
+        assert_eq!(shown(&d), "Two", "a step count that shrank wraps around");
     }
 }

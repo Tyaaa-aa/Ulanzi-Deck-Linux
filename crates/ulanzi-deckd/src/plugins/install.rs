@@ -61,21 +61,7 @@ fn validate(src: &Path, engine: &PluginEngine) -> Result<LoadedPlugin, PluginErr
 
 /// Every `assets/` icon the manifest names is a file in the plugin.
 fn check_icons(src: &Path, m: &ulanzi_core::plugin::Manifest) -> Result<(), PluginError> {
-    let mut icons: Vec<&str> = [&m.icon, &m.symbolic_icon]
-        .into_iter()
-        .flatten()
-        .map(String::as_str)
-        .collect();
-    icons.extend(m.actions.iter().filter_map(|a| a.icon.as_deref()));
-    for k in &m.key_sets {
-        icons.extend(k.icon.as_deref());
-        icons.extend(
-            k.variants
-                .iter()
-                .flat_map(|v| v.keys.iter().filter_map(|k| k.icon.as_deref())),
-        );
-    }
-    for icon in icons.into_iter().filter(|i| ulanzi_core::plugin::is_asset(i)) {
+    for icon in m.icon_files() {
         if !fs::symlink_metadata(src.join(icon)).is_ok_and(|m| m.is_file()) {
             return Err(PluginError::Invalid(format!(
                 "plugin.toml names the icon {icon}, which is not in the plugin"

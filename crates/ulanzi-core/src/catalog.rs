@@ -194,6 +194,14 @@ static CATALOG: &[ActionSpec] = &[
         Action::Multi { .. }
     ),
     spec!(
+        "cycle",
+        "Cycle Through Actions",
+        System,
+        "repeat",
+        Action::Cycle { steps: Vec::new() },
+        Action::Cycle { .. }
+    ),
+    spec!(
         "play_pause",
         "Play / Pause",
         Media,
@@ -676,8 +684,8 @@ pub fn default_look(a: &Action) -> KeyLook {
     }
 }
 
-/// (plugin, action) → (icon, colour).
-type PluginLooks = std::collections::BTreeMap<(String, String), (Option<String>, Color)>;
+/// (plugin, action) → (icon, colour, live state looks).
+type PluginLooks = std::collections::BTreeMap<(String, String), (Option<String>, Color, Vec<LookState>)>;
 
 /// How each installed plugin's actions look on a fresh key.
 static PLUGIN_LOOKS: std::sync::RwLock<PluginLooks> =
@@ -691,7 +699,8 @@ pub fn set_plugin_looks<'a>(manifests: impl IntoIterator<Item = &'a crate::plugi
         let fg = m.rgb().map_or(Color::WHITE, |[r, g, b]| Color([r, g, b, 255]));
         for a in &m.actions {
             let icon = a.icon.clone().filter(|i| crate::plugin::is_asset(i));
-            map.insert((m.id.clone(), a.id.clone()), (icon, fg));
+            let states = a.states.iter().map(|st| st.to_look(&m.id)).collect();
+            map.insert((m.id.clone(), a.id.clone()), (icon, fg, states));
         }
     }
     if let Ok(mut looks) = PLUGIN_LOOKS.write() {
@@ -707,12 +716,13 @@ fn plugin_look(plugin: &str, action: &str) -> KeyLook {
         .ok()
         .and_then(|l| l.get(&(plugin.to_string(), action.to_string())).cloned());
     match found {
-        Some((icon, fg)) => KeyLook {
+        Some((icon, fg, states)) => KeyLook {
             source: icon.map_or(ImageSource::None, |icon| ImageSource::Plugin {
                 plugin: plugin.to_string(),
                 icon,
             }),
             foreground: fg,
+            states,
             ..KeyLook::default()
         },
         None => KeyLook::default(),
@@ -736,6 +746,9 @@ pub fn refresh_look(look: &mut KeyLook, old: Option<&Action>, new: &Action) {
     }
     if look.label.text == was.label.text || look.label.text.is_empty() {
         look.label.text = now.label.text;
+    }
+    if look.states == was.states {
+        look.states = now.states;
     }
 }
 
@@ -807,6 +820,10 @@ pub fn describe(a: &Action) -> String {
             VolumeOp::Set { percent } => format!("Volume {percent}% · {}", target_name(target)),
         },
         Action::Multi { steps } => format!("{} steps", steps.len()),
+        Action::Cycle { steps } => match steps.len() {
+            1 => "1 step".into(),
+            n => format!("{n} steps, one per press"),
+        },
         Action::Obs(ObsAction::SetScene { scene, preview }) if !scene.is_empty() => {
             if *preview {
                 format!("Preview · {scene}")
@@ -885,6 +902,7 @@ pub fn problem(a: &Action, c: &Problems) -> Option<String> {
             Some("That profile no longer exists".into())
         }
         Action::Multi { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
+        Action::Cycle { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
         Action::Plugin { plugin, action, .. } => (c.plugin)(plugin, action),
         Action::Obs(o) => match o {
             ObsAction::SetScene { scene: s, .. } => scene(s),

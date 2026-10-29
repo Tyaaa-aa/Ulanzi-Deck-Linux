@@ -832,9 +832,35 @@ impl Deck {
             Gesture::Tap => self.tap_action(c),
             Gesture::Hold => self.hold_action(c),
         };
+        let a = match a {
+            Some(Action::Cycle { steps }) => self.cycle_step(c, g, &steps).await,
+            a => a,
+        };
         if let Some(a) = a {
             self.dispatch(c, a).await;
         }
+    }
+
+    /// The step of a cycle to run now; the next press runs the one after, and the key shows it.
+    async fn cycle_step(
+        &mut self,
+        c: Control,
+        g: Gesture,
+        steps: &[ulanzi_core::model::CycleStep],
+    ) -> Option<Action> {
+        if steps.is_empty() {
+            return None;
+        }
+        let page = self.profile().pages.get(self.nav.page)?.id;
+        let control = match g {
+            Gesture::Tap => c.as_str(),
+            Gesture::Hold => format!("{}:hold", c.as_str()),
+        };
+        let at = push::cycle_key(page, &control);
+        let now = self.dynamic.cycles.get(&at).copied().unwrap_or(0) % steps.len();
+        self.dynamic.cycles.insert(at, (now + 1) % steps.len());
+        self.push_page(false).await;
+        Some(steps[now].action.clone())
     }
 
     /// Deck-internal actions run here; everything else goes to the control's ordered queue.

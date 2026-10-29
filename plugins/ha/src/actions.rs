@@ -227,7 +227,23 @@ fn climate(params: &Value, tracked: &Tracked) -> Result<Plan, String> {
         )
     };
     match params.get("op").and_then(Value::as_str).unwrap_or("power") {
-        "power" => Ok(call("climate", "toggle", entity, Map::new())),
+        // Decided here from the tracked state, with set_hvac_mode: some integrations ignore
+        // climate.turn_off (and so climate.toggle), and turn_on resumes whatever mode ran last.
+        "power" => {
+            let mode = params
+                .get("mode")
+                .and_then(Value::as_str)
+                .filter(|m| *m != "off" && HVAC_MODES.contains(m));
+            let hvac = |m: &str| call("climate", "set_hvac_mode", entity, data_of("hvac_mode", m.into()));
+            Ok(match tracked.entities.get(entity).map(|e| e.state.as_str()) {
+                Some("off") => match mode {
+                    Some(m) => hvac(m),
+                    None => call("climate", "turn_on", entity, Map::new()),
+                },
+                Some("unavailable" | "unknown") | None => call("climate", "toggle", entity, Map::new()),
+                Some(_) => hvac("off"),
+            })
+        }
         op @ ("up" | "down") => {
             let now = attr("temperature").ok_or_else(|| {
                 format!(

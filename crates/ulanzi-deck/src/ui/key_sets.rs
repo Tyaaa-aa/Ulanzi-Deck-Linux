@@ -141,21 +141,95 @@ fn confirm(state: &State, parent: &gtk::Widget, m: &Manifest, ks: &KeySet, picks
 
 /// Add the picked items to the settings the key set names, so their state is published.
 fn track(state: &State, m: &Manifest, ks: &KeySet, items: &[Picked]) {
-    let adds: Vec<(String, String)> = items.iter().flat_map(|i| ks.tracking(i)).collect();
+    let adds: Vec<(String, String, String)> = items
+        .iter()
+        .flat_map(|i| ks.tracking(i))
+        .map(|(k, v)| (m.id.clone(), k, v))
+        .collect();
+    add_tracked(state, adds);
+}
+
+/// What the keys of `profile` need published: for each plugin action, its `track` entries and
+/// those of the label value it shows, with its parameters filled in. (plugin, setting, value).
+pub fn needed(
+    profile: &ulanzi_core::model::Profile,
+    manifests: &std::collections::BTreeMap<String, Manifest>,
+) -> Vec<(String, String, String)> {
+    use ulanzi_core::model::{Action, fill_params};
+    let mut out = Vec::new();
+    for page in &profile.pages {
+        for key in page.keys.values() {
+            let Some(Action::Plugin {
+                plugin,
+                action,
+                params,
+            }) = &key.tap
+            else {
+                continue;
+            };
+            let Some(a) = manifests.get(plugin).and_then(|m| m.action(action)) else {
+                continue;
+            };
+            let label = a.labels.iter().filter(|l| l.text == key.look.label.text);
+            for t in a.track.iter().chain(label.flat_map(|l| &l.track)) {
+                let value = fill_params(&t.value, params);
+                // A parameter not chosen yet leaves its `$name`: nothing to track.
+                if !value.contains('$') && !value.trim().is_empty() {
+                    out.push((plugin.clone(), t.setting.clone(), value));
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Add what the profile's keys need to their plugins' settings (never removes anything).
+pub fn track_profile(state: &State, profile: &ulanzi_core::model::Profile) {
+    let adds = needed(profile, &state.plugins.borrow().manifests);
+    add_tracked(state, adds);
+}
+
+/// Add (plugin, setting, value) entries to the plugins' settings; sends the settings only when
+/// one was missing. Says so once when a list is full.
+fn add_tracked(state: &State, adds: Vec<(String, String, String)>) {
     if adds.is_empty() {
         return;
     }
-    let (id, settings) = (m.id.clone(), m.settings.clone());
+    let manifests = state.plugins.borrow().manifests.clone();
+    let missing: Vec<(String, String, String)> = {
+        let s = state.settings.borrow();
+        adds.into_iter()
+            .filter(|(p, key, value)| {
+                let mut t = s.plugins.get(p).map(|e| e.settings.clone()).unwrap_or_default();
+                let Some(f) = manifests
+                    .get(p)
+                    .and_then(|m| m.settings.iter().find(|f| &f.key == key))
+                else {
+                    return false;
+                };
+                let before = t.clone();
+                add_setting(&mut t, f, value) && t != before
+            })
+            .collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
     let full = std::rc::Rc::new(std::cell::Cell::new(false));
     let full2 = full.clone();
     crate::ui::preferences::change_boxed(
         state,
         Box::new(move |s| {
-            let table = &mut s.plugins.entry(id).or_default().settings;
-            for (key, value) in adds {
-                let Some(f) = settings.iter().find(|f| f.key == key) else {
+            for (p, key, value) in missing {
+                let Some(f) = manifests
+                    .get(&p)
+                    .and_then(|m| m.settings.iter().find(|f| f.key == key))
+                else {
                     continue;
                 };
+                let table = &mut s.plugins.entry(p).or_default().settings;
                 full2.set(full2.get() | !add_setting(table, f, &value));
             }
         }),
@@ -163,7 +237,7 @@ fn track(state: &State, m: &Manifest, ks: &KeySet, items: &[Picked]) {
     if full.get() {
         crate::ui::toast(
             state,
-            &format!("Some live states are not shown: {} is full", m.name),
+            "Some live states are not shown: a plugin's list of followed items is full",
         );
     }
 }

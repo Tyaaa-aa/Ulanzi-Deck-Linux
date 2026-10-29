@@ -71,6 +71,15 @@ click from key to key); picking an action already gives the key a matching icon 
 - **Press** and **When Held**: two actions per key. When Held runs when you keep the key down for half
   a second (adjustable in Preferences).
 
+**Keys that change**
+- **Show Live State** (in Look) lets plugin keys follow what they control: a Home Assistant light key
+  turns yellow when the light is on, an air conditioner key shows a blue snowflake while cooling.
+- With a plugin action, **Label Shows** picks a live value for the label (State, Level, Target
+  temperature, Room temperature) instead of text.
+- **Cycle Through Actions** (System) runs a different action on each press: add steps, and give each
+  its own image, colour and label. The key shows the step its next press runs, then starts over
+  after the last one.
+
 **Working faster**
 - Drag an action from the action list onto a key: the key gets a matching icon and colour. Type in
   **Search actions** (Ctrl+L) to find one by name, category or plugin; the menu next to it (All,

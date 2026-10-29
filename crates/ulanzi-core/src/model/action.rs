@@ -79,6 +79,11 @@ pub enum Action {
     Multi {
         steps: Vec<Step>,
     },
+    /// Each press runs the next step, then starts over; the key shows the step the next press
+    /// runs.
+    Cycle {
+        steps: Vec<CycleStep>,
+    },
     Obs(ObsAction),
     /// An action a plugin provides. Kept as written when the plugin is missing or off.
     Plugin {
@@ -103,6 +108,15 @@ pub struct Step {
     pub action: Action,
     #[serde(default)]
     pub delay_ms: u32,
+}
+
+/// One step of a [`Action::Cycle`]: its action and how the key looks while it is next.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CycleStep {
+    pub action: Action,
+    #[serde(default, skip_serializing_if = "crate::model::LookOverride::is_empty")]
+    pub look: crate::model::LookOverride,
 }
 
 /// What a timer key does.

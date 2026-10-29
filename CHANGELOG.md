@@ -46,8 +46,17 @@ and the project uses [Semantic Versioning](https://semver.org).
   this page or a new one, with live state. The Home Assistant plugin makes keys for lights, fans, air
   conditioners, covers, media players, scripts, scenes, buttons and switches; the OBS plugin one key per
   scene.
-- Home Assistant `climate` action: turn an air conditioner or heater on or off, make it warmer or cooler
-  in the device's own steps, set a temperature or a mode.
+- Home Assistant `climate` action: turn an air conditioner or heater on or off (by its tracked state,
+  so integrations whose `climate.toggle` doesn't turn off still work), make it warmer or cooler in the
+  device's own steps, set a temperature or a mode.
+
+- Live looks: keys can change icon, colour and label with a live value (`[[look.states]]`); plugins
+  declare them per action (`states`), with label values to pick by name (`labels`, the key editor's
+  Label Shows menu) and the settings to follow (`track`, added for you as keys use the action). The
+  Home Assistant keys use them: lights yellow when on, air conditioners blue with a snowflake while
+  cooling, orange while heating.
+- **Cycle Through Actions**: each press runs the next step, and each step has its own image, colour
+  and label, shown while it is next.
 
 ### Changed
 - Plugin lists match every word of a search in any order, so "bedroom aircon" finds "Bedroom Aircon".
