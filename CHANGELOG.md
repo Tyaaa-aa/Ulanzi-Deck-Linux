@@ -56,7 +56,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   Home Assistant keys use them: lights yellow when on, air conditioners blue with a snowflake while
   cooling, orange while heating.
 - **Cycle Through Actions**: each press runs the next step, and each step has its own image, colour
-  and label, shown while it is next.
+  and label. The key shows the step that ran (the default) or the step the next press runs.
 
 ### Changed
 - Plugin lists match every word of a search in any order, so "bedroom aircon" finds "Bedroom Aircon".

@@ -236,7 +236,7 @@ fn params_of(tap: &Option<Action>) -> Option<&toml::Table> {
     }
 }
 
-/// The key as it looks now: a cycling key's next step, play/pause swaps, OBS state, the timer's
+/// The key as it looks now: a cycling key's step, play/pause swaps, OBS state, the timer's
 /// time left, then the first of its own live states that holds.
 fn live_look(
     look: &KeyLook,
@@ -246,11 +246,11 @@ fn live_look(
     cycle: Option<&str>,
 ) -> KeyLook {
     let mut look = look.clone();
-    if let (Some(Action::Cycle { steps }), Some(at)) = (tap, cycle)
+    if let (Some(Action::Cycle { steps, show }), Some(at)) = (tap, cycle)
         && !steps.is_empty()
     {
-        let next = dynamic.cycles.get(at).copied().unwrap_or(0) % steps.len();
-        steps[next].look.apply(&mut look);
+        let next = dynamic.cycles.get(at).copied().unwrap_or(0);
+        steps[show.step(next, steps.len())].look.apply(&mut look);
     }
     if !look.dynamic {
         return look;
@@ -711,6 +711,7 @@ mod tests {
         };
         let cycle = Some(Action::Cycle {
             steps: vec![step("One"), step("Two")],
+            show: ulanzi_core::model::CycleShows::Next,
         });
         let mut d = DynamicState::default();
         let at = cycle_key(uuid::Uuid::nil(), "key:0");

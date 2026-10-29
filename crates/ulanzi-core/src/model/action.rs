@@ -79,10 +79,12 @@ pub enum Action {
     Multi {
         steps: Vec<Step>,
     },
-    /// Each press runs the next step, then starts over; the key shows the step the next press
-    /// runs.
+    /// Each press runs the next step, then starts over; the key shows the step that ran last or
+    /// the one the next press runs (`show`).
     Cycle {
         steps: Vec<CycleStep>,
+        #[serde(default)]
+        show: CycleShows,
     },
     Obs(ObsAction),
     /// An action a plugin provides. Kept as written when the plugin is missing or off.
@@ -108,6 +110,27 @@ pub struct Step {
     pub action: Action,
     #[serde(default)]
     pub delay_ms: u32,
+}
+
+/// Which step a cycling key shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CycleShows {
+    /// The step that ran last: what the key did (the last step before the first press).
+    #[default]
+    Last,
+    /// The step the next press runs.
+    Next,
+}
+
+impl CycleShows {
+    /// The step to show of `n`, when `next` runs next.
+    pub fn step(self, next: usize, n: usize) -> usize {
+        match self {
+            CycleShows::Next => next % n,
+            CycleShows::Last => (next % n + n - 1) % n,
+        }
+    }
 }
 
 /// One step of a [`Action::Cycle`]: its action and how the key looks while it is next.

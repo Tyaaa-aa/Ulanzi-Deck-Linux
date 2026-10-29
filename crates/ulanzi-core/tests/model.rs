@@ -597,7 +597,12 @@ fn live_states_pick_the_first_match_and_fill_params() {
                 ..LookOverride::default()
             },
         }],
+        show: CycleShows::Next,
     };
+    // The step that ran last: before any press, the last one.
+    assert_eq!(CycleShows::Last.step(0, 3), 2);
+    assert_eq!(CycleShows::Last.step(1, 3), 0);
+    assert_eq!(CycleShows::Next.step(4, 3), 1);
     let text = toml::to_string(&Key {
         look: KeyLook::default(),
         tap: Some(a.clone()),

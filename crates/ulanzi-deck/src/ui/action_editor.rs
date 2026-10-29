@@ -932,8 +932,28 @@ fn step_look(a: &Action, state: &State) -> LookOverride {
 /// A cycle's steps: each press runs the next one. Each step row shows the step's own picture and
 /// label (the key shows them while that step is next) and opens to its action's settings, its
 /// image and its label.
-fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gtk::Widget> {
+fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep], show: CycleShows) -> Vec<gtk::Widget> {
     let mut rows: Vec<gtk::Widget> = Vec::new();
+    // What the key shows: what it did, or what it does next.
+    rows.push(
+        combo_row(
+            ed,
+            "Key Shows",
+            &["The Step That Ran", "The Next Step"],
+            usize::from(show == CycleShows::Next),
+            How::Set,
+            |a, i| {
+                if let Action::Cycle { show, .. } = a {
+                    *show = if i == 1 {
+                        CycleShows::Next
+                    } else {
+                        CycleShows::Last
+                    };
+                }
+            },
+        )
+        .upcast(),
+    );
     let n = steps.len();
     for (i, step) in steps.iter().enumerate() {
         let title = match &step.action {
@@ -991,7 +1011,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
                     }
                 }
                 ed.apply(How::Structure, |a| {
-                    if let Action::Cycle { steps } = a
+                    if let Action::Cycle { steps, .. } = a
                         && j < steps.len()
                     {
                         steps.swap(i, j);
@@ -1005,7 +1025,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
             let ed = ed.clone();
             remove.connect_clicked(move |_| {
                 ed.apply(How::Structure, |a| {
-                    if let Action::Cycle { steps } = a {
+                    if let Action::Cycle { steps, .. } = a {
                         steps.remove(i);
                     }
                 })
@@ -1015,7 +1035,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
             let ed = ed.clone();
             Rc::new(move |new: Action, how: How| {
                 ed.apply(how, |a| {
-                    if let Action::Cycle { steps } = a
+                    if let Action::Cycle { steps, .. } = a
                         && let Some(s) = steps.get_mut(i)
                     {
                         s.action = new;
@@ -1039,7 +1059,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
                 let ed = ed.clone();
                 crate::ui::icon_picker::choose(&state, b, current.clone(), move |src| {
                     ed.apply(How::Structure, |a| {
-                        if let Action::Cycle { steps } = a
+                        if let Action::Cycle { steps, .. } = a
                             && let Some(s) = steps.get_mut(i)
                         {
                             s.look.source = Some(src);
@@ -1059,7 +1079,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
                 |_| {},
                 move |c| {
                     ed.apply(How::Typing("cyclefg"), |a| {
-                        if let Action::Cycle { steps } = a
+                        if let Action::Cycle { steps, .. } = a
                             && let Some(s) = steps.get_mut(i)
                         {
                             s.look.foreground = Some(c);
@@ -1086,7 +1106,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
                     &t
                 }));
                 ed.apply(How::Typing("cyclelabel"), |a| {
-                    if let Action::Cycle { steps } = a
+                    if let Action::Cycle { steps, .. } = a
                         && let Some(s) = steps.get_mut(i)
                     {
                         s.look.label = (!t.is_empty()).then_some(t);
@@ -1101,7 +1121,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
     let add_row = adw::ActionRow::builder()
         .title(if n == 0 { "No steps yet" } else { "Add a Step" })
         .subtitle(if n < 2 {
-            "Each press runs the next step; the key shows the step it runs next"
+            "Each press runs the next step, then it starts over"
         } else {
             ""
         })
@@ -1110,7 +1130,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep]) -> Vec<gt
     let add = picker_button(state, "Add Step", false, move |action| {
         let look = step_look(&action, &st);
         ed2.apply(How::Structure, |a| {
-            if let Action::Cycle { steps } = a {
+            if let Action::Cycle { steps, .. } = a {
                 steps.push(CycleStep { action, look });
             }
         })
@@ -1248,7 +1268,7 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         }
         Action::SwitchProfile { profile } => vec![profile_combo(&ed, state, *profile)],
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
-        Action::Cycle { steps } => cycle_rows(&ed, state, path, steps),
+        Action::Cycle { steps, show } => cycle_rows(&ed, state, path, steps, *show),
         Action::Obs(o) => obs_rows(state, &ed, o),
         Action::Timer { op } => timer_rows(&ed, *op),
         Action::NextPage

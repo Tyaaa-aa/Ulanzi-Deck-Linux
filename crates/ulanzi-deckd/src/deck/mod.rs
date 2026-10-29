@@ -833,7 +833,7 @@ impl Deck {
             Gesture::Hold => self.hold_action(c),
         };
         let a = match a {
-            Some(Action::Cycle { steps }) => self.cycle_step(c, g, &steps).await,
+            Some(Action::Cycle { steps, .. }) => self.cycle_step(c, g, &steps).await,
             a => a,
         };
         if let Some(a) = a {

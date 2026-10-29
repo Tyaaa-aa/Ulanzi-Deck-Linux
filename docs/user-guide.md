@@ -77,8 +77,8 @@ click from key to key); picking an action already gives the key a matching icon 
 - With a plugin action, **Label Shows** picks a live value for the label (State, Level, Target
   temperature, Room temperature) instead of text.
 - **Cycle Through Actions** (System) runs a different action on each press: add steps, and give each
-  its own image, colour and label. The key shows the step its next press runs, then starts over
-  after the last one.
+  its own image, colour and label. It starts over after the last one. **Key Shows** picks what the
+  key shows: the step that ran (what the key did, the default) or the next step.
 
 **Working faster**
 - Drag an action from the action list onto a key: the key gets a matching icon and colour. Type in

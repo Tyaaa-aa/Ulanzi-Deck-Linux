@@ -203,13 +203,14 @@ pub struct Key {
 }
 
 impl Key {
-    /// The look before any press: a cycling key shows its first step.
+    /// The look before any press: a cycling key shows its last step, or its first when it shows
+    /// the next one.
     pub fn shown_look(&self) -> KeyLook {
         let mut look = self.look.clone();
-        if let Some(Action::Cycle { steps }) = &self.tap
-            && let Some(first) = steps.first()
+        if let Some(Action::Cycle { steps, show }) = &self.tap
+            && !steps.is_empty()
         {
-            first.look.apply(&mut look);
+            steps[show.step(0, steps.len())].look.apply(&mut look);
         }
         look
     }
@@ -237,7 +238,7 @@ fn rename_in(a: &mut Action, kind: ObsRename, old: &str, new: &str) -> bool {
                 hit |= rename_in(&mut st.action, kind, old, new);
             }
         }
-        Action::Cycle { steps } => {
+        Action::Cycle { steps, .. } => {
             for st in steps {
                 hit |= rename_in(&mut st.action, kind, old, new);
             }
@@ -286,7 +287,7 @@ impl Profile {
             out.push(a);
             match a {
                 Action::Multi { steps } => steps.iter().for_each(|s| push(out, &s.action)),
-                Action::Cycle { steps } => steps.iter().for_each(|s| push(out, &s.action)),
+                Action::Cycle { steps, .. } => steps.iter().for_each(|s| push(out, &s.action)),
                 _ => {}
             }
         }
@@ -320,7 +321,7 @@ impl Profile {
                     out.insert(plugin.clone());
                 }
                 Action::Multi { steps } => steps.iter().for_each(|s| add(out, &s.action)),
-                Action::Cycle { steps } => steps.iter().for_each(|s| add(out, &s.action)),
+                Action::Cycle { steps, .. } => steps.iter().for_each(|s| add(out, &s.action)),
                 _ => {}
             }
         }

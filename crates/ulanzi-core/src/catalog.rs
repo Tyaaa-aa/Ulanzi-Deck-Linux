@@ -198,7 +198,10 @@ static CATALOG: &[ActionSpec] = &[
         "Cycle Through Actions",
         System,
         "repeat",
-        Action::Cycle { steps: Vec::new() },
+        Action::Cycle {
+            steps: Vec::new(),
+            show: CycleShows::Last,
+        },
         Action::Cycle { .. }
     ),
     spec!(
@@ -820,7 +823,7 @@ pub fn describe(a: &Action) -> String {
             VolumeOp::Set { percent } => format!("Volume {percent}% · {}", target_name(target)),
         },
         Action::Multi { steps } => format!("{} steps", steps.len()),
-        Action::Cycle { steps } => match steps.len() {
+        Action::Cycle { steps, .. } => match steps.len() {
             1 => "1 step".into(),
             n => format!("{n} steps, one per press"),
         },
@@ -902,7 +905,7 @@ pub fn problem(a: &Action, c: &Problems) -> Option<String> {
             Some("That profile no longer exists".into())
         }
         Action::Multi { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
-        Action::Cycle { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
+        Action::Cycle { steps, .. } => steps.iter().find_map(|s| problem(&s.action, c)),
         Action::Plugin { plugin, action, .. } => (c.plugin)(plugin, action),
         Action::Obs(o) => match o {
             ObsAction::SetScene { scene: s, .. } => scene(s),
