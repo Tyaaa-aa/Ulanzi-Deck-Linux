@@ -3,7 +3,12 @@ use serde::{Deserialize, Serialize};
 use super::{Field, FieldKind};
 
 /// The plugin contract this host implements (major, minor).
-pub const CONTRACT: (u32, u32) = (1, 1);
+pub const CONTRACT: (u32, u32) = (1, 2);
+
+/// Contract 1.2 fields: plugins built for an older contract keep their promise, so these are
+/// accepted and ignored there (like `[[pickers]]` before 1.1).
+const TOP_LEVEL_1_2: [&str; 3] = ["symbolic_icon", "color", "key_sets"];
+const ACTION_1_2: [&str; 3] = ["states", "labels", "track"];
 
 /// A plugin's `plugin.toml`. Tables the host does not read yet (faces, widgets, variables,
 /// detect, auth) are accepted and ignored.
@@ -13,6 +18,9 @@ pub struct Manifest {
     pub name: String,
     pub version: String,
     pub contract: String,
+    /// The oldest Ulanzi Deck that can run the plugin (`MAJOR.MINOR.PATCH`); newer apps only.
+    #[serde(default)]
+    pub min_app: Option<String>,
     /// The plugin's full-colour icon: an `assets/` file (`.svg` or `.png`), shown in lists, the
     /// plugin's settings and the plugin store. A plain name (`mdi:lightbulb`) is looked up in
     /// the icon theme instead.
@@ -182,6 +190,16 @@ pub struct ManifestAction {
     pub track: Vec<Track>,
 }
 
+impl ManifestAction {
+    /// The parameters a newly added key with this action stores (see [`Field::initial_value`]).
+    pub fn defaults(&self) -> toml::Table {
+        self.params
+            .iter()
+            .filter_map(|p| p.initial_value().map(|d| (p.key.clone(), d)))
+            .collect()
+    }
+}
+
 /// A look for a live state. `when.value` and `label` may use `$<param>` for the key's action
 /// parameters; `icon` is a one-colour `assets/….svg`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -249,6 +267,8 @@ pub enum ManifestError {
     BadVersion(String),
     #[error("needs plugin contract {needs}")]
     Incompatible { needs: String },
+    #[error("needs Ulanzi Deck {0} or newer")]
+    NeedsApp(String),
     #[error("action \"{0}\" is declared twice")]
     DuplicateAction(String),
     #[error("\"{key}\" is declared twice in {scope}")]
@@ -293,9 +313,15 @@ impl Manifest {
             .and_then(toml::Value::as_str)
             .and_then(contract_version)
             .is_none_or(|v| v >= (1, 1));
+        let version = table
+            .get("contract")
+            .and_then(toml::Value::as_str)
+            .and_then(contract_version);
         if !has_pickers {
             table.remove("pickers");
-            table.remove("key_sets");
+        }
+        if version.is_some_and(|v| v < (1, 2)) {
+            strip_1_2(&mut table);
         }
         let m: Manifest = table.try_into().map_err(parse_err)?;
         if !valid_id(&m.id) {
@@ -306,6 +332,14 @@ impl Manifest {
         }
         if !contract_ok(&m.contract) {
             return Err(ManifestError::Incompatible { needs: m.contract });
+        }
+        if let Some(min) = &m.min_app {
+            if !valid_semver(min) {
+                return Err(ManifestError::BadVersion(min.clone()));
+            }
+            if semver(min) > semver(crate::APP_VERSION) {
+                return Err(ManifestError::NeedsApp(min.clone()));
+            }
         }
         for entry in &m.permissions.network {
             if let Some(why) = bad_network_entry(entry) {
@@ -605,6 +639,45 @@ fn valid_semver(v: &str) -> bool {
         && parts
             .iter()
             .all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()))
+}
+
+/// `MAJOR.MINOR.PATCH` as numbers (a pre-release suffix such as `-beta` is ignored).
+fn semver(v: &str) -> (u64, u64, u64) {
+    let mut parts = v
+        .split(['-', '+'])
+        .next()
+        .unwrap_or_default()
+        .split('.')
+        .map(|p| p.parse().unwrap_or(0));
+    (
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+        parts.next().unwrap_or(0),
+    )
+}
+
+/// Drop the fields contract 1.2 added from an older manifest: top-level ones, those of each
+/// action, and `show_if` of every field.
+fn strip_1_2(table: &mut toml::Table) {
+    for k in TOP_LEVEL_1_2 {
+        table.remove(k);
+    }
+    let strip_fields = |fields: Option<&mut toml::Value>| {
+        if let Some(toml::Value::Array(list)) = fields {
+            for f in list.iter_mut().filter_map(toml::Value::as_table_mut) {
+                f.remove("show_if");
+            }
+        }
+    };
+    strip_fields(table.get_mut("settings"));
+    if let Some(toml::Value::Array(actions)) = table.get_mut("actions") {
+        for a in actions.iter_mut().filter_map(toml::Value::as_table_mut) {
+            for k in ACTION_1_2 {
+                a.remove(k);
+            }
+            strip_fields(a.get_mut("params"));
+        }
+    }
 }
 
 /// `MAJOR.MINOR` as numbers.

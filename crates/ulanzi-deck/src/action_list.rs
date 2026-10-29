@@ -564,8 +564,8 @@ mod tests {
     #[test]
     fn entries_carry_the_action_a_click_or_drag_assigns() {
         let mut p = sample();
-        let obs: Manifest =
-            Manifest::parse(include_str!("../../../plugins/obs/plugin.toml")).expect("obs manifest");
+        let obs: Manifest = Manifest::parse(include_str!("../tests/fixtures/plugin-manifests/obs.toml"))
+            .expect("obs manifest");
         p.manifests.insert("obs".into(), obs);
         let c = Catalog::new(&p, true);
         // Built-in: a fresh action from the catalog.

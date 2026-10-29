@@ -186,7 +186,7 @@ params = { name = "Ana" }
 Values in `params` and in `[plugins.<id>.settings]` that have no JSON form (dates and times) reach the plugin as strings.
 
 **Contract versions.** `contract = "1.0"` loads if the major version equals the service's (1) and the
-minor version is not newer than the service's (1 today). A plugin that asks for more shows as
+minor version is not newer than the service's (2 today). A plugin that asks for more shows as
 `incompatible` and the message "needs a newer Ulanzi Deck". Minor versions only add things, so a plugin
 written for 1.0 keeps working on every later 1.x.
 
@@ -195,7 +195,13 @@ detection, sign-in). They are accepted and ignored. From contract 1.1 on, a mani
 picker is declared twice, when an `item` field names a picker that is not declared, or when an action
 param uses a `multi` picker. A `contract = "1.0"` manifest keeps the 1.0 rules: its `[[pickers]]` tables
 (whatever their shape) and a field's `picker` are accepted and ignored, so its `item` fields are text
-entries.
+entries. In the same way a manifest older than 1.2 keeps its fields but the 1.2 ones (`symbolic_icon`,
+`color`, `[[key_sets]]`, an action's `states`, `labels` and `track`, a field's `show_if`) are ignored.
+
+**Oldest app.** `min_app = "2.1.0"` names the oldest Ulanzi Deck the plugin runs on. A newer one than
+the app installs nothing and shows "<name> needs Ulanzi Deck 2.x.y or newer", in the app and in
+`ulanzictl plugin list`. Contract versions say which features a plugin uses; `min_app` also covers app
+fixes a plugin relies on. Set both.
 
 ### Icons
 
@@ -640,9 +646,10 @@ start = 10        # whatever the plugin reads in init()
 
 Contract 1.0 is the base: timers, state, secrets, status, logging, WebSockets, TCP/TLS and HTTP.
 Contract 1.1 adds `list-items` and `[[pickers]]`. A component built against 1.0 still loads (its
-`ulanzi:plugin/core@1.0.0` imports are served by 1.1), it just has no lists. More arrives as minor
-versions (1.2, …) when the features that need them are built, and they only add, so older plugins keep
-working:
+`ulanzi:plugin/core@1.0.0` imports are served by 1.1), it just has no lists. Contract 1.2 changes no
+interface, only the manifest: plugin icons and colour, ready-made keys (`[[key_sets]]`), live looks and
+label values (`states`, `labels`, `track`), `show_if` and `min_app`. More arrives as minor versions
+(1.3, …) when the features that need them are built, and they only add, so older plugins keep working:
 
 - Interfaces for discovering devices on the network, sign-in flows, listening for connections, D-Bus
   and running programs.

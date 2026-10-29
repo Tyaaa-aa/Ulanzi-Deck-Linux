@@ -867,8 +867,8 @@ mod tests {
 
     #[test]
     fn install_rows_show_warning_and_permissions() {
-        let manifest =
-            Manifest::parse(include_str!("../../../../plugins/obs/plugin.toml")).expect("obs manifest");
+        let manifest = Manifest::parse(include_str!("../../tests/fixtures/plugin-manifests/obs.toml"))
+            .expect("obs manifest");
         let description = manifest.description.clone();
         let i = Inspected {
             manifest,

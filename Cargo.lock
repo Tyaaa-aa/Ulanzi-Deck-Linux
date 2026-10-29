@@ -3721,7 +3721,7 @@ dependencies = [
 
 [[package]]
 name = "ulanzi-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "cosmic-text",
@@ -3742,7 +3742,7 @@ dependencies = [
 
 [[package]]
 name = "ulanzi-deck"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-channel",
  "chrono",
@@ -3759,15 +3759,13 @@ dependencies = [
  "tracing-subscriber",
  "ulanzi-core",
  "ulanzi-deckd",
- "ulanzi-plugin-ha",
- "ulanzi-plugin-obs",
  "uuid",
  "zbus",
 ]
 
 [[package]]
 name = "ulanzi-deckd"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3805,7 +3803,7 @@ dependencies = [
 
 [[package]]
 name = "ulanzi-plugin"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "serde_json",
  "wit-bindgen 0.63.0",
@@ -3854,7 +3852,7 @@ dependencies = [
 
 [[package]]
 name = "ulanzi-proto"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "proptest",
  "tracing",
@@ -3863,7 +3861,7 @@ dependencies = [
 
 [[package]]
 name = "ulanzictl"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "clap",
  "futures-util",

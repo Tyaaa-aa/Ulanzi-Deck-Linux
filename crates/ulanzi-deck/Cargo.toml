@@ -87,7 +87,5 @@ serde_json.workspace = true
 image.workspace = true
 
 [dev-dependencies]
-ulanzi-plugin-obs = { path = "../../plugins/obs" }
-ulanzi-plugin-ha = { path = "../../plugins/ha" }
 ulanzi-deckd = { path = "../ulanzi-deckd" }
 tempfile.workspace = true

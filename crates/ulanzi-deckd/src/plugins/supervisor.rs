@@ -134,6 +134,7 @@ pub(super) fn read_manifest(folder: &Path, fallback: &str) -> Result<Manifest, B
     match Manifest::parse(&text) {
         Ok(m) => Ok(m),
         Err(ManifestError::Incompatible { .. }) => Err(newer()),
+        Err(ManifestError::NeedsApp(min)) => Err(bad(format!("{name} needs Ulanzi Deck {min} or newer"))),
         Err(e) => Err(bad(e.to_string())),
     }
 }

@@ -128,7 +128,36 @@ impl ShowIf {
     }
 }
 
+/// The bound a number field without `min` or `max` gets.
+pub const UNBOUNDED: f64 = 1e9;
+
 impl Field {
+    /// What a parameter's row shows when nothing is stored: the manifest default, else the first
+    /// choice of a choice field, else the number a spin row falls back to (0 within the bounds).
+    /// A newly added action stores exactly this, so what the rows show is what the key does.
+    pub fn initial_value(&self) -> Option<toml::Value> {
+        if let Some(d) = &self.default {
+            return Some(d.clone());
+        }
+        match &self.kind {
+            FieldKind::Choice => self
+                .choices
+                .first()
+                .map(|c| toml::Value::String(c.value().to_string())),
+            FieldKind::Number => {
+                let n = 0.0_f64
+                    .max(self.min.unwrap_or(-UNBOUNDED))
+                    .min(self.max.unwrap_or(UNBOUNDED));
+                Some(if self.is_integer() {
+                    toml::Value::Integer(n.round() as i64)
+                } else {
+                    toml::Value::Float(n)
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// The label, or the key when there is none.
     pub fn title(&self) -> &str {
         if self.label.is_empty() {

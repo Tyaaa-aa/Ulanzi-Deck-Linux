@@ -1,5 +1,8 @@
 //! Ulanzi Deck core: profile model, storage, migration from the Python version, key rendering.
 
+/// This app's version, compared with a plugin's `min_app`.
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod apps;
 pub mod autoswitch;
 pub mod bundle;

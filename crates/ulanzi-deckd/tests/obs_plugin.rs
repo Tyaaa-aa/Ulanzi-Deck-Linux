@@ -63,7 +63,7 @@ fn obs_manifest_is_valid() {
     assert_eq!(m.name, "OBS Studio");
     assert!(m.background);
     assert_eq!(m.actions.len(), 22);
-    assert_eq!(m.contract, "1.1");
+    assert_eq!(m.contract, "1.2");
     let pickers: Vec<_> = m.pickers.iter().map(|p| p.id.as_str()).collect();
     assert_eq!(
         pickers,

@@ -102,9 +102,9 @@ fn manifest_rejects() {
         Manifest::parse(&two),
         Err(ManifestError::Incompatible { needs }) if needs == "2.0"
     ));
-    let one_two = manifest("obs", "1.0.0", "1.2", "");
+    let one_three = manifest("obs", "1.0.0", "1.3", "");
     assert!(matches!(
-        Manifest::parse(&one_two),
+        Manifest::parse(&one_three),
         Err(ManifestError::Incompatible { .. })
     ));
     let dup = manifest(
@@ -510,13 +510,10 @@ mod typed_fields {
     #[test]
     fn shipped_manifests_parse() {
         let parse = |text: &str| Manifest::parse(text).expect("shipped manifest parses");
-        let obs = parse(include_str!("../../../plugins/obs/plugin.toml"));
-        let ha = parse(include_str!("../../../plugins/ha/plugin.toml"));
+        // The OBS and Home Assistant plugins test their own manifests in their repo.
         parse(include_str!("../../../examples/plugins/hello/plugin.toml"));
-        parse(include_str!("../../ulanzi-deckd/tests/plugins/probe/plugin.toml"));
-        assert_eq!(obs.secret_keys(), ["password"]);
-        assert_eq!(ha.secret_keys(), ["token"]);
-        assert!(obs.settings[1].is_integer());
+        let probe = parse(include_str!("../../ulanzi-deckd/tests/plugins/probe/plugin.toml"));
+        assert!(probe.secret_keys().iter().all(|k| !k.is_empty()));
     }
 }
 
@@ -638,12 +635,12 @@ fn params_cannot_use_a_multi_picker() {
 }
 
 #[test]
-fn contract_1_1_loads_and_1_2_does_not() {
-    assert_eq!(CONTRACT, (1, 1));
-    for ok in ["1.0", "1.1"] {
+fn contracts_up_to_1_2_load_and_1_3_does_not() {
+    assert_eq!(CONTRACT, (1, 2));
+    for ok in ["1.0", "1.1", "1.2"] {
         assert!(Manifest::parse(&manifest("obs", "1.0.0", ok, "")).is_ok(), "{ok}");
     }
-    for bad in ["1.2", "2.0", "0.9"] {
+    for bad in ["1.3", "2.0", "0.9"] {
         assert!(
             matches!(
                 Manifest::parse(&manifest("obs", "1.0.0", bad, "")),
@@ -738,7 +735,7 @@ fn short_names_drop_a_shared_leading_phrase() {
 
 #[test]
 fn icons_and_key_sets_are_checked() {
-    let base = "id = \"xy\"\nname = \"X\"\nversion = \"1.0.0\"\ncontract = \"1.1\"\n";
+    let base = "id = \"xy\"\nname = \"X\"\nversion = \"1.0.0\"\ncontract = \"1.2\"\n";
     let parse = |extra: &str| Manifest::parse(&format!("{base}{extra}"));
     parse("icon = \"assets/icon.png\"\nsymbolic_icon = \"assets/s.svg\"\ncolor = \"#18bcf2\"\n")
         .expect("valid");
@@ -787,4 +784,30 @@ fn icons_and_key_sets_are_checked() {
     }
     assert!(set("{ action = \"nope\" }").is_err(), "unknown action");
     assert!(set("").is_err(), "no keys");
+}
+
+#[test]
+fn contract_1_2_fields_and_min_app() {
+    let m = |contract: &str, extra: &str| {
+        Manifest::parse(&format!(
+            "id = \"xy\"\nname = \"X\"\nversion = \"1.0.0\"\ncontract = \"{contract}\"\n{extra}"
+        ))
+    };
+    let newer = "color = \"#112233\"\n[[actions]]\nid = \"go\"\nname = \"Go\"\nlabels = [{ name = \"State\", text = \"{x.s}\" }]\n";
+    // 1.1 keeps its promise: the 1.2 fields are accepted and ignored.
+    let old = m("1.1", newer).expect("1.1");
+    assert_eq!(old.color, None);
+    assert!(old.actions[0].labels.is_empty());
+    let new = m("1.2", newer).expect("1.2");
+    assert_eq!(new.color.as_deref(), Some("#112233"));
+    assert_eq!(new.actions[0].labels.len(), 1);
+    // min_app: this app or older installs; newer says which version it needs.
+    assert!(m("1.2", "min_app = \"2.0.0\"\n").is_ok());
+    assert!(m("1.2", &format!("min_app = \"{}\"\n", ulanzi_core::APP_VERSION)).is_ok());
+    assert_eq!(
+        m("1.2", "min_app = \"99.0.0\"\n"),
+        Err(ManifestError::NeedsApp("99.0.0".into()))
+    );
+    assert!(m("1.2", "min_app = \"two\"\n").is_err());
+    assert!(m("1.3", "").is_err(), "a newer contract than this app has");
 }
