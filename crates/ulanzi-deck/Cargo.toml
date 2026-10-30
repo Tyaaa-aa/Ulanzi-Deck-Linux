@@ -43,6 +43,7 @@ assets = [
 
 [package.metadata.generate-rpm]
 name = "ulanzi-deck"
+auto-req = "disabled"
 license = "MIT"
 summary = "Set up Ulanzi D200 and D200X stream decks"
 post_install_script = "udevadm control --reload-rules >/dev/null 2>&1 || :; udevadm trigger >/dev/null 2>&1 || :; update-mime-database /usr/share/mime >/dev/null 2>&1 || :"
@@ -65,9 +66,11 @@ assets = [
     { source = "../../target/pkgroot/usr/share/licenses/ulanzi-deck/LICENSE", dest = "/usr/share/licenses/ulanzi-deck/LICENSE", mode = "644" },
 ]
 
+# By library, not package name: gtk4 is called something else on openSUSE. Not detected from this
+# build, which would ask for this computer's exact versions of everything GTK uses.
 [package.metadata.generate-rpm.requires]
-gtk4 = ">= 4.16"
-libadwaita = ">= 1.6"
+"libgtk-4.so.1()(64bit)" = "*"
+"libadwaita-1.so.0()(64bit)" = "*"
 
 [dependencies]
 chrono.workspace = true
