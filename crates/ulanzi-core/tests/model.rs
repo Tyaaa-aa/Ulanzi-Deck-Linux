@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use ulanzi_core::model::*;
-use ulanzi_core::store::{ProfileLoad, Store, write_atomic};
+use ulanzi_core::store::{ProfileLoad, Store, parse_profile, write_atomic};
 use ulanzi_core::{Color, CoreError};
 use uuid::Uuid;
 
@@ -575,4 +575,85 @@ fn version_1_files_are_copied_once_before_the_upgrade() {
     let copy = kept.join("profiles").join(p.id.to_string()).join("profile.toml");
     assert_eq!(std::fs::read_to_string(copy).expect("copy"), v1);
     assert_eq!(s.keep_v1_copy().expect("again"), None, "only once");
+}
+
+/// A saved profile as a TOML table, for adding things a newer version would write.
+fn table_of(p: &Profile) -> toml::Table {
+    toml::from_str(&toml::to_string(p).expect("serialize")).expect("table")
+}
+
+fn with_macro_key(p: &Profile) -> String {
+    let mut t = table_of(p);
+    let page = t["pages"].as_array_mut().expect("pages")[0]
+        .as_table_mut()
+        .expect("page");
+    let keys = page
+        .entry("keys")
+        .or_insert(toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .expect("keys");
+    keys.insert(
+        "0".into(),
+        toml::Value::try_from(Key::default()).expect("key"),
+    );
+    keys.insert("3".into(), toml::from_str("tap = { type = \"macro\", id = 7 }").expect("key"));
+    toml::to_string(&t).expect("text")
+}
+
+#[test]
+fn an_unknown_action_on_one_key_keeps_the_rest_of_the_profile() {
+    let original = Profile::new_default("F", Model::D200X);
+    let p = parse_profile(&with_macro_key(&original)).expect("loads");
+    assert!(p.pages[0].keys.contains_key(&0));
+    assert!(!p.pages[0].keys.contains_key(&3));
+    assert_eq!(p.foreign.len(), 1);
+    assert_eq!(p.foreign[0].slot, Slot::Key(3));
+    assert_eq!(p.foreign[0].page, Some(original.pages[0].id));
+    assert!(p.foreign_at(Some(original.pages[0].id), Slot::Key(3)).is_some());
+}
+
+#[test]
+fn unknown_parts_on_a_dial_a_small_button_and_the_screen_are_kept() {
+    let original = Profile::new_default("F", Model::D200X);
+    let mut t = table_of(&original);
+    let unknown: toml::Table = toml::from_str("type = \"macro\"").expect("action");
+    let unknown = toml::Value::Table(unknown);
+    t["small_buttons"]
+        .as_table_mut()
+        .expect("small")
+        .insert("left".into(), unknown.clone());
+    t.insert("screen".into(), unknown.clone());
+    let page = t["pages"].as_array_mut().expect("pages")[0]
+        .as_table_mut()
+        .expect("page");
+    let empty = || toml::Value::Table(toml::Table::new());
+    let mut dial = toml::Table::new();
+    dial.insert("press".into(), unknown);
+    page.insert(
+        "dials".into(),
+        toml::Value::Array(vec![empty(), toml::Value::Table(dial), empty()]),
+    );
+    let p = parse_profile(&toml::to_string(&t).expect("text")).expect("loads");
+    let slots: Vec<Slot> = p.foreign.iter().map(|f| f.slot).collect();
+    assert!(slots.contains(&Slot::Small(0)), "{slots:?}");
+    assert!(slots.contains(&Slot::Dial(1)), "{slots:?}");
+    assert!(slots.contains(&Slot::Screen), "{slots:?}");
+    assert_eq!(p.small_buttons.right, Some(Action::NextPage));
+    assert_eq!(p.small_buttons.left, None);
+    assert_eq!(p.screen, ScreenConfig::default());
+}
+
+#[test]
+fn a_profile_from_2_1_0_has_no_foreign_slots() {
+    let p = Profile::new_default("F", Model::D200X);
+    let back = parse_profile(&toml::to_string(&p).expect("text")).expect("loads");
+    assert!(back.foreign.is_empty());
+    assert_eq!(back, p);
+}
+
+#[test]
+fn an_unknown_field_above_the_keys_still_fails() {
+    let mut t = table_of(&Profile::new_default("F", Model::D200X));
+    t.insert("something_new".into(), toml::Value::Integer(1));
+    assert!(parse_profile(&toml::to_string(&t).expect("text")).is_err());
 }

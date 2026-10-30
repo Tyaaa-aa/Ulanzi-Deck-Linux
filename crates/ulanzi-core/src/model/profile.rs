@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::foreign::ForeignSlot;
 use super::{Action, Background, KeyLook, MediaTakeover, Rotation, Widget};
 use crate::Color;
 
@@ -40,6 +41,12 @@ pub struct Profile {
     #[serde(default)]
     pub screen: ScreenConfig,
     pub pages: Vec<Page>,
+    /// The oldest app that reads all of this profile. Written only when a profile needs one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_app: Option<String>,
+    /// Parts from a newer version, kept as written. The store puts them back on save.
+    #[serde(skip)]
+    pub foreign: Vec<ForeignSlot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -320,6 +327,8 @@ impl Profile {
             dials: Default::default(),
             screen: ScreenConfig::default(),
             pages: vec![Page::new("Main")],
+            min_app: None,
+            foreign: Vec::new(),
         }
     }
 

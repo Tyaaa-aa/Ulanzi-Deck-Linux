@@ -176,7 +176,7 @@ impl Store {
 
     fn load_profile_at(&self, path: &Path) -> Result<Profile, CoreError> {
         let text = fs::read_to_string(path).map_err(|e| CoreError::io(path, e))?;
-        let mut p: Profile = parse_versioned(path, &text)?;
+        let mut p = parse_tolerant(path, &text)?;
         for w in p.normalize() {
             tracing::warn!("{}: {w}", path.display());
         }
@@ -248,8 +248,28 @@ impl Store {
 
 /// Parse and normalize a profile received as text (e.g. over D-Bus).
 pub fn parse_profile(text: &str) -> Result<Profile, CoreError> {
-    let mut p: Profile = parse_versioned(Path::new("<profile>"), text)?;
+    let mut p = parse_tolerant(Path::new("<profile>"), text)?;
     p.normalize();
+    Ok(p)
+}
+
+/// Parse a profile, setting aside the keys and other slots a newer version wrote.
+fn parse_tolerant(path: &Path, text: &str) -> Result<Profile, CoreError> {
+    let first = match parse_versioned(path, text) {
+        Ok(p) => return Ok(p),
+        Err(e @ CoreError::UnsupportedVersion { .. }) => return Err(e),
+        Err(e) => e,
+    };
+    let Ok(mut table) = toml::from_str::<toml::Table>(text) else {
+        return Err(first);
+    };
+    let foreign = crate::model::foreign::separate(&mut table);
+    if foreign.is_empty() {
+        return Err(first);
+    }
+    let rest = toml::to_string(&table).map_err(|e| CoreError::Serialize(e.to_string()))?;
+    let mut p: Profile = parse_versioned(path, &rest)?;
+    p.foreign = foreign;
     Ok(p)
 }
 
