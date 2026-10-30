@@ -88,6 +88,7 @@ album art, plugin store), ksni (tray), x11rb (X11 focus) and evdev (virtual keyb
 | `~/.config/ulanzi-deck/profiles/<uuid>/profile.toml` | One profile |
 | `~/.config/ulanzi-deck/profiles/<uuid>/icons/` | Pictures used by that profile |
 | `~/.local/state/ulanzi-deck/snapshots/` | Backups (`YYYYmmdd-HHMMSS-NNN-reason.ulanzideck`, newest 20 kept) |
+| `~/.config/ulanzi-deck/macros.toml` | The macro library |
 | `~/.local/state/ulanzi-deck/updates.toml` | Update check state: whether to check, the last check, the release on offer, the skipped version |
 | `~/.local/state/ulanzi-deck/onboarded` | Created when first-run setup completes |
 | `~/.local/state/ulanzi-deck/kwin-focus.js` | The KWin script used for auto-switch on Plasma |
@@ -164,6 +165,7 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). To inspect it, run
 | Sharing and backups | `PreviewBundle`, `BundleCommands`, `ImportBundle`, `ExportBundle`, `ListSnapshots`, `TakeSnapshot`, `RestoreSnapshot`, `Migrate` |
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
 | Widgets and sound | `NowPlaying`, `WeatherPlaces`, `WeatherNow`, `PlaySound` (path, device, volume) |
+| Macros | `ListMacros`, `SetMacros` (the whole library, as TOML), `MacroUsage` (id), `TryMacro` (macro, delay in ms), `StopMacros`; signal `MacrosChanged` |
 | Updates | `UpdateStatus` and `UpdateCheck` (JSON), `UpdateDownload` (reports `UpdateProgress`; returns the verified file), `UpdateApply` (file; backs up, and swaps an AppImage), `UpdateSkip` (version), `UpdateSetCheck` (on), `UpdateWhatsNewShown` (version) |
 | Plugin store | `PluginStoreIndex` (refresh; the signed index as JSON, from cache when recent), `PluginStoreInstall` (id; reports `PluginInstallProgress`), `PluginVerified` and `PluginOfficial` (ids of installed plugins that are signed, and signed as official) |
 | Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginInstallFile` / `PluginInspectFile` (the same for a `.ulanziplugin` package: an absolute path; installing needs Developer mode, inspecting does not; the package is unpacked into a hidden `.unpack-*` folder inside the plugins folder, limits 64 MiB file, 1000 entries, 64 MiB unpacked), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |

@@ -9,6 +9,7 @@ Find the symptom below and work through the steps in order. If the problem remai
 - [The service is not running](#the-service-is-not-running)
 - [Keys do not respond](#keys-do-not-respond)
 - [Keyboard Shortcut or Type Text does nothing](#keyboard-shortcut-or-type-text-does-nothing)
+- [A macro does nothing or goes wrong](#a-macro-does-nothing-or-goes-wrong)
 - [Auto-switch doesn't work](#auto-switch-doesnt-work)
 - [A plugin does not install](#a-plugin-does-not-install)
 - [An update does not install](#an-update-does-not-install)
@@ -59,6 +60,16 @@ its tray icon.
   clipboard, which requires `wl-clipboard` on Wayland or `xclip` on X11.
 - With a keyboard layout other than US, Type Text may produce different punctuation. Letters and
   digits work on most Latin layouts.
+
+## A macro does nothing or goes wrong
+
+- Macros need the same `/dev/uinput` access as Keyboard Shortcut. See
+  [above](#keyboard-shortcut-or-type-text-does-nothing).
+- "This macro no longer exists" means the macro was deleted from the library. Pick another one or
+  clear the key.
+- If a macro leaves a key held down, the editor says so under the steps. **Stop All Macros**, or
+  `ulanzictl macro stop`, releases everything.
+- A Multi Action step can't play a macro. Add the action to the macro instead.
 
 ## Auto-switch doesn't work
 

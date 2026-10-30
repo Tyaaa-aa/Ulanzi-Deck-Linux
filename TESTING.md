@@ -121,6 +121,21 @@ Start some music or a video in any player (browser tab is fine).
   it prints. Preferences → **Check Now**. → What's New shows 9.9.9 with its important note. **Skip
   This Version** hides it. With `--tamper`, **Update** says the download could not be verified.
 
+## 7a. Macros (10 min)
+
+- [ ] 7a.1 Macros → drag **New Macro** onto a key, select it, **Edit Macro**. **Record**, press Ctrl+A,
+  **Stop**. → Four steps with delays. **Use Standard Delays** → one Ctrl+A chip. Turn it off → they're
+  back with their delays. **Done**.
+- [ ] 7a.2 Click into a text field and press the key. → The text is selected.
+- [ ] 7a.3 Make a Toggle that types a letter every 500 ms. Press the key, then press again. → It
+  stops and nothing stays held.
+- [ ] 7a.4 Set Key Feedback to each option and watch the key while a slow macro plays. → It shows
+  progress and returns to normal.
+- [ ] 7a.5 Edit for This Key Only, change a step, then try each of the three choices and Undo.
+- [ ] 7a.6 **+** → **Pick a Spot…** on each monitor, then play it. → The pointer lands there.
+- [ ] 7a.7 Run a macro on https://www.atk.store/pages/mouse-keyboard-test-tool. → Downs, ups and
+  timing match.
+
 ## 8. Unplug and sleep (2 min)
 
 - [ ] 8.1 Unplug the deck. → The header says it's not connected. Plug it back in. → Within a few seconds

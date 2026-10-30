@@ -3,6 +3,24 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **Macros.** A library of macros with a recorder and an editor modelled on G Hub: key and mouse down
+  and up, text, scrolling, pointer movement, Pick a Spot, other macros and any app action, with
+  recorded or standard delays.
+- Four macro types: Play Once, While Holding, Toggle and Sequence.
+- Key feedback while a macro plays: a progress bar, a step count, a look for each step, and
+  `{macro.*}` label values.
+- A key's own copy of a macro, with Save as New Macro, Update and Use Library Version, all undoable.
+- **Stop All Macros** action, and `ulanzictl macro list` and `ulanzictl macro stop`.
+- Profiles and `.ulanzideck` files carry the macros they use, and backups hold the whole library.
+
+### Changed
+
+- Development builds keep less debug data, so a build no longer fills the disk.
+
 ## [2.1.1] - 2026-10-31
 
 ### Added

@@ -9,6 +9,7 @@ profiles, plugins and backups. For problems, see [Troubleshooting](troubleshooti
 - [The main window](#the-main-window)
 - [Keys](#keys)
 - [Actions](#actions)
+- [Macros](#macros)
 - [Dials and small buttons](#dials-and-small-buttons)
 - [The wide screen](#the-wide-screen)
 - [Profiles, pages and folders](#profiles-pages-and-folders)
@@ -129,6 +130,55 @@ Notes on specific actions:
   entity, open a searchable list (with a group filter where the plugin provides one). Some lists
   allow multiple selections; confirm with **Done**. If the list is empty or the plugin is not
   connected, you can enter the name manually.
+
+## Macros
+
+A macro is a named list of inputs that plays back in whatever app is in front. Macros live in a
+library, so you can put one on any number of keys. To run several actions from one key, use Multi
+Action instead.
+
+**Make one:** in the action list, open **Macros** and drag **New Macro** onto a key, then select the
+key and choose **Edit Macro**.
+
+**Record:** select **Record**, press your keys, then select **Stop**. Delays are recorded too.
+
+Recording works while the macro window is in front. Linux stops apps from watching what you type in
+other apps, which keeps your passwords safe. Your macro still plays back in whatever app you're using.
+
+| To record | Do this |
+|---|---|
+| Keys | Press them |
+| Mouse buttons and scrolling | Use the pad under the Record button |
+| A shortcut the desktop keeps for itself | **+** → **Key…** |
+| A spot on screen | **+** → **Pick a Spot…**, then click where the pointer should go |
+| Movement in pixels | **+** → **Move Pointer…** |
+| Text | **+** → **Text…** |
+
+**Arrange:** drag a step to move it. Select a step to edit or delete it, and a delay to change it.
+**Add Action** adds any app action as a step. **Use Standard Delays** gives every step the same delay
+and shows each press as one chip; turning it off brings back the recorded delays.
+
+**Types:**
+
+| Type | What the key does |
+|---|---|
+| Play Once | Plays once. You choose what pressing again does: stop, restart, nothing, or play again after |
+| While Holding | Repeats while the key is down. You choose whether letting go finishes the pass |
+| Toggle | Repeats until the key is pressed again |
+| Sequence | Separate steps for press, while held and release |
+
+A macro starts as soon as the key goes down. On a key that also has a When Held action, Play Once and
+Toggle wait for a tap instead. While Holding and Sequence can't share a key with a When Held action.
+
+**Key feedback:** show nothing, a progress bar, a step count, or a look of your own for each step. Any
+macro key can also use `{macro.step}`, `{macro.total}`, `{macro.percent}`, `{macro.name}` and
+`{macro.running}` in its label and in Live key looks.
+
+**One key's version:** **Edit for This Key Only** gives a key its own copy, which stops following the
+library. From there, **Save as New Macro**, **Update** and **Use Library Version** all work with Undo.
+
+**Stopping:** put **Stop All Macros** on a key to stop everything at once. Stopping always releases any
+keys and buttons a macro is holding.
 
 ## Dials and small buttons
 
