@@ -127,6 +127,7 @@ pub fn restore(store: &Store, name: &str) -> Result<SnapshotInfo, BundleError> {
             device: None,
         },
     )?;
+    store.save_macros(&snap.macros)?;
     Ok(before)
 }
 

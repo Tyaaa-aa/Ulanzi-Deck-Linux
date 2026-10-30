@@ -237,6 +237,7 @@ fn bundles_list_the_commands_they_would_run() {
         None,
     );
     let b = ulanzi_core::bundle::Bundle {
+        macros: Default::default(),
         manifest: ulanzi_core::bundle::Manifest {
             format: ulanzi_core::bundle::FORMAT,
             app_version: "2.0.0".into(),

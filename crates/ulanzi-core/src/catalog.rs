@@ -201,6 +201,14 @@ static CATALOG: &[ActionSpec] = &[
         Action::Cycle { .. }
     ),
     spec!(
+        "stop_macros",
+        "Stop All Macros",
+        System,
+        "circle-stop",
+        Action::StopMacros,
+        Action::StopMacros
+    ),
+    spec!(
         "play_pause",
         "Play / Pause",
         Media,
@@ -627,6 +635,8 @@ pub fn describe(a: &Action) -> String {
             VolumeOp::Set { percent } => format!("Volume {percent}% · {}", target_name(target)),
         },
         Action::Multi { steps } => format!("{} steps", steps.len()),
+        Action::Macro { own: Some(m), .. } => m.name.clone(),
+        Action::Macro { .. } => "Macro".into(),
         Action::Cycle { steps, .. } => match steps.len() {
             1 => "1 step".into(),
             n => format!("{n} steps, one per press"),

@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{Model, Profile, Settings, Slot};
+use crate::model::{Action, MacroLibrary, Model, Profile, Settings, Slot};
 use crate::store::{ProfileLoad, Store, parse_profile, profile_to_toml};
 
 pub const FORMAT: u32 = 1;
@@ -57,6 +57,8 @@ pub struct Bundle {
     pub manifest: Manifest,
     pub profiles: Vec<BundleProfile>,
     pub settings: Option<Settings>,
+    /// The macros its profiles use; for a backup, the whole library.
+    pub macros: MacroLibrary,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -116,6 +118,8 @@ pub struct ImportReport {
     pub warnings: Vec<String>,
     /// Profiles with parts this version kept but cannot use.
     pub foreign: Vec<ForeignNote>,
+    /// Macros in the file that differ from the library's and were left out.
+    pub macro_conflicts: Vec<String>,
 }
 
 /// How much of an imported profile this version can use.
@@ -222,10 +226,17 @@ pub fn export_with(
             })
             .collect(),
     };
+    let library = store.load_macros()?;
+    let macros = if ids.is_empty() {
+        library
+    } else {
+        library.closure(out.iter().flat_map(|bp| bp.profile.macros_used()))
+    };
     to_bytes(&Bundle {
         manifest,
         profiles: out,
         settings,
+        macros,
     })
 }
 
@@ -242,6 +253,9 @@ pub fn to_bytes(b: &Bundle) -> Result<Vec<u8>, BundleError> {
         Ok(())
     };
     put("manifest.toml", to_toml(&b.manifest)?.as_bytes())?;
+    if !b.macros.macros.is_empty() {
+        put("macros.toml", to_toml(&b.macros)?.as_bytes())?;
+    }
     if let Some(s) = &b.settings {
         let mut s = s.clone();
         s.strip_plugin_secrets(&Default::default());
@@ -270,6 +284,7 @@ enum Entry {
     Dir,
     Manifest,
     Settings,
+    Macros,
     Profile(Uuid),
     Icon(Uuid, String),
 }
@@ -285,6 +300,7 @@ fn classify(name: &str) -> Result<Entry, BundleError> {
     match name.split('/').collect::<Vec<_>>().as_slice() {
         ["manifest.toml"] => Ok(Entry::Manifest),
         ["settings.toml"] => Ok(Entry::Settings),
+        ["macros.toml"] => Ok(Entry::Macros),
         ["profiles", id, "profile.toml"] => {
             Uuid::parse_str(id).map(Entry::Profile).map_err(|_| unsafe_path())
         }
@@ -350,6 +366,7 @@ pub fn read(bytes: &[u8]) -> Result<Bundle, BundleError> {
     }
     let mut manifest = None;
     let mut settings = None;
+    let mut macros = MacroLibrary::default();
     let mut profiles: Vec<BundleProfile> = Vec::new();
     let mut icons: Vec<(Uuid, String, Vec<u8>)> = Vec::new();
     let mut read_total = 0u64;
@@ -380,6 +397,9 @@ pub fn read(bytes: &[u8]) -> Result<Bundle, BundleError> {
                         .map_err(|e| BundleError::BadProfile(e.to_string()))?,
                 );
             }
+            Entry::Macros => {
+                macros = toml::from_str(&text()?).map_err(|e| BundleError::BadProfile(e.to_string()))?;
+            }
             Entry::Profile(id) => {
                 let p = parse_profile(&text()?).map_err(|e| BundleError::BadProfile(e.to_string()))?;
                 if p.id != id {
@@ -409,6 +429,7 @@ pub fn read(bytes: &[u8]) -> Result<Bundle, BundleError> {
         manifest,
         profiles,
         settings,
+        macros,
     })
 }
 
@@ -503,12 +524,32 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
             report.imported.push(p.id);
         }
     }
+    if !bundle.macros.macros.is_empty() {
+        let mut library = store.load_macros()?;
+        for m in &bundle.macros.macros {
+            match library.macros.iter_mut().find(|l| l.id == m.id) {
+                None => library.macros.push(m.clone()),
+                Some(l) if l.same_as(m) => {}
+                Some(l) if opts.conflict == Conflict::Replace => *l = m.clone(),
+                Some(_) => report.macro_conflicts.push(m.name.clone()),
+            }
+        }
+        store.save_macros(&library)?;
+    }
     if opts.settings
         && let Some(s) = &bundle.settings
     {
         store.save_settings(s)?;
     }
     Ok(report)
+}
+
+fn action_command(a: &Action, out: &mut Vec<String>) {
+    match a {
+        Action::Command { cmd, .. } => out.push(cmd.clone()),
+        Action::LaunchApp { exec: Some(e), .. } => out.push(e.clone()),
+        _ => {}
+    }
 }
 
 /// The `cmd` and `exec` values anywhere inside a part from a newer version.
@@ -530,19 +571,20 @@ fn foreign_commands(v: &toml::Value, out: &mut Vec<String>) {
 /// Every shell command the bundle's profiles would run (Run Command, Launch App by command line,
 /// the Command Output widget), for the import preview: imported files come from other people.
 pub fn commands(b: &Bundle) -> Vec<String> {
-    use crate::model::{Action, ScreenConfig, Widget};
+    use crate::model::{ScreenConfig, Widget};
     let mut out = Vec::new();
+    for m in &b.macros.macros {
+        for a in m.actions() {
+            action_command(a, &mut out);
+        }
+    }
     for bp in &b.profiles {
         // These run once the app is updated, with no later chance to show them.
         for f in &bp.profile.foreign {
             foreign_commands(&f.raw, &mut out);
         }
         for a in bp.profile.actions() {
-            match a {
-                Action::Command { cmd, .. } => out.push(cmd.clone()),
-                Action::LaunchApp { exec: Some(e), .. } => out.push(e.clone()),
-                _ => {}
-            }
+            action_command(a, &mut out);
         }
         if let ScreenConfig::Custom { widgets, .. } = &bp.profile.screen {
             for w in widgets {

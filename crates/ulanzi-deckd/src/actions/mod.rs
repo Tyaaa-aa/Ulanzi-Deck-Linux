@@ -251,6 +251,10 @@ impl ActionRunner for Executor {
                 },
                 None => Err(plugin_error(PluginError::NotInstalled(plugin.clone()))),
             },
+            // The deck plays macros; a Multi Action or Cycle step comes through it in the player.
+            Action::Macro { .. } | Action::StopMacros => {
+                Err(ActionError::Unavailable("macros can't run from here".into()))
+            }
             Action::NextPage
             | Action::PrevPage
             | Action::GoToPage { .. }

@@ -98,6 +98,7 @@ pub fn instantiate(t: &Template) -> Result<Bundle, BundleError> {
                         keys: p.pages.iter().map(|pg| pg.keys.len() as u32).sum(),
                     }],
                 },
+                macros: Default::default(),
                 profiles: vec![BundleProfile {
                     profile: p,
                     icons: Vec::new(),

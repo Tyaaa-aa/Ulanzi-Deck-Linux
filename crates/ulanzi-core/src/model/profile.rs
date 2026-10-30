@@ -250,6 +250,7 @@ impl Profile {
             match a {
                 Action::Multi { steps } => steps.iter().for_each(|s| push(out, &s.action)),
                 Action::Cycle { steps, .. } => steps.iter().for_each(|s| push(out, &s.action)),
+                Action::Macro { own: Some(m), .. } => m.actions().for_each(|a| push(out, a)),
                 _ => {}
             }
         }
@@ -272,6 +273,26 @@ impl Profile {
             add(&mut out, hold);
         }
         out
+    }
+
+    /// The library macros this profile's keys use directly.
+    pub fn macros_used(&self) -> BTreeSet<Uuid> {
+        let mut out = BTreeSet::new();
+        for a in self.actions() {
+            match a {
+                Action::Macro { own: Some(m), .. } => out.extend(m.runs()),
+                Action::Macro { id, own: None } => {
+                    out.insert(*id);
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Whether any key uses a macro.
+    pub fn uses_macros(&self) -> bool {
+        self.actions().iter().any(|a| matches!(a, Action::Macro { .. }))
     }
 
     /// The ids of the plugins this profile's actions use: everywhere [`Profile::actions`] looks,

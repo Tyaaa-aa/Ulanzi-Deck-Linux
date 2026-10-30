@@ -89,6 +89,14 @@ pub enum Action {
         #[serde(default)]
         show: CycleShows,
     },
+    /// A macro from the library, or this key's own copy.
+    Macro {
+        id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        own: Option<Box<crate::model::Macro>>,
+    },
+    /// Stop every macro that is playing.
+    StopMacros,
     /// An action a plugin provides. Kept as written when the plugin is missing or off.
     Plugin {
         plugin: String,

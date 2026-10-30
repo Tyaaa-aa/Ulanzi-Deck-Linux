@@ -12,10 +12,13 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use crate::CoreError;
-use crate::model::{FORMAT_VERSION, Profile, Settings};
+use crate::model::{FORMAT_VERSION, MacroLibrary, Profile, Settings};
 
 pub const PROFILE_FILE: &str = "profile.toml";
 pub const SETTINGS_FILE: &str = "settings.toml";
+pub const MACROS_FILE: &str = "macros.toml";
+/// The first version that reads macros.
+const MACROS_MIN_APP: &str = "2.2.0";
 
 /// Config, state and cache roots for the app.
 #[derive(Debug, Clone)]
@@ -122,6 +125,24 @@ impl Store {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Settings::default()),
             Err(e) => Err(CoreError::io(&path, e)),
         }
+    }
+
+    /// The macro library. A missing file is an empty library.
+    pub fn load_macros(&self) -> Result<MacroLibrary, CoreError> {
+        let path = self.root.join(MACROS_FILE);
+        match fs::read_to_string(&path) {
+            Ok(text) => toml::from_str(&text).map_err(|e| CoreError::Parse {
+                path: path.clone(),
+                message: e.to_string(),
+            }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MacroLibrary::default()),
+            Err(e) => Err(CoreError::io(&path, e)),
+        }
+    }
+
+    pub fn save_macros(&self, library: &MacroLibrary) -> Result<(), CoreError> {
+        let path = self.root.join(MACROS_FILE);
+        write_atomic(&path, to_toml(library)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
     }
 
     /// The settings file.
@@ -311,6 +332,24 @@ pub fn parse_profile(text: &str) -> Result<Profile, CoreError> {
 
 /// A profile as TOML, with what a newer version wrote back in its place.
 pub fn profile_to_toml(p: &Profile) -> Result<String, CoreError> {
+    let min_app = if p.uses_macros() {
+        let existing = p.min_app.as_deref().unwrap_or(MACROS_MIN_APP);
+        let newest = [existing, MACROS_MIN_APP]
+            .into_iter()
+            .max_by_key(|v| crate::update::parse_version(v));
+        newest.map(String::from)
+    } else if p.foreign.is_empty() {
+        None
+    } else {
+        p.min_app.clone()
+    };
+    let with_version;
+    let p = if min_app == p.min_app {
+        p
+    } else {
+        with_version = Profile { min_app, ..p.clone() };
+        &with_version
+    };
     if p.foreign.is_empty() {
         return to_toml(p);
     }

@@ -57,3 +57,10 @@ tempfile = "3"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Line numbers in backtraces, not full debug data: a full build otherwise reaches over 150 GB.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

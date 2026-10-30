@@ -1337,6 +1337,7 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
         Action::Cycle { steps, show } => cycle_rows(&ed, state, path, steps, *show),
         Action::Timer { op } => timer_rows(&ed, *op),
+        Action::Macro { .. } | Action::StopMacros => Vec::new(),
         Action::NextPage
         | Action::PrevPage
         | Action::Back
