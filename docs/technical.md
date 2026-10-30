@@ -283,6 +283,8 @@ release.
 | Script | Does |
 |---|---|
 | `scripts/stage.sh PREFIX DESTDIR` | Stages the installed file tree for a given prefix (used by every package format) |
+| `scripts/build-binaries.sh` | Builds the release binaries in a Debian 13 container (`packaging/build/Dockerfile`), so they need glibc 2.39 rather than the build computer's version |
+| `scripts/fake-release.sh` | Serves a signed fake release on this computer, for trying updates with a debug build |
 | `scripts/release.sh` | Builds the tarball (with `install.sh` and `uninstall.sh`), `.deb`, `.rpm`, Arch package (`PKGBUILD` and `.SRCINFO`), AppImage, source tarball and `SHA256SUMS` in `dist/` |
 | `scripts/publish.sh` | Dry run by default; `--go` pushes, tags `v<version>` and creates the GitHub release |
 | `scripts/screenshots.sh` | Captures the README screenshots from the showcase profiles in a sandbox, with the OBS and Home Assistant plugins built from the plugins repository |

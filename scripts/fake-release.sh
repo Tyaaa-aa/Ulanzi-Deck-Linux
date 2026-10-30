@@ -51,6 +51,8 @@ json.dump({"tag_name": f"v{version}", "name": f"Ulanzi Deck {version}", "draft":
 PY
 echo "ULANZI_RELEASES_URL=http://127.0.0.1:$port/latest"
 echo "ULANZI_TEST_RELEASE_KEY=$(tail -1 "$dir/key.pub")"
-exec_dir=$dir
-cd "$exec_dir"
-python3 -I -m http.server "$port" --bind 127.0.0.1
+cd "$dir"
+python3 -I -m http.server "$port" --bind 127.0.0.1 &
+server=$!
+trap 'kill "$server" 2>/dev/null; rm -rf "$dir"' EXIT
+wait "$server"
