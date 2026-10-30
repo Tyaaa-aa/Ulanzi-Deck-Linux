@@ -282,6 +282,18 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
             }),
         );
     }
+    {
+        let ed = ed.clone();
+        item(
+            "Pick a Spot…",
+            Box::new(move || {
+                let ed2 = ed.clone();
+                crate::ui::pick_spot::open(&ed.state, move |x, y| {
+                    ed2.edit(|m| m.steps.push(new_step(MacroEvent::MoveTo { x, y }, part)));
+                });
+            }),
+        );
+    }
     item("Wait", Box::new(add(vec![MacroEvent::Wait { ms: 500 }])));
     {
         let ed = ed.clone();

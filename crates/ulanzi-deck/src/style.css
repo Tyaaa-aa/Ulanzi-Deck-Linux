@@ -354,3 +354,7 @@ row.drop-target {
 .macro-pad {
   padding: 12px;
 }
+
+.pick-spot {
+  background-color: alpha(black, 0.45);
+}
