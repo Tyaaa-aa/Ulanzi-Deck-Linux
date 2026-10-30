@@ -9,5 +9,6 @@ pub mod screen;
 pub mod sysinfo;
 pub mod transport;
 pub mod tray;
+pub mod updates;
 pub mod vars;
 pub mod widgets;

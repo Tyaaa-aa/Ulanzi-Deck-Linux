@@ -27,6 +27,8 @@ if ! git merge-base --is-ancestor origin/main HEAD; then
   exit 1
 fi
 ls dist/*.tar.gz >/dev/null 2>&1 || { say "dist/ is empty: run scripts/release.sh first."; exit 1; }
+minisign -Vm dist/SHA256SUMS -p packaging/release-key.pub >/dev/null 2>&1 ||
+  { say "dist/SHA256SUMS.minisig is missing or does not match packaging/release-key.pub: run scripts/release.sh."; exit 1; }
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && { say "Tag $tag already exists."; exit 1; }
 
 say "Publishing Ulanzi Deck $version from $branch:"
@@ -34,7 +36,7 @@ do_or_show git push origin "refs/heads/$branch:refs/heads/main"
 do_or_show git push origin "refs/heads/python-legacy:refs/heads/python-legacy"
 do_or_show git tag -a "$tag" -m "Ulanzi Deck $version"
 do_or_show git push origin "refs/tags/$tag"
-assets=(dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/PKGBUILD dist/SRCINFO dist/SHA256SUMS)
+assets=(dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/PKGBUILD dist/SRCINFO dist/SHA256SUMS dist/SHA256SUMS.minisig)
 compgen -G "dist/*.AppImage" >/dev/null && assets+=(dist/*.AppImage)
 # The repository by its origin URL, so gh needs no default repository set.
 repo=$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')

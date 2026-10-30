@@ -104,6 +104,13 @@ fi
 # 8. Checksums.
 step 8 "Checksums" "sha256sum"
 (cd "$dist" && sha256sum -- *.tar.gz *.deb *.rpm *.pkg.tar.zst *.AppImage 2>/dev/null >SHA256SUMS || true)
+# Signed with the release key, which stays on this computer and is never given to CI. The app
+# checks this signature before it installs an update. Asks for the key's password.
+if [ -f "$HOME/.minisign/ulanzi-deck-release.key" ]; then
+  minisign -S -s "$HOME/.minisign/ulanzi-deck-release.key" -m "$dist/SHA256SUMS" -t "file:SHA256SUMS"
+else
+  echo "WARNING: no release key, so SHA256SUMS is unsigned and scripts/publish.sh will refuse it."
+fi
 done_step 8 "$dist/SHA256SUMS"
 trap - ERR
 [ $board = 1 ] && sb_finish
