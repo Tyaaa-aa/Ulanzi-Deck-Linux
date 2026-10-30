@@ -13,6 +13,7 @@ use crate::state::{Change, State};
 use crate::updates::InstallFailure;
 
 const RELEASES: &str = "https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases";
+const FINISH_BY_HAND: &str = "Updated. Restart Ulanzi Deck to finish.";
 /// How often an open window asks the service what the daily check found.
 const REFRESH: Duration = Duration::from_secs(60 * 60);
 
@@ -34,7 +35,12 @@ pub fn button_text(kind: InstallKind) -> (&'static str, Option<&'static str>) {
 /// The banner's sentence: the first line of the important note when there is one.
 pub fn banner_title(release: &Release) -> String {
     match split_notes(&release.notes).0 {
-        Some(note) => note.lines().next().unwrap_or_default().to_string(),
+        Some(note) => note
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .replace("**", "")
+            .replace('`', ""),
         None => format!("Ulanzi Deck {} is available", release.version()),
     }
 }
@@ -79,7 +85,7 @@ pub fn refresh(state: &State) {
 
 /// The banner on top of the main window, kept up to date.
 pub fn banner(state: &State) -> adw::Banner {
-    let banner = adw::Banner::new("");
+    let banner = adw::Banner::builder().use_markup(false).build();
     banner.set_button_label(Some("See What's New"));
     {
         let state = state.clone();
@@ -253,84 +259,92 @@ fn dialog(state: &State, parent: &impl IsA<gtk::Widget>, status: &UpdateStatus, 
         });
     }
     {
-        let state = state.clone();
-        let (bar, note) = (bar.clone(), note.clone());
         let kind = status.kind;
-        update.connect_clicked(move |b| start(&state, b, &bar, &note, kind));
+        let run = Running {
+            state: state.clone(),
+            dialog: dialog.clone(),
+            button: update.clone(),
+            bar: bar.clone(),
+            note: note.clone(),
+        };
+        update.connect_clicked(move |_| start(run.clone(), kind));
     }
     dialog.present(Some(parent));
 }
 
-/// Show a problem under the buttons, and let the person try again.
-fn stopped(button: &gtk::Button, bar: &gtk::ProgressBar, note: &gtk::Label, message: Option<String>) {
-    bar.set_visible(false);
-    button.set_sensitive(true);
-    if let Some(m) = message {
-        button.set_label("Try Again");
-        note.set_label(&m);
-        note.set_visible(true);
+/// The widgets an update in progress changes.
+#[derive(Clone)]
+struct Running {
+    state: State,
+    dialog: adw::Dialog,
+    button: gtk::Button,
+    bar: gtk::ProgressBar,
+    note: gtk::Label,
+}
+
+impl Running {
+    /// Show a problem under the buttons, and let the person try again.
+    fn stopped(&self, message: Option<String>) {
+        self.dialog.set_can_close(true);
+        self.bar.set_visible(false);
+        self.button.set_sensitive(true);
+        if let Some(m) = message {
+            self.button.set_label("Try Again");
+            self.note.set_label(&m);
+            self.note.set_visible(true);
+        }
     }
 }
 
-fn start(state: &State, button: &gtk::Button, bar: &gtk::ProgressBar, note: &gtk::Label, kind: InstallKind) {
-    let Some(c) = state.client.borrow().clone() else {
+/// Run the update. The dialog stays open until it ends: closing it would hide the outcome.
+fn start(run: Running, kind: InstallKind) {
+    let Some(c) = run.state.client.borrow().clone() else {
         return;
     };
-    button.set_sensitive(false);
-    bar.set_fraction(0.0);
-    bar.set_visible(true);
-    BAR.with(|b| b.borrow().set(Some(bar)));
-    let (button, bar, note) = (button.clone(), bar.clone(), note.clone());
+    run.dialog.set_can_close(false);
+    run.button.set_sensitive(false);
+    run.bar.set_fraction(0.0);
+    run.bar.set_visible(true);
+    BAR.with(|b| b.borrow().set(Some(&run.bar)));
     runtime::run(
         async move {
-            let file = c.update_download().await.map_err(|e| e.to_string())?;
-            c.update_apply(&file).await.map_err(|e| e.to_string())?;
-            Ok::<_, String>(file)
+            c.update_download().await.map_err(|e| e.to_string())?;
+            c.update_apply().await.map_err(|e| e.to_string())
         },
         move |r| match r {
-            Err(e) => stopped(&button, &bar, &note, Some(e)),
-            Ok(file) => install(&button, &bar, &note, kind, PathBuf::from(file)),
+            Err(e) => run.stopped(Some(e)),
+            Ok(file) => install(run, kind, PathBuf::from(file)),
         },
     );
 }
 
-fn install(
-    button: &gtk::Button,
-    bar: &gtk::ProgressBar,
-    note: &gtk::Label,
-    kind: InstallKind,
-    file: PathBuf,
-) {
-    let (button, bar, note) = (button.clone(), bar.clone(), note.clone());
+fn install(run: Running, kind: InstallKind, file: PathBuf) {
     runtime::run(
         async move { crate::updates::install(kind, &file).await },
         move |r| match r {
-            Ok(()) => finish(&button, &bar, &note),
-            Err(InstallFailure::Cancelled) => stopped(&button, &bar, &note, None),
-            Err(InstallFailure::Failed(e)) => stopped(&button, &bar, &note, Some(e)),
+            Ok(()) => finish(run),
+            Err(InstallFailure::Cancelled) => run.stopped(None),
+            Err(InstallFailure::Failed(e)) => run.stopped(Some(e)),
         },
     );
 }
 
-fn finish(button: &gtk::Button, bar: &gtk::ProgressBar, note: &gtk::Label) {
-    let app = button
-        .root()
-        .and_downcast::<gtk::Window>()
-        .and_then(|w| w.application());
-    let (b, bar, note) = (button.clone(), bar.clone(), note.clone());
-    runtime::run(async { crate::updates::restart().await }, move |r| match r {
-        Ok(()) => {
-            if let Some(app) = app {
-                app.quit();
+fn finish(run: Running) {
+    let Some(c) = run.state.client.borrow().clone() else {
+        return run.stopped(Some(FINISH_BY_HAND.to_string()));
+    };
+    runtime::run(
+        async move { crate::updates::restart(&c).await },
+        move |r| match r {
+            Ok(()) => {
+                let app = run.state.window.borrow().as_ref().and_then(|w| w.application());
+                if let Some(app) = app {
+                    app.quit();
+                }
             }
-        }
-        Err(e) => stopped(
-            &b,
-            &bar,
-            &note,
-            Some(format!("Updated. Restart Ulanzi Deck to finish: {e}")),
-        ),
-    });
+            Err(e) => run.stopped(Some(format!("{FINISH_BY_HAND} ({e})"))),
+        },
+    );
 }
 
 /// Called for each `UpdateProgress` signal.
@@ -438,6 +452,14 @@ mod tests {
         assert_eq!(
             banner_title(&release("### Important\n\nBack up first.\nAnother line.")),
             "Back up first."
+        );
+    }
+
+    #[test]
+    fn the_banner_shows_plain_text() {
+        assert_eq!(
+            banner_title(&release("### Important\n\n**Back up** first & `restart`.")),
+            "Back up first & restart."
         );
     }
 

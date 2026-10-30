@@ -54,10 +54,13 @@ pub struct Settings {
 
 /// One plugin's entry in `settings.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct PluginEntry {
     pub enabled: bool,
     pub settings: toml::Table,
+    /// What a newer version wrote; kept so a save does not lose it.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Default for PluginEntry {
@@ -65,6 +68,7 @@ impl Default for PluginEntry {
         Self {
             enabled: true,
             settings: toml::Table::new(),
+            extra: toml::Table::new(),
         }
     }
 }
@@ -128,14 +132,17 @@ impl Default for Settings {
 }
 
 /// Firmware label style (sent with the label-style command).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LabelStyleCfg {
     pub align: String,
     pub color: u32,
     pub font_name: String,
     pub size: u32,
     pub weight: u32,
+    /// What a newer version wrote; kept so a save does not lose it.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 impl Default for LabelStyleCfg {
@@ -147,6 +154,7 @@ impl Default for LabelStyleCfg {
             font_name: d.font_name,
             size: d.size,
             weight: d.weight,
+            extra: toml::Table::new(),
         }
     }
 }

@@ -199,6 +199,57 @@ fn a_good_download_is_kept_and_reported() {
 }
 
 #[test]
+fn try_again_needs_no_network() {
+    trust_test_key();
+    let d = tempfile::tempdir().expect("tmp");
+    let st = store(&d);
+    let (base, _) = serve(files(reply(ASSET_PATH, 200, b"asset bytes")));
+    let first = download::fetch(&st, &release(&base), InstallKind::AppImage, |_, _, _| {}).expect("fetch");
+    let offline = release("http://127.0.0.1:9");
+    let again = download::fetch(&st, &offline, InstallKind::AppImage, |_, _, _| {}).expect("no network");
+    assert_eq!(again, first);
+}
+
+#[test]
+fn a_verified_file_is_rechecked_before_use() {
+    trust_test_key();
+    let d = tempfile::tempdir().expect("tmp");
+    let st = store(&d);
+    let (base, _) = serve(files(reply(ASSET_PATH, 200, b"asset bytes")));
+    let r = release(&base);
+    let path = download::fetch(&st, &r, InstallKind::AppImage, |_, _, _| {}).expect("fetch");
+    assert_eq!(
+        download::ready_file(&st, &r, InstallKind::AppImage),
+        Ok(path.clone())
+    );
+    std::fs::write(&path, b"changed afterwards").expect("write");
+    assert_eq!(
+        download::ready_file(&st, &r, InstallKind::AppImage),
+        Err(UpdateError::Unverified)
+    );
+}
+
+#[test]
+fn a_download_larger_than_promised_stops() {
+    trust_test_key();
+    let d = tempfile::tempdir().expect("tmp");
+    let st = store(&d);
+    let (base, _) = serve(files(reply(ASSET_PATH, 200, &[b'x'; 5000])));
+    let r = download::fetch(&st, &release(&base), InstallKind::AppImage, |_, done, _| {
+        assert!(done <= 11, "kept writing past the promised size: {done}");
+    });
+    assert!(r.is_err());
+}
+
+#[test]
+fn a_second_download_at_once_is_refused() {
+    let first = download::begin().expect("first");
+    assert!(download::begin().is_none());
+    drop(first);
+    assert!(download::begin().is_some());
+}
+
+#[test]
 fn an_interrupted_download_leaves_nothing_behind() {
     trust_test_key();
     let d = tempfile::tempdir().expect("tmp");

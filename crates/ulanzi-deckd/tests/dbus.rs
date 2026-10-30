@@ -870,17 +870,24 @@ trusted comment: file:SHA256SUMS
         std::env::set_var("ULANZI_RELEASES_URL", format!("{base}/latest"));
         std::env::set_var("ULANZI_TEST_RELEASE_KEY", KEY);
         std::env::set_var("APPIMAGE", &appimage);
+        // The test program itself plays the program inside the image.
+        std::env::set_var("APPDIR", "/");
     }
     let json: String = p.call("UpdateCheck", &()).await.expect("check");
     let status: ulanzi_core::update::UpdateStatus = serde_json::from_str(&json).expect("status");
     assert!(status.can_install, "{json}");
     let file: String = p.call("UpdateDownload", &()).await.expect("download");
-    p.call::<_, _, ()>("UpdateApply", &(file.as_str(),))
-        .await
-        .expect("apply");
+    let good = std::fs::read(&file).expect("read");
+    std::fs::write(&file, b"changed afterwards").expect("write");
+    assert!(
+        p.call::<_, _, String>("UpdateApply", &()).await.is_err(),
+        "the file is checked again at the point of use"
+    );
+    assert_eq!(std::fs::read(&appimage).expect("read"), b"old");
+    std::fs::write(&file, good).expect("write");
+    let applied: String = p.call("UpdateApply", &()).await.expect("apply");
+    assert_eq!(applied, file);
     assert_eq!(std::fs::read(&appimage).expect("read"), b"asset bytes");
     let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("snapshots");
     assert!(snaps.iter().any(|s| s.2 == "before-9-9-9"), "{snaps:?}");
-    let refused = p.call::<_, _, ()>("UpdateApply", &("/etc/passwd",)).await;
-    assert!(refused.is_err(), "only a downloaded update is accepted");
 }

@@ -3,6 +3,8 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -21,6 +23,8 @@ pub struct Store {
     root: PathBuf,
     state: PathBuf,
     cache: PathBuf,
+    /// Shared by every copy of this store.
+    settings_protected: Arc<AtomicBool>,
 }
 
 /// Result of reading one profile directory.
@@ -77,6 +81,7 @@ impl Store {
             root: xdg("XDG_CONFIG_HOME", ".config")?.join("ulanzi-deck"),
             state: xdg("XDG_STATE_HOME", ".local/state")?.join("ulanzi-deck"),
             cache: xdg("XDG_CACHE_HOME", ".cache")?.join("ulanzi-deck"),
+            settings_protected: Arc::default(),
         })
     }
 
@@ -85,6 +90,7 @@ impl Store {
             root: root.into(),
             state: state.into(),
             cache: cache.into(),
+            settings_protected: Arc::default(),
         }
     }
 
@@ -118,7 +124,27 @@ impl Store {
         }
     }
 
+    /// The settings file.
+    pub fn settings_path(&self) -> PathBuf {
+        self.root.join(SETTINGS_FILE)
+    }
+
+    /// Never write the settings file again in this run: it could not be read, so saving would
+    /// replace what is in it with defaults.
+    pub fn protect_settings(&self) {
+        self.settings_protected.store(true, Ordering::Relaxed);
+    }
+
+    pub fn settings_protected(&self) -> bool {
+        self.settings_protected.load(Ordering::Relaxed)
+    }
+
     pub fn save_settings(&self, s: &Settings) -> Result<(), CoreError> {
+        if self.settings_protected() {
+            return Err(CoreError::Serialize(
+                "settings.toml could not be read, so it was left as it is".into(),
+            ));
+        }
         let path = self.root.join(SETTINGS_FILE);
         // Private: it can hold the OBS password.
         write_atomic_mode(&path, to_toml(s)?.as_bytes(), 0o600).map_err(|e| CoreError::io(&path, e))
@@ -288,7 +314,9 @@ pub fn profile_to_toml(p: &Profile) -> Result<String, CoreError> {
     if p.foreign.is_empty() {
         return to_toml(p);
     }
-    let mut table = toml::Table::try_from(p).map_err(|e| CoreError::Serialize(e.to_string()))?;
+    // Through text: a table converted directly turns dates into private keys.
+    let mut table: toml::Table =
+        toml::from_str(&to_toml(p)?).map_err(|e| CoreError::Serialize(e.to_string()))?;
     crate::model::foreign::restore(&mut table, &p.foreign);
     to_toml(&table)
 }

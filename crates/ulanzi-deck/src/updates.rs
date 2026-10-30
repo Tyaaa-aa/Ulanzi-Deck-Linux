@@ -1,7 +1,7 @@
 //! Installing a downloaded update. The window does this because it has the password prompt;
 //! downloading and checking the file are the service's.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ulanzi_core::update::InstallKind;
 
@@ -111,22 +111,54 @@ pub fn relaunch_command(exe: &str) -> Vec<String> {
     ]
 }
 
-/// Restart the service, then this window, on the installed version.
-pub async fn restart() -> std::io::Result<()> {
+/// The program to start again. After a package update Linux reports this program as
+/// `… (deleted)`, and an AppImage's own file is what the menu runs. `APPIMAGE` counts only with this
+/// program inside the mounted image: a window started from another AppImage's terminal inherits it.
+fn program_to_start(exe: &Path, appimage: Option<&Path>, appdir: Option<&Path>) -> PathBuf {
+    match (appimage, appdir) {
+        (Some(image), Some(dir)) if exe.starts_with(dir) => image.to_path_buf(),
+        _ => {
+            let text = exe.to_string_lossy();
+            PathBuf::from(text.strip_suffix(" (deleted)").unwrap_or(&text))
+        }
+    }
+}
+
+async fn restart_unit() -> bool {
     let systemctl = |args: &'static [&'static str]| {
         tokio::process::Command::new("systemctl")
             .arg("--user")
             .args(args)
             .status()
     };
-    systemctl(&["daemon-reload"]).await?;
-    systemctl(&["restart", "ulanzi-deckd"]).await?;
-    let exe = match std::env::var_os("APPIMAGE") {
-        Some(a) => std::path::PathBuf::from(a),
-        None => std::env::current_exe()?,
-    };
+    let _ = systemctl(&["daemon-reload"]).await;
+    systemctl(&["restart", "ulanzi-deckd"])
+        .await
+        .is_ok_and(|s| s.success())
+}
+
+/// Restart the service, then start this window again: the caller quits it on success. An AppImage
+/// that was never installed has no systemd unit, so its service is told to stop, and the new window
+/// starts the new one.
+pub async fn restart(client: &crate::client::Client) -> Result<(), String> {
+    if !restart_unit().await {
+        client.quit_service().await.map_err(|e| e.to_string())?;
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let (image, dir) = (std::env::var_os("APPIMAGE"), std::env::var_os("APPDIR"));
+    let exe = program_to_start(
+        &exe,
+        image.as_deref().map(Path::new),
+        dir.as_deref().map(Path::new),
+    );
+    if !exe.exists() {
+        return Err(format!("{} is missing", exe.display()));
+    }
     let args = relaunch_command(&exe.to_string_lossy());
-    std::process::Command::new(&args[0]).args(&args[1..]).spawn()?;
+    std::process::Command::new(&args[0])
+        .args(&args[1..])
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -198,6 +230,28 @@ mod tests {
             outcome(None, ""),
             Err(InstallFailure::Failed("The install failed.".into()))
         );
+    }
+
+    #[test]
+    fn a_replaced_program_is_found_again() {
+        let none = None;
+        assert_eq!(
+            program_to_start(Path::new("/usr/bin/ulanzi-deck (deleted)"), none, none),
+            Path::new("/usr/bin/ulanzi-deck")
+        );
+        assert_eq!(
+            program_to_start(Path::new("/usr/bin/ulanzi-deck"), none, none),
+            Path::new("/usr/bin/ulanzi-deck")
+        );
+    }
+
+    #[test]
+    fn an_appimage_restarts_itself_but_never_another_one() {
+        let (image, dir) = (Path::new("/home/a/Ulanzi.AppImage"), Path::new("/tmp/.mount_u"));
+        let inside = Path::new("/tmp/.mount_u/usr/bin/ulanzi-deck");
+        assert_eq!(program_to_start(inside, Some(image), Some(dir)), image);
+        let outside = Path::new("/usr/bin/ulanzi-deck");
+        assert_eq!(program_to_start(outside, Some(image), Some(dir)), outside);
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ulanzi_core::store::Store;
@@ -14,11 +15,14 @@ use super::{UpdateError, verify};
 
 /// Largest `SHA256SUMS` or signature read.
 const MAX_SMALL_FILE: u64 = 64 * 1024;
+const SUMS: &str = "SHA256SUMS";
+const SIGNATURE: &str = "SHA256SUMS.minisig";
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_recv_body(Some(Duration::from_secs(60)))
+        // Per read: a slow connection must be able to finish a large file.
+        .timeout_per_read(Some(Duration::from_secs(60)))
         .build()
         .into()
 }
@@ -60,7 +64,8 @@ fn large_file(
         .map_err(|_| UpdateError::Offline)?
         .into_body()
         .into_with_config()
-        .limit(u64::MAX)
+        // One byte over, so a file of exactly the promised size is not cut off.
+        .limit(total.saturating_add(1))
         .reader();
     let mut out = fs::File::create(path).map_err(cut)?;
     let mut buf = vec![0u8; 64 * 1024];
@@ -68,6 +73,7 @@ fn large_file(
     loop {
         match reader.read(&mut buf).map_err(cut)? {
             0 => break,
+            n if done + n as u64 > total => return Err(UpdateError::Offline),
             n => {
                 out.write_all(&buf[..n]).map_err(cut)?;
                 done += n as u64;
@@ -82,35 +88,74 @@ fn large_file(
     Ok(())
 }
 
+fn asset_for(release: &Release, kind: InstallKind) -> Result<String, UpdateError> {
+    update::asset_name(kind, release.version(), std::env::consts::ARCH)
+        .ok_or_else(|| UpdateError::Failed("This install can't update itself.".into()))
+}
+
+fn folder(store: &Store, release: &Release) -> PathBuf {
+    store.cache_dir().join("updates").join(release.version())
+}
+
+/// The downloaded file for this release, checked again now. Needs no network.
+pub fn ready_file(store: &Store, release: &Release, kind: InstallKind) -> Result<PathBuf, UpdateError> {
+    let name = asset_for(release, kind)?;
+    let dir = folder(store, release);
+    let sums = fs::read(dir.join(SUMS)).map_err(|_| UpdateError::Unverified)?;
+    let signature = fs::read_to_string(dir.join(SIGNATURE)).map_err(|_| UpdateError::Unverified)?;
+    let path = dir.join(&name);
+    verify::check(&sums, &signature, &name, &path)?;
+    Ok(path)
+}
+
+/// Marks that a download is running; dropping it ends that.
+#[derive(Debug)]
+pub struct Downloading;
+
+static BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Claim the one download allowed at a time: two would write the same files.
+pub fn begin() -> Option<Downloading> {
+    (!BUSY.swap(true, Ordering::SeqCst)).then_some(Downloading)
+}
+
+impl Drop for Downloading {
+    fn drop(&mut self) {
+        BUSY.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Download and verify the file for an install of `kind`. Sends `downloading`, `verifying` and
-/// `ready`; the folder is removed on any failure.
+/// `ready`. A file from an earlier try that failed to install needs no network; on any failure the
+/// folder is removed.
 pub fn fetch(
     store: &Store,
     release: &Release,
     kind: InstallKind,
     progress: impl Fn(&str, u64, u64),
 ) -> Result<PathBuf, UpdateError> {
-    let name = update::asset_name(kind, release.version(), std::env::consts::ARCH)
-        .ok_or_else(|| UpdateError::Failed("This install can't update itself.".into()))?;
+    let name = asset_for(release, kind)?;
     let total = release.asset(&name).ok_or(UpdateError::Unverified)?.size;
-    let dir = store.cache_dir().join("updates").join(release.version());
+    if let Ok(path) = ready_file(store, release, kind) {
+        progress("ready", total, total);
+        return Ok(path);
+    }
+    let dir = folder(store, release);
     let run = || -> Result<PathBuf, UpdateError> {
         let agent = agent();
-        let sums = small_file(&agent, url_of(release, "SHA256SUMS")?)?;
-        let signature = small_file(&agent, url_of(release, "SHA256SUMS.minisig")?)?;
+        let failed = |e: std::io::Error| UpdateError::Failed(e.to_string());
+        let sums = small_file(&agent, url_of(release, SUMS)?)?;
+        let signature = small_file(&agent, url_of(release, SIGNATURE)?)?;
+        fs::create_dir_all(&dir).map_err(failed)?;
+        fs::write(dir.join(SUMS), &sums).map_err(failed)?;
+        fs::write(dir.join(SIGNATURE), &signature).map_err(failed)?;
         let signature = String::from_utf8(signature).map_err(|_| UpdateError::Unverified)?;
-        let path = dir.join(&name);
-        // A file from an earlier try that failed to install needs no second download.
-        if verify::check(&sums, &signature, &name, &path).is_ok() {
-            progress("ready", total, total);
-            return Ok(path);
-        }
-        fs::create_dir_all(&dir).map_err(|e| UpdateError::Failed(e.to_string()))?;
         let part = dir.join(format!("{name}.part"));
         large_file(&agent, url_of(release, &name)?, &part, total, &progress)?;
         progress("verifying", total, total);
         verify::check(&sums, &signature, &name, &part)?;
-        fs::rename(&part, &path).map_err(|e| UpdateError::Failed(e.to_string()))?;
+        let path = dir.join(&name);
+        fs::rename(&part, &path).map_err(failed)?;
         progress("ready", total, total);
         Ok(path)
     };
@@ -139,6 +184,8 @@ pub fn swap_appimage(new_file: &Path, target: &Path) -> Result<(), UpdateError> 
     let swap = || -> std::io::Result<()> {
         fs::copy(new_file, &next)?;
         fs::set_permissions(&next, fs::Permissions::from_mode(0o755))?;
+        // On disk before the swap: a power cut must not leave half a program.
+        fs::File::open(&next)?.sync_all()?;
         fs::rename(&next, &real)
     };
     swap().map_err(|e| {

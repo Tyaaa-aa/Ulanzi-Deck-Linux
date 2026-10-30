@@ -752,3 +752,65 @@ fn unknown_settings_survive_a_save() {
     );
     assert_eq!(back, settings);
 }
+
+#[test]
+fn dates_in_real_keys_survive_next_to_a_foreign_key() {
+    let mut p = Profile::new_default("F", Model::D200X);
+    let params: toml::Table = toml::from_str("when = 2026-10-31T10:00:00Z").expect("params");
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(Action::Plugin {
+                plugin: "x".into(),
+                action: "y".into(),
+                params: params.clone(),
+            }),
+            ..Key::default()
+        },
+    );
+    p.foreign.push(ForeignSlot {
+        page: Some(p.pages[0].id),
+        slot: Slot::Key(3),
+        raw: toml::Value::Table(toml::from_str("kind = \"new\"").expect("raw")),
+    });
+    let text = ulanzi_core::store::profile_to_toml(&p).expect("toml");
+    assert!(!text.contains("__toml_private"), "{text}");
+    let back = parse_profile(&text).expect("parse");
+    assert_eq!(back.pages[0].keys[&0].tap, p.pages[0].keys[&0].tap);
+}
+
+#[test]
+fn unknown_nested_settings_survive_a_save() {
+    let (_d, s) = store();
+    let mut settings = s.load_settings().expect("load");
+    settings.plugins.insert("x".into(), PluginEntry::default());
+    s.save_settings(&settings).expect("save");
+    let path = s.settings_path();
+    let mut t: toml::Table = toml::from_str(&std::fs::read_to_string(&path).expect("read")).expect("toml");
+    t["label_style"]
+        .as_table_mut()
+        .expect("label")
+        .insert("shadow".into(), toml::Value::Boolean(true));
+    t["plugins"]["x"]
+        .as_table_mut()
+        .expect("plugin")
+        .insert("rank".into(), toml::Value::Integer(4));
+    std::fs::write(&path, toml::to_string(&t).expect("text")).expect("write");
+    let loaded = s.load_settings().expect("loads");
+    s.save_settings(&loaded).expect("save again");
+    let text = std::fs::read_to_string(&path).expect("read");
+    assert!(text.contains("shadow"), "{text}");
+    assert!(text.contains("rank"), "{text}");
+}
+
+#[test]
+fn settings_that_failed_to_load_are_never_overwritten() {
+    let (_d, s) = store();
+    s.save_settings(&Settings::default()).expect("save");
+    let path = s.settings_path();
+    std::fs::write(&path, "version = 3\nsecret = \"keep me\"\n").expect("write");
+    assert!(s.load_settings().is_err());
+    s.protect_settings();
+    assert!(s.save_settings(&Settings::default()).is_err());
+    assert!(std::fs::read_to_string(&path).expect("read").contains("keep me"));
+}

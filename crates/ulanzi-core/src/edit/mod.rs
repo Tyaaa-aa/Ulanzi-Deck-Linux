@@ -421,7 +421,9 @@ impl Editor {
         };
         self.edit(|p, page| {
             for &i in keys.iter().filter(|i| **i < KEYS) {
-                p.pages[page].keys.entry(i).or_default().look = look.clone();
+                if !taken(p, page, Slot::Key(i)) {
+                    p.pages[page].keys.entry(i).or_default().look = look.clone();
+                }
             }
         });
     }

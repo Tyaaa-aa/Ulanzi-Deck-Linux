@@ -522,3 +522,12 @@ fn removing_a_page_removes_its_foreign_slots() {
     e.remove_page(0);
     assert!(e.profile().foreign.is_empty());
 }
+
+#[test]
+fn pasting_a_style_onto_a_foreign_key_is_refused() {
+    let mut e = Editor::new(with_foreign());
+    e.set_field(&[2], Field::Background(Color::rgb(1, 2, 3)));
+    e.copy_style(2);
+    e.paste_style(&[3]);
+    assert!(!e.profile().pages[0].keys.contains_key(&3));
+}

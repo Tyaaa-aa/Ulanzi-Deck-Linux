@@ -1238,6 +1238,7 @@ async fn changed_settings_reach_a_running_plugin() {
         PluginEntry {
             enabled: true,
             settings: table,
+            ..PluginEntry::default()
         },
     );
     h.host.apply_settings(&settings).await;

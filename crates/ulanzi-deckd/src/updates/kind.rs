@@ -16,9 +16,11 @@ pub fn detect() -> InstallKind {
             .ok()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
+        let appdir = std::env::var_os("APPDIR").map(std::path::PathBuf::from);
+        let image = std::env::var_os("APPIMAGE").is_some();
         classify(
             &exe,
-            std::env::var_os("APPIMAGE").is_some(),
+            runs_from_appimage(&exe, image, appdir.as_deref()),
             &manifest,
             &|tool, args| {
                 Command::new(tool)
@@ -31,6 +33,12 @@ pub fn detect() -> InstallKind {
             },
         )
     })
+}
+
+/// `APPIMAGE` alone is not enough: a program started from another AppImage's terminal inherits it,
+/// and that file must never be replaced.
+pub fn runs_from_appimage(exe: &Path, appimage: bool, appdir: Option<&Path>) -> bool {
+    appimage && appdir.is_some_and(|d| exe.starts_with(d))
 }
 
 /// `owned` says whether a package manager command claims this program. `manifest` is the list of
@@ -100,6 +108,20 @@ mod tests {
         let exe = Path::new("/usr/local/bin/ulanzi-deckd");
         let list = "mode=system\n/usr/local/bin/ulanzi-deckd\n";
         assert_eq!(classify(exe, false, list, &nobody), InstallKind::Other);
+    }
+
+    #[test]
+    fn another_apps_appimage_setting_does_not_count() {
+        let inside = Path::new("/tmp/.mount_u/usr/bin/ulanzi-deckd");
+        let outside = Path::new("/usr/bin/ulanzi-deckd");
+        let dir = Some(Path::new("/tmp/.mount_u"));
+        assert!(runs_from_appimage(inside, true, dir));
+        assert!(
+            !runs_from_appimage(outside, true, dir),
+            "started from Cursor's terminal"
+        );
+        assert!(!runs_from_appimage(inside, false, dir));
+        assert!(!runs_from_appimage(inside, true, None));
     }
 
     #[test]

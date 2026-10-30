@@ -51,6 +51,8 @@ pub struct DeckService {
     plugins_dir: Option<PathBuf>,
     /// Held while settings are read, changed and saved, so two writers cannot lose each other's change.
     settings_lock: tokio::sync::Mutex<()>,
+    /// Stops the service.
+    quit: Option<std::sync::Arc<tokio::sync::Notify>>,
 }
 
 impl DeckService {
@@ -63,7 +65,14 @@ impl DeckService {
             plugins: None,
             plugins_dir: None,
             settings_lock: tokio::sync::Mutex::new(()),
+            quit: None,
         }
+    }
+
+    /// Let `Quit` stop the service through `quit`.
+    pub fn with_quit(mut self, quit: std::sync::Arc<tokio::sync::Notify>) -> DeckService {
+        self.quit = Some(quit);
+        self
     }
 
     /// Give the service the plugin host.
@@ -560,6 +569,13 @@ impl DeckService {
         let mut s = self
             .store
             .load_settings()
+            .or_else(|e| {
+                if self.store.settings_protected() {
+                    Ok(Settings::default())
+                } else {
+                    Err(e)
+                }
+            })
             .map_err(|e| DeckError::Unavailable(e.to_string()))?;
         let fields = self.secret_fields();
         for (id, entry) in &mut s.plugins {
@@ -795,6 +811,8 @@ impl DeckService {
 
     /// Download and verify the offered release, sending `UpdateProgress`; returns the file.
     async fn update_download(&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) -> Result<String> {
+        let _running = updates::download::begin()
+            .ok_or_else(|| DeckError::Invalid("an update is already downloading".into()))?;
         let src = Source::real();
         let store = self.store.clone();
         let release = updates::check::status(&store, &src)
@@ -833,25 +851,34 @@ impl DeckService {
         Ok(path.to_string_lossy().into_owned())
     }
 
-    /// Back up, and for an AppImage put the downloaded `file` in place. Other kinds are installed
-    /// by the window, which has the password prompt.
-    async fn update_apply(&self, file: String) -> Result<()> {
+    /// Back up, check the downloaded file again, and for an AppImage put it in place. Returns the
+    /// file: other kinds are installed by the window, which has the password prompt.
+    async fn update_apply(&self) -> Result<String> {
         let src = Source::real();
         let release = updates::check::status(&self.store, &src)
             .offered
             .ok_or_else(|| DeckError::Invalid("no update is on offer".into()))?;
-        let downloads = self.store.cache_dir().join("updates").join(release.version());
-        let file = std::path::PathBuf::from(file);
-        if !file.starts_with(&downloads) {
-            return Err(DeckError::Invalid("that is not a downloaded update".into()));
-        }
+        let file = updates::download::ready_file(&self.store, &release, src.kind).map_err(update_err)?;
         self.snap(&format!("before-{}", release.version()))?;
         if src.kind == ulanzi_core::update::InstallKind::AppImage {
             let target = std::env::var_os("APPIMAGE")
                 .ok_or_else(|| DeckError::Invalid("this is not running from an AppImage".into()))?;
             updates::download::swap_appimage(&file, std::path::Path::new(&target)).map_err(update_err)?;
         }
-        Ok(())
+        Ok(file.to_string_lossy().into_owned())
+    }
+
+    /// Stop the service, for a restart where no systemd unit runs it.
+    async fn quit(&self) -> Result<()> {
+        match &self.quit {
+            Some(q) => {
+                q.notify_one();
+                Ok(())
+            }
+            None => Err(DeckError::Unavailable(
+                "this service cannot be stopped from here".into(),
+            )),
+        }
     }
 
     /// Install plugin `id` from the store (signed: no Developer mode needed); returns its id. Sends

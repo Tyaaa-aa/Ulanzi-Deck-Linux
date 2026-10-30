@@ -537,9 +537,14 @@ impl Client {
         Ok(self.inner.proxy.call("UpdateDownload", &()).await?)
     }
 
-    /// Back up, and for an AppImage put `file` in place.
-    pub async fn update_apply(&self, file: &str) -> Result<()> {
-        Ok(self.inner.proxy.call("UpdateApply", &(file,)).await?)
+    /// Back up, check the download again, and for an AppImage put it in place; returns the file.
+    pub async fn update_apply(&self) -> Result<String> {
+        Ok(self.inner.proxy.call("UpdateApply", &()).await?)
+    }
+
+    /// Stop the service, for a restart where no systemd unit runs it.
+    pub async fn quit_service(&self) -> Result<()> {
+        Ok(self.inner.proxy.call("Quit", &()).await?)
     }
 
     pub async fn update_skip(&self, version: &str) -> Result<()> {

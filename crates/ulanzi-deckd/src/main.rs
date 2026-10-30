@@ -70,13 +70,16 @@ async fn main() -> ExitCode {
         }
     };
 
+    let quit = Arc::new(tokio::sync::Notify::new());
     // Calls that arrive before the deck starts wait in this channel.
     let (tx, rx) = mpsc::channel(256);
     if let Err(e) = conn
         .object_server()
         .at(
             OBJECT_PATH,
-            DeckService::new(tx.clone(), store.clone()).with_plugins_dir(plugins_dir(&store)),
+            DeckService::new(tx.clone(), store.clone())
+                .with_plugins_dir(plugins_dir(&store))
+                .with_quit(quit.clone()),
         )
         .await
     {
@@ -116,7 +119,8 @@ async fn main() -> ExitCode {
         tracing::warn!("daily backup failed: {e}");
     }
     let settings = store.load_settings().unwrap_or_else(|e| {
-        tracing::error!("settings unreadable, using defaults: {e}");
+        tracing::error!("settings unreadable, using defaults and leaving the file alone: {e}");
+        store.protect_settings();
         Default::default()
     });
     ulanzi_deckd::actions::audio::set_sound_volume(settings.sound_volume);
@@ -146,7 +150,6 @@ async fn main() -> ExitCode {
     let events = start_deck(store.clone(), settings, executor, rx);
 
     tokio::spawn(forward_signals(conn.clone(), events.resubscribe()));
-    let quit = Arc::new(tokio::sync::Notify::new());
     tokio::spawn(ulanzi_deckd::tray::run(
         tx.clone(),
         events.resubscribe(),
