@@ -500,7 +500,17 @@ impl DeckService {
             self.send(DeckMsg::SwitchProfile(*id)).await?;
         }
         let _ = Self::profiles_changed(&emitter).await;
-        let notes = r.foreign.iter().map(|n| n.sentence()).collect();
+        let _ = Self::macros_changed(&emitter).await;
+        let notes = r
+            .foreign
+            .iter()
+            .map(|n| n.sentence())
+            .chain(
+                r.macro_conflicts
+                    .iter()
+                    .map(|m| format!("Kept your {m}: the file has a different version")),
+            )
+            .collect();
         Ok((
             touched.iter().map(Uuid::to_string).collect(),
             r.warnings,
@@ -539,6 +549,7 @@ impl DeckService {
     ) -> Result<String> {
         let before = ulanzi_core::snapshot::restore(&self.store, &name)
             .map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let _ = Self::macros_changed(&emitter).await;
         let ids: Vec<Uuid> = self
             .store
             .list_profiles()

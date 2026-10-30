@@ -244,3 +244,170 @@ fn backups_hold_the_library_and_restore_it() {
     snapshot::restore(&s, &snap.name).expect("restore");
     assert_eq!(s.load_macros().expect("load"), lib);
 }
+
+#[test]
+fn an_unreadable_library_is_never_overwritten() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    s.save_macros(&MacroLibrary {
+        macros: vec![Macro::new("Kept")],
+    })
+    .expect("save");
+    let path = d.path().join("c").join("macros.toml");
+    let broken = "not = [valid\n";
+    std::fs::write(&path, broken).expect("write");
+    assert!(s.load_macros().is_err());
+    assert!(s.save_macros(&MacroLibrary::default()).is_err());
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), broken);
+    std::fs::remove_file(&path).expect("remove");
+    assert!(s.load_macros().is_ok(), "a good read lifts it");
+    assert!(s.save_macros(&MacroLibrary::default()).is_ok());
+}
+
+#[test]
+fn backups_still_work_with_an_unreadable_library_and_leave_it_alone() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    s.save_profile(&Profile::new_default("P", Model::D200X))
+        .expect("save");
+    s.save_macros(&MacroLibrary {
+        macros: vec![Macro::new("Kept")],
+    })
+    .expect("save");
+    let path = d.path().join("c").join("macros.toml");
+    std::fs::write(&path, "not = [valid\n").expect("write");
+    let snap = snapshot::take(&s, "manual").expect("snapshot");
+    snapshot::restore(&s, &snap.name).expect("restore");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), "not = [valid\n");
+}
+
+#[test]
+fn commands_nested_in_a_macro_are_in_the_preview() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let cmd = Action::Command {
+        cmd: "hidden".into(),
+        terminal: false,
+    };
+    let mut m = Macro::new("Wrapped");
+    m.steps = vec![step(
+        MacroEvent::Action {
+            action: Action::Multi {
+                steps: vec![Step {
+                    action: cmd,
+                    delay_ms: 0,
+                }],
+            },
+        },
+        0,
+    )];
+    let p = with_macro_key(m.id, None);
+    s.save_profile(&p).expect("save");
+    s.save_macros(&MacroLibrary { macros: vec![m] }).expect("macros");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    assert!(commands(&b).contains(&"hidden".to_string()));
+}
+
+#[test]
+fn the_preview_says_what_a_macro_presses_and_types() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let mut m = Macro::new("Sneaky");
+    m.steps = vec![
+        step(down("super"), 0),
+        step(
+            MacroEvent::TypeText {
+                text: "rm -rf x".into(),
+            },
+            0,
+        ),
+    ];
+    let p = with_macro_key(m.id, None);
+    s.save_profile(&p).expect("save");
+    s.save_macros(&MacroLibrary { macros: vec![m] }).expect("macros");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let found = commands(&b);
+    assert!(
+        found
+            .iter()
+            .any(|c| c.contains("Sneaky") && c.contains("rm -rf x")),
+        "{found:?}"
+    );
+    assert!(
+        found.iter().any(|c| c.contains("Sneaky") && c.contains("super")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_differing_macro_is_named_before_import() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let m = Macro::new("Mine");
+    let p = with_macro_key(m.id, None);
+    s.save_profile(&p).expect("save");
+    s.save_macros(&MacroLibrary {
+        macros: vec![m.clone()],
+    })
+    .expect("macros");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let e = tempfile::tempdir().expect("tmp");
+    let there = store(e.path());
+    let mut changed = m;
+    changed.name = "Theirs".into();
+    there
+        .save_macros(&MacroLibrary {
+            macros: vec![changed],
+        })
+        .expect("macros");
+    assert_eq!(
+        ulanzi_core::bundle::macro_conflicts(&there, &b),
+        vec!["Mine".to_string()]
+    );
+}
+
+#[test]
+fn replacing_a_macro_on_import_keeps_the_old_version() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let m = Macro::new("New version");
+    let p = with_macro_key(m.id, None);
+    s.save_profile(&p).expect("save");
+    s.save_macros(&MacroLibrary {
+        macros: vec![m.clone()],
+    })
+    .expect("macros");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let e = tempfile::tempdir().expect("tmp");
+    let there = store(e.path());
+    let mut old = m.clone();
+    old.name = "Old version".into();
+    there
+        .save_macros(&MacroLibrary { macros: vec![old] })
+        .expect("macros");
+    let opts = ImportOptions {
+        conflict: Conflict::Replace,
+        ..keep_both()
+    };
+    import(&there, &b, &opts).expect("import");
+    let lib = there.load_macros().expect("load");
+    let now = lib.get(m.id).expect("macro");
+    assert_eq!(now.name, "New version");
+    assert_eq!(
+        now.previous.as_ref().map(|p| p.name.as_str()),
+        Some("Old version")
+    );
+}
+
+#[test]
+fn stop_all_macros_needs_2_2_too() {
+    let mut p = Profile::new_default("P", Model::D200X);
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(Action::StopMacros),
+            ..Key::default()
+        },
+    );
+    assert!(profile_to_toml(&p).expect("toml").contains("min_app"));
+}

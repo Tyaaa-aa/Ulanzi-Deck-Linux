@@ -8,7 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{Action, MacroLibrary, Model, Profile, Settings, Slot};
+use crate::model::{Action, Macro, MacroEvent, MacroLibrary, Model, Profile, Settings, Slot};
 use crate::store::{ProfileLoad, Store, parse_profile, profile_to_toml};
 
 pub const FORMAT: u32 = 1;
@@ -226,7 +226,11 @@ pub fn export_with(
             })
             .collect(),
     };
-    let library = store.load_macros()?;
+    // A backup must not fail over this file: it stays as it is on disk.
+    let library = store.load_macros().unwrap_or_else(|e| {
+        tracing::error!("macros unreadable: {e}");
+        MacroLibrary::default()
+    });
     let macros = if ids.is_empty() {
         library
     } else {
@@ -530,7 +534,11 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
             match library.macros.iter_mut().find(|l| l.id == m.id) {
                 None => library.macros.push(m.clone()),
                 Some(l) if l.same_as(m) => {}
-                Some(l) if opts.conflict == Conflict::Replace => *l = m.clone(),
+                Some(l) if opts.conflict == Conflict::Replace => {
+                    let mut old = std::mem::replace(l, m.clone());
+                    old.previous = None;
+                    l.previous = Some(Box::new(old));
+                }
                 Some(_) => report.macro_conflicts.push(m.name.clone()),
             }
         }
@@ -548,8 +556,38 @@ fn action_command(a: &Action, out: &mut Vec<String>) {
     match a {
         Action::Command { cmd, .. } => out.push(cmd.clone()),
         Action::LaunchApp { exec: Some(e), .. } => out.push(e.clone()),
+        Action::Multi { steps } => steps.iter().for_each(|s| action_command(&s.action, out)),
+        Action::Cycle { steps, .. } => steps.iter().for_each(|s| action_command(&s.action, out)),
+        Action::Macro { own: Some(m), .. } => macro_preview(m, out),
         _ => {}
     }
+}
+
+/// What a macro from a file would do: a macro can press and type as much as a command can run.
+fn macro_preview(m: &Macro, out: &mut Vec<String>) {
+    let mut pressed: Vec<&str> = Vec::new();
+    for s in &m.steps {
+        match &s.event {
+            MacroEvent::KeyDown { key } if !pressed.contains(&key.as_str()) => pressed.push(key),
+            MacroEvent::TypeText { text } => out.push(format!("Macro {}: types {text}", m.name)),
+            MacroEvent::Action { action } => action_command(action, out),
+            _ => {}
+        }
+    }
+    if !pressed.is_empty() {
+        out.push(format!("Macro {}: presses {}", m.name, pressed.join(", ")));
+    }
+}
+
+/// The macros in `b` that differ from the library's with the same id.
+pub fn macro_conflicts(store: &Store, b: &Bundle) -> Vec<String> {
+    let library = store.load_macros().unwrap_or_default();
+    b.macros
+        .macros
+        .iter()
+        .filter(|m| library.get(m.id).is_some_and(|l| !l.same_as(m)))
+        .map(|m| m.name.clone())
+        .collect()
 }
 
 /// The `cmd` and `exec` values anywhere inside a part from a newer version.
@@ -574,9 +612,7 @@ pub fn commands(b: &Bundle) -> Vec<String> {
     use crate::model::{ScreenConfig, Widget};
     let mut out = Vec::new();
     for m in &b.macros.macros {
-        for a in m.actions() {
-            action_command(a, &mut out);
-        }
+        macro_preview(m, &mut out);
     }
     for bp in &b.profiles {
         // These run once the app is updated, with no later chance to show them.
@@ -585,6 +621,9 @@ pub fn commands(b: &Bundle) -> Vec<String> {
         }
         for a in bp.profile.actions() {
             action_command(a, &mut out);
+            if let Action::Macro { own: Some(m), .. } = a {
+                macro_preview(m, &mut out);
+            }
         }
         if let ScreenConfig::Custom { widgets, .. } = &bp.profile.screen {
             for w in widgets {
@@ -595,5 +634,7 @@ pub fn commands(b: &Bundle) -> Vec<String> {
         }
     }
     out.retain(|c| !c.trim().is_empty());
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|c| seen.insert(c.clone()));
     out
 }

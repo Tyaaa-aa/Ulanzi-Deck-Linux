@@ -685,3 +685,36 @@ fn users_of_a_macro_are_found_on_every_page() {
     e.drop_action(Slot::Key(4), Action::Macro { id: m.id, own: None });
     assert_eq!(e.macro_users(m.id).len(), 2);
 }
+
+#[test]
+fn undoing_a_key_edit_leaves_a_newer_library_alone() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, false);
+    e.set_field(&[0], Field::Background(rgb(1, 2, 3)));
+    let imported = Macro::new("Imported");
+    let mut library = e.library().clone();
+    library.macros.push(imported.clone());
+    e.set_library(library.clone());
+    assert!(e.undo());
+    assert_eq!(e.library(), &library);
+    assert!(e.take_library_changed() == false);
+}
+
+#[test]
+fn a_two_part_change_can_be_one_undo_step() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, false);
+    let new = Macro::new("New");
+    e.save_macro(new.clone());
+    e.merge_next();
+    e.set_slot_action(
+        Slot::Key(0),
+        Action::Macro {
+            id: new.id,
+            own: None,
+        },
+    );
+    assert!(e.undo());
+    assert_eq!(linked(&e), m.id);
+    assert!(e.library().get(new.id).is_none());
+}

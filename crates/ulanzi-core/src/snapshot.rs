@@ -127,7 +127,10 @@ pub fn restore(store: &Store, name: &str) -> Result<SnapshotInfo, BundleError> {
             device: None,
         },
     )?;
-    store.save_macros(&snap.macros)?;
+    // Left alone when it can't be read: the backup has nothing of it either.
+    if store.load_macros().is_ok() {
+        store.save_macros(&snap.macros)?;
+    }
     Ok(before)
 }
 

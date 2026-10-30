@@ -28,6 +28,7 @@ pub struct Store {
     cache: PathBuf,
     /// Shared by every copy of this store.
     settings_protected: Arc<AtomicBool>,
+    macros_protected: Arc<AtomicBool>,
 }
 
 /// Result of reading one profile directory.
@@ -85,6 +86,7 @@ impl Store {
             state: xdg("XDG_STATE_HOME", ".local/state")?.join("ulanzi-deck"),
             cache: xdg("XDG_CACHE_HOME", ".cache")?.join("ulanzi-deck"),
             settings_protected: Arc::default(),
+            macros_protected: Arc::default(),
         })
     }
 
@@ -94,6 +96,7 @@ impl Store {
             state: state.into(),
             cache: cache.into(),
             settings_protected: Arc::default(),
+            macros_protected: Arc::default(),
         }
     }
 
@@ -130,17 +133,30 @@ impl Store {
     /// The macro library. A missing file is an empty library.
     pub fn load_macros(&self) -> Result<MacroLibrary, CoreError> {
         let path = self.root.join(MACROS_FILE);
-        match fs::read_to_string(&path) {
+        let loaded = match fs::read_to_string(&path) {
             Ok(text) => toml::from_str(&text).map_err(|e| CoreError::Parse {
                 path: path.clone(),
                 message: e.to_string(),
             }),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(MacroLibrary::default()),
             Err(e) => Err(CoreError::io(&path, e)),
-        }
+        };
+        // Saving over a file that can't be read would lose every macro in it.
+        self.macros_protected.store(loaded.is_err(), Ordering::Relaxed);
+        loaded
+    }
+
+    /// Whether the last read of the library failed, so it must not be written.
+    pub fn macros_protected(&self) -> bool {
+        self.macros_protected.load(Ordering::Relaxed)
     }
 
     pub fn save_macros(&self, library: &MacroLibrary) -> Result<(), CoreError> {
+        if self.macros_protected() {
+            return Err(CoreError::Serialize(
+                "macros.toml could not be read, so it was left as it is".into(),
+            ));
+        }
         let path = self.root.join(MACROS_FILE);
         write_atomic(&path, to_toml(library)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
     }

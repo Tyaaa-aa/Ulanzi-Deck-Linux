@@ -113,6 +113,13 @@ enum Clip {
     Style(KeyLook),
 }
 
+/// One undo step: the profile, and the library when the step changed it.
+#[derive(Debug, Clone)]
+struct Undo {
+    profile: Profile,
+    library: Option<MacroLibrary>,
+}
+
 /// A profile being edited, with undo/redo.
 #[derive(Debug, Clone)]
 pub struct Editor {
@@ -121,8 +128,10 @@ pub struct Editor {
     library: MacroLibrary,
     /// The library changed since [`Editor::take_library_changed`] last asked.
     library_changed: bool,
-    undo: Vec<(Profile, MacroLibrary)>,
-    redo: Vec<(Profile, MacroLibrary)>,
+    undo: Vec<Undo>,
+    redo: Vec<Undo>,
+    /// The next edit joins the last undo step.
+    merge_next: bool,
     clipboard: Option<Clip>,
     /// Edits since the profile was last sent to the daemon.
     dirty: bool,
@@ -140,6 +149,7 @@ impl Editor {
             library_changed: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            merge_next: false,
             clipboard: None,
             dirty: false,
             merge: None,
@@ -199,20 +209,27 @@ impl Editor {
 
     /// Like [`Editor::edit`], for a change to the profile and the macro library as one step.
     fn edit_with_library(&mut self, f: impl FnOnce(&mut Profile, &mut MacroLibrary, usize)) {
-        let before = (self.profile.clone(), self.library.clone());
+        let (profile, library) = (self.profile.clone(), self.library.clone());
         f(&mut self.profile, &mut self.library, self.page);
-        if self.profile == before.0 && self.library == before.1 {
+        let same_library = self.library == library;
+        if self.profile == profile && same_library {
             return;
         }
         self.dirty = true;
-        self.library_changed |= self.library != before.1;
+        self.library_changed |= !same_library;
         self.redo.clear();
-        let merging = self.merge.is_some() && self.merge == self.last_merge && !self.undo.is_empty();
+        let merging =
+            std::mem::take(&mut self.merge_next) || (self.merge.is_some() && self.merge == self.last_merge);
         self.last_merge = self.merge;
-        if merging {
+        if merging && !self.undo.is_empty() {
             return;
         }
-        self.undo.push(before);
+        // The library is kept only for steps that changed it: it can also change from outside,
+        // and undoing a key edit must not bring an old one back.
+        self.undo.push(Undo {
+            profile,
+            library: (!same_library).then_some(library),
+        });
         if self.undo.len() > HISTORY_LIMIT {
             self.undo.remove(0);
         }
@@ -238,16 +255,19 @@ impl Editor {
         true
     }
 
-    /// Put `state` back and return what it replaced.
-    fn restore(&mut self, state: (Profile, MacroLibrary)) -> (Profile, MacroLibrary) {
-        let old = (
-            std::mem::replace(&mut self.profile, state.0),
-            std::mem::replace(&mut self.library, state.1),
-        );
+    /// Put `step` back and return what it replaced.
+    fn restore(&mut self, step: Undo) -> Undo {
+        let profile = std::mem::replace(&mut self.profile, step.profile);
+        let library = step.library.map(|l| std::mem::replace(&mut self.library, l));
         self.page = self.page.min(self.profile.pages.len().saturating_sub(1));
         self.dirty = true;
-        self.library_changed |= self.library != old.1;
-        old
+        self.library_changed |= library.is_some();
+        Undo { profile, library }
+    }
+
+    /// Make the next edit part of the last undo step.
+    pub fn merge_next(&mut self) {
+        self.merge_next = true;
     }
 
     /// Whether the library changed since this was last asked.
