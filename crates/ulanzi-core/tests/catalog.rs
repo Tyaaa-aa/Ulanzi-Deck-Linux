@@ -33,6 +33,7 @@ fn samples() -> Vec<Action> {
         Action::PlaySound {
             path: "/x.mp3".into(),
             device: None,
+            volume: 100,
         },
         Action::Media {
             control: MediaControl::PlayPause,
@@ -221,6 +222,7 @@ fn problems_name_what_is_missing() {
     let sound = |p: &str| Action::PlaySound {
         path: p.into(),
         device: None,
+        volume: 100,
     };
     assert_eq!(problem(&sound("/sounds/ding.oga"), &ctx), None);
     assert!(problem(&sound("/gone.oga"), &ctx).is_some());

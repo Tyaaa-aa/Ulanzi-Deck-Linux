@@ -293,7 +293,8 @@ static CATALOG: &[ActionSpec] = &[
         "music",
         Action::PlaySound {
             path: String::new(),
-            device: None
+            device: None,
+            volume: 100
         },
         Action::PlaySound { .. }
     ),

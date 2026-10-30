@@ -624,6 +624,8 @@ mod tests {
             contract: "1.2".into(),
             min_app: None,
             tested_on_hardware: true,
+            author: Some("Someone".into()),
+            official: false,
             icon: None,
             readme: None,
             package: StorePackage {
@@ -643,6 +645,13 @@ mod tests {
         assert!(!shown(&ha, "streaming", ""));
         assert!(!shown(&ha, "", "obs"));
         assert_eq!(category_title("smart-home"), "Smart home");
+        // Official only from the store's own list; the author's words don't make it so.
+        let badge = |official, verified| trust_badge(official, verified).map(|l| l.label().to_string());
+        crate::ui::with_gtk(move || {
+            assert_eq!(badge(true, true).as_deref(), Some("Official"));
+            assert_eq!(badge(false, true).as_deref(), Some("Verified"));
+            assert_eq!(badge(true, false), None, "never official without a signature");
+        });
     }
 
     #[test]

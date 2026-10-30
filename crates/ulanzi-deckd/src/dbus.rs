@@ -781,6 +781,15 @@ impl DeckService {
         Ok(id)
     }
 
+    /// Play the sound file `path` (absolute) as a Play Sound key would: on `device` (empty: the
+    /// default output) at `volume` percent of the Preferences sound volume. For previews.
+    async fn play_sound(&self, path: String, device: String, volume: u8) -> Result<()> {
+        absolute_file(&path)?;
+        let device = (!device.is_empty()).then_some(device);
+        crate::actions::audio::play_sound(&path, device.as_deref(), volume)
+            .map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
     /// Installed plugins the plugin store lists as official (made by the Ulanzi Deck project).
     async fn plugin_official(&self) -> Result<Vec<String>> {
         Ok(self.plugins()?.official())

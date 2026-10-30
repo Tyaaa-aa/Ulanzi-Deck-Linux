@@ -387,6 +387,7 @@ impl Deck {
                 let label_changed =
                     s.hide_labels != self.settings.hide_labels || s.label_style != self.settings.label_style;
                 self.settings = *s;
+                crate::actions::audio::set_sound_volume(self.settings.sound_volume);
                 self.press = PressTracker::new(self.settings.hold_ms);
                 self.sleep = SleepTimer::new(self.settings.sleep_after_min, Instant::now());
                 self.send(&[brightness(self.settings.brightness)]).await;

@@ -271,11 +271,31 @@ pub async fn current_level(target: &AudioTarget) -> Option<(u8, bool, String)> {
     }
 }
 
-pub fn play_sound_argv(path: &str, device: Option<&str>) -> Vec<String> {
-    match device {
-        Some(d) => s(&["pw-play", "--target", d, path]),
-        None => s(&["pw-play", path]),
+/// Volume of Play Sound keys from Preferences, percent; each key's own volume is a share of it.
+static SOUND_VOLUME: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(100);
+
+/// Set the Preferences sound volume (percent).
+pub fn set_sound_volume(percent: u8) {
+    SOUND_VOLUME.store(percent.min(100), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A key's volume (percent) with the Preferences one applied, from 0.0 to 1.0.
+pub fn sound_level(percent: u8) -> f32 {
+    let global = SOUND_VOLUME.load(std::sync::atomic::Ordering::Relaxed);
+    (percent.min(100) as f32 / 100.0) * (global.min(100) as f32 / 100.0)
+}
+
+/// pw-play for `path` at `level` (0.0 to 1.0).
+pub fn play_sound_argv(path: &str, device: Option<&str>, level: f32) -> Vec<String> {
+    let mut argv = s(&["pw-play"]);
+    if let Some(d) = device {
+        argv.extend(s(&["--target", d]));
     }
+    if level < 1.0 {
+        argv.push(format!("--volume={:.2}", level.max(0.0)));
+    }
+    argv.push(path.to_string());
+    argv
 }
 
 /// Current volume of the default output/input from `wpctl get-volume` (1.0 = 100%).
@@ -335,17 +355,21 @@ pub async fn volume(
     Ok(())
 }
 
-pub fn play_sound(path: &str, device: Option<&str>) -> Result<(), ActionError> {
+/// Play `path` at `volume` percent of the Preferences sound volume.
+pub fn play_sound(path: &str, device: Option<&str>, volume: u8) -> Result<(), ActionError> {
     if !std::path::Path::new(path).is_file() {
         return Err(ActionError::Failed(format!("sound file {path} is missing")));
     }
+    let level = sound_level(volume);
     if which("pw-play").is_some() {
-        return spawn_detached(&play_sound_argv(path, device));
+        return spawn_detached(&play_sound_argv(path, device, level));
     }
     let mut argv = s(&["paplay"]);
     if let Some(d) = device {
         argv.push(format!("--device={d}"));
     }
+    // paplay: 65536 is full volume.
+    argv.push(format!("--volume={}", (level * 65536.0).round() as u32));
     argv.push(path.to_string());
     spawn_detached(&argv)
 }

@@ -119,6 +119,7 @@ async fn main() -> ExitCode {
         tracing::error!("settings unreadable, using defaults: {e}");
         Default::default()
     });
+    ulanzi_deckd::actions::audio::set_sound_volume(settings.sound_volume);
     // Before the plugins start: nothing after them may return without shutting them down.
     let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
         signal(SignalKind::terminate()),

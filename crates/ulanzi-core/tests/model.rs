@@ -43,6 +43,7 @@ fn every_action() -> Vec<Action> {
         Action::PlaySound {
             path: "/x/y.mp3".into(),
             device: Some("speakers".into()),
+            volume: 60,
         },
         Action::Media {
             control: MediaControl::PlayPause,

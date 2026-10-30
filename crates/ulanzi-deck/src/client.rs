@@ -518,6 +518,15 @@ impl Client {
         Ok(self.inner.proxy.call("PluginStoreInstall", &(id,)).await?)
     }
 
+    /// Play a sound file as a Play Sound key would (preview).
+    pub async fn play_sound(&self, path: &str, device: Option<&str>, volume: u8) -> Result<()> {
+        Ok(self
+            .inner
+            .proxy
+            .call("PlaySound", &(path, device.unwrap_or(""), volume))
+            .await?)
+    }
+
     /// Installed plugins the plugin store lists as official.
     pub async fn plugin_official(&self) -> Result<Vec<String>> {
         Ok(self.inner.proxy.call("PluginOfficial", &()).await?)

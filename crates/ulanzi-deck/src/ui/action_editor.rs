@@ -410,7 +410,42 @@ fn shortcut_row(ed: &Ed, keys: &str) -> gtk::Widget {
     row.upcast()
 }
 
-fn sound_file_row(ed: &Ed, path: &str) -> gtk::Widget {
+/// A percent slider: the share of the Preferences sound volume this key plays at.
+fn sound_volume_row(ed: &Ed, volume: u8) -> gtk::Widget {
+    let row = adw::ActionRow::builder()
+        .title("Volume")
+        .subtitle("Of the sound volume in Preferences")
+        .build();
+    let value = gtk::Label::builder()
+        .label(format!("{volume}%"))
+        .width_chars(4)
+        .xalign(1.0)
+        .css_classes(["numeric", "dim-label"])
+        .build();
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 5.0);
+    scale.set_value(f64::from(volume));
+    scale.set_draw_value(false);
+    scale.set_width_request(150);
+    scale.set_valign(gtk::Align::Center);
+    scale.update_property(&[gtk::accessible::Property::Label("Volume")]);
+    {
+        let (ed, value) = (ed.clone(), value.clone());
+        scale.connect_value_changed(move |s| {
+            let v = s.value().round().clamp(0.0, 100.0) as u8;
+            value.set_label(&format!("{v}%"));
+            ed.apply(How::Typing("soundvol"), |a| {
+                if let Action::PlaySound { volume, .. } = a {
+                    *volume = v;
+                }
+            });
+        });
+    }
+    row.add_suffix(&scale);
+    row.add_suffix(&value);
+    row.upcast()
+}
+
+fn sound_file_row(ed: &Ed, state: &State, path: &str) -> gtk::Widget {
     let shown = if path.is_empty() {
         "No file chosen".to_string()
     } else {
@@ -427,6 +462,38 @@ fn sound_file_row(ed: &Ed, path: &str) -> gtk::Widget {
         .label("Choose…")
         .valign(gtk::Align::Center)
         .build();
+    // Hear it as the key will: its file, output and volume.
+    let preview = gtk::Button::builder()
+        .icon_name("media-playback-start-symbolic")
+        .tooltip_text("Play")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat", "circular"])
+        .build();
+    {
+        let (ed, state) = (ed.clone(), state.clone());
+        preview.connect_clicked(move |_| {
+            let Action::PlaySound { path, device, volume } = ed.cur.borrow().clone() else {
+                return;
+            };
+            if path.is_empty() {
+                crate::ui::toast(&state, "Choose a sound file first");
+                return;
+            }
+            let Some(c) = state.client.borrow().clone() else {
+                return;
+            };
+            let st = state.clone();
+            crate::runtime::run(
+                async move { c.play_sound(&path, device.as_deref(), volume).await },
+                move |r| {
+                    if let Err(e) = r {
+                        crate::ui::toast(&st, &e.to_string());
+                    }
+                },
+            );
+        });
+    }
+    row.add_suffix(&preview);
     row.add_suffix(&choose);
     let ed = ed.clone();
     let r = row.clone();
@@ -1192,8 +1259,9 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
                 *text = t;
             }
         })],
-        Action::PlaySound { path, device } => vec![
-            sound_file_row(&ed, path),
+        Action::PlaySound { path, device, volume } => vec![
+            sound_file_row(&ed, state, path),
+            sound_volume_row(&ed, *volume),
             device_combo(&ed, "Play On", device.as_deref(), true, |a, n| {
                 if let Action::PlaySound { device, .. } = a {
                     *device = n;

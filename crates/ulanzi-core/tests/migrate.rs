@@ -111,7 +111,8 @@ fn migrates_fixture() {
         key(&p, 12).tap,
         Some(Action::PlaySound {
             path: "/x/y.mp3".into(),
-            device: None
+            device: None,
+            volume: 100
         })
     );
 

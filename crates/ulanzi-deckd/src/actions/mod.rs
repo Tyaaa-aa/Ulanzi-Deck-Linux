@@ -208,7 +208,7 @@ impl ActionRunner for Executor {
                     .await
                     .map_err(|e| ActionError::Failed(e.to_string()))?
             }
-            Action::PlaySound { path, device } => audio::play_sound(path, device.as_deref()),
+            Action::PlaySound { path, device, volume } => audio::play_sound(path, device.as_deref(), *volume),
             Action::Media { control, player } => match &self.media {
                 Some(m) => m.control(*control, player.as_deref()).await,
                 None => Err(ActionError::Unavailable(

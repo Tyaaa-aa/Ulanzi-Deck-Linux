@@ -72,6 +72,12 @@ and settings and saves them in a new format (2) that 2.0 cannot open; the 2.0 fi
   Label Shows menu) and the settings to follow (`track`, added for you as keys use the action). The
   Home Assistant keys use them: lights yellow when on, air conditioners blue with a snowflake while
   cooling, orange while heating.
+- Play Sound keys have their own **Volume** and a **Play** button to hear them in the editor; Preferences
+  → General → **Sound Volume** sets the volume they all share.
+- Installing from the store shows its progress: getting ready, downloading (with a bar and the size),
+  checking, installing.
+- Plugins name their author ("by …"); the project's own plugins show **Official**, which only the signed
+  store list can grant.
 - **Cycle Through Actions**: each press runs the next step, and each step has its own image, colour
   and label. The key shows the step that ran (the default) or the step the next press runs.
 

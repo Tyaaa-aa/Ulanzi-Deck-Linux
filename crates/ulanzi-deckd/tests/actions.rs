@@ -151,11 +151,25 @@ fn app_up_respects_limit_100() {
 
 #[test]
 fn play_sound_argv_target() {
-    assert_eq!(play_sound_argv("/x/y.mp3", None), argv(&["pw-play", "/x/y.mp3"]));
     assert_eq!(
-        play_sound_argv("/x/y.mp3", Some("speakers")),
+        play_sound_argv("/x/y.mp3", None, 1.0),
+        argv(&["pw-play", "/x/y.mp3"])
+    );
+    assert_eq!(
+        play_sound_argv("/x/y.mp3", Some("speakers"), 1.0),
         argv(&["pw-play", "--target", "speakers", "/x/y.mp3"])
     );
+    // A key at 50% with Preferences at 100%: half volume.
+    assert_eq!(
+        play_sound_argv("/x/y.mp3", None, 0.5),
+        argv(&["pw-play", "--volume=0.50", "/x/y.mp3"])
+    );
+    ulanzi_deckd::actions::audio::set_sound_volume(50);
+    assert!(
+        (ulanzi_deckd::actions::audio::sound_level(80) - 0.4).abs() < 1e-6,
+        "80% of 50%"
+    );
+    ulanzi_deckd::actions::audio::set_sound_volume(100);
 }
 
 #[derive(Default)]

@@ -283,7 +283,11 @@ impl Migrator {
             "command" => {
                 let cmd = non_empty(get("cmd"))?;
                 match sound_path(&cmd) {
-                    Some(path) => Action::PlaySound { path, device: None },
+                    Some(path) => Action::PlaySound {
+                        path,
+                        device: None,
+                        volume: 100,
+                    },
                     None => Action::Command { cmd, terminal: false },
                 }
             }

@@ -77,6 +77,8 @@ click from key to key); picking an action already gives the key a matching icon 
   turns yellow when the light is on, an air conditioner key shows a blue snowflake while cooling.
 - With a plugin action, **Label Shows** picks a live value for the label (State, Level, Target
   temperature, Room temperature) instead of text.
+- **Play Sound** has its own **Volume** (a share of Preferences → General → **Sound Volume**) and a
+  **Play** button next to the file, so you can hear it without pressing the key.
 - **Cycle Through Actions** (System) runs a different action on each press: add steps, and give each
   its own image, colour and label. It starts over after the last one. **Key Shows** picks what the
   key shows: the step that ran (what the key did, the default) or the next step.

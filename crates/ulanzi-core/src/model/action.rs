@@ -42,6 +42,9 @@ pub enum Action {
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         device: Option<String>,
+        /// Percent of full volume, times the sound volume in Preferences.
+        #[serde(default = "full_volume", skip_serializing_if = "is_full_volume")]
+        volume: u8,
     },
     Media {
         control: MediaControl,
@@ -93,6 +96,14 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "toml::Table::is_empty")]
         params: toml::Table,
     },
+}
+
+fn full_volume() -> u8 {
+    100
+}
+
+fn is_full_volume(v: &u8) -> bool {
+    *v == 100
 }
 
 fn default_step() -> u8 {

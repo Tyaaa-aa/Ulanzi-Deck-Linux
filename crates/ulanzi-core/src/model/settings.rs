@@ -25,6 +25,8 @@ pub struct Settings {
     pub sleep_after_min: u32,
     pub sleep_brightness: u8,
     pub hold_ms: u32,
+    /// Volume of Play Sound keys, percent (each key's own volume is a share of it).
+    pub sound_volume: u8,
     pub hide_labels: bool,
     pub label_style: LabelStyleCfg,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,6 +108,7 @@ impl Default for Settings {
             sleep_after_min: 10,
             sleep_brightness: 0,
             hold_ms: 500,
+            sound_volume: 100,
             hide_labels: false,
             label_style: LabelStyleCfg::default(),
             default_profile: None,

@@ -203,6 +203,34 @@ fn general_page(state: &State) -> adw::PreferencesPage {
         });
     }
     keys.add(&hold);
+    // Play Sound keys: each key's own volume is a share of this one.
+    let sound = adw::ActionRow::builder()
+        .title("Sound Volume")
+        .subtitle("For Play Sound keys")
+        .build();
+    let value = gtk::Label::builder()
+        .label(format!("{}%", s.sound_volume))
+        .width_chars(4)
+        .xalign(1.0)
+        .css_classes(["numeric", "dim-label"])
+        .build();
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 5.0);
+    scale.set_value(f64::from(s.sound_volume));
+    scale.set_draw_value(false);
+    scale.set_width_request(180);
+    scale.set_valign(gtk::Align::Center);
+    scale.update_property(&[gtk::accessible::Property::Label("Sound Volume")]);
+    {
+        let (state, value) = (state.clone(), value.clone());
+        scale.connect_value_changed(move |r| {
+            let v = r.value().round().clamp(0.0, 100.0) as u8;
+            value.set_label(&format!("{v}%"));
+            change(&state, |s| s.sound_volume = v)
+        });
+    }
+    sound.add_suffix(&scale);
+    sound.add_suffix(&value);
+    keys.add(&sound);
     page.add(&keys);
     page
 }
