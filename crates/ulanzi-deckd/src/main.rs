@@ -11,8 +11,9 @@ use tokio::sync::{broadcast, mpsc};
 use ulanzi_core::model::Settings;
 use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_deckd::actions::Executor;
+use ulanzi_deckd::actions::mouse::VirtualInput;
 use ulanzi_deckd::dbus::{BUS_NAME, DeckService, OBJECT_PATH, forward_signals, reload};
-use ulanzi_deckd::deck::{DeckEvent, DeckMsg, start_deck};
+use ulanzi_deckd::deck::{DeckEvent, DeckMsg, start_deck, start_deck_with};
 use ulanzi_deckd::plugins::{FileSecrets, LazySecrets, PluginHost, PluginSlot, SecretStore};
 use ulanzi_deckd::screen::Sampler;
 use ulanzi_deckd::transport::{DeviceState, Hidraw, probe, watch_dev};
@@ -147,7 +148,16 @@ async fn main() -> ExitCode {
         tokio::task::spawn_blocking(move || ex.prepare_keyboard());
     }
     let media = executor.media().cloned();
-    let events = start_deck(store.clone(), settings, executor, rx);
+    let input = {
+        let keyboard = executor.keyboard_handle();
+        tokio::task::spawn_blocking(move || VirtualInput::new(keyboard))
+            .await
+            .map(|i| Arc::new(std::sync::Mutex::new(i)))
+    };
+    let events = match input {
+        Ok(input) => start_deck_with(store.clone(), settings, executor, input, rx),
+        Err(_) => start_deck(store.clone(), settings, executor, rx),
+    };
 
     tokio::spawn(forward_signals(conn.clone(), events.resubscribe()));
     tokio::spawn(ulanzi_deckd::tray::run(

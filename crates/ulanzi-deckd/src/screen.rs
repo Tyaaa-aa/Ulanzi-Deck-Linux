@@ -285,6 +285,7 @@ impl Sampler {
             media: media_data,
             screen_png: None,
             plugin_vars: Default::default(),
+            macros: Default::default(),
             cycles: Default::default(),
         }
     }

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use ulanzi_core::model::{Action, ImageSource, KeyLook, MediaControl, Profile};
-use ulanzi_core::render::{RenderCtx, look_hash, render_key};
+use ulanzi_core::model::{Action, Feedback, ImageSource, KeyLook, LookOverride, MediaControl, Profile};
+use ulanzi_core::render::{RenderCtx, look_hash, render_key, render_key_progress};
 use ulanzi_proto::{ButtonEntry, ButtonImage};
 
 use crate::vars::resolve_vars;
@@ -11,7 +11,7 @@ use crate::vars::resolve_vars;
 pub const SCREEN_INDEX: u8 = 13;
 
 /// Live values that change what the page shows, refreshed every 2 s by the sampler.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DynamicState {
     /// Label variables, e.g. `cpu` → `"12"`.
     pub vars: BTreeMap<String, String>,
@@ -28,6 +28,68 @@ pub struct DynamicState {
     pub plugin_vars: BTreeMap<String, String>,
     /// The step each cycling key runs next, by [`cycle_key`]. Set by the deck.
     pub cycles: BTreeMap<String, usize>,
+    /// How far each playing macro's key is, by [`cycle_key`]. Set by the deck.
+    pub macros: BTreeMap<String, MacroProgress>,
+}
+
+/// A key's macro while it plays.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroProgress {
+    /// The step playing, from 0; `total` means it has finished.
+    pub step: usize,
+    pub total: usize,
+    pub name: String,
+    pub feedback: Feedback,
+    /// The step's own look, for [`Feedback::Custom`].
+    pub look: LookOverride,
+}
+
+impl MacroProgress {
+    fn done(&self) -> usize {
+        (self.step + 1).min(self.total)
+    }
+
+    fn share(&self) -> f32 {
+        self.done() as f32 / self.total.max(1) as f32
+    }
+
+    fn apply(&self, look: &mut KeyLook) {
+        match self.feedback {
+            Feedback::Count { show_total } => {
+                look.label.visible = true;
+                look.label.text = if show_total {
+                    format!("{}/{}", self.done(), self.total)
+                } else {
+                    self.done().to_string()
+                };
+            }
+            Feedback::Custom => self.look.apply(look),
+            Feedback::Off | Feedback::Progress => {}
+        }
+    }
+}
+
+/// The label values a macro key can show, on top of the shared ones.
+fn with_macro_vars(
+    vars: &BTreeMap<String, String>,
+    progress: Option<&MacroProgress>,
+) -> BTreeMap<String, String> {
+    let mut out = vars.clone();
+    let mut set = |k: &str, v: String| {
+        out.insert(k.to_string(), v);
+    };
+    set("macro.step", progress.map_or(0, MacroProgress::done).to_string());
+    set("macro.total", progress.map_or(0, |p| p.total).to_string());
+    set(
+        "macro.percent",
+        progress.map_or(0.0, |p| p.share() * 100.0).round().to_string(),
+    );
+    set("macro.name", progress.map(|p| p.name.clone()).unwrap_or_default());
+    set(
+        "macro.running",
+        if progress.is_some() { "1" } else { "0" }.to_string(),
+    );
+    out
 }
 
 /// Where a cycling control's next step is kept: its page and the control (`key:3`, `dial:0`, with
@@ -81,6 +143,7 @@ impl DynamicState {
         self.screen_png = old.screen_png.clone();
         self.plugin_vars = old.plugin_vars.clone();
         self.cycles = old.cycles.clone();
+        self.macros = old.macros.clone();
         for k in DECK_VARS {
             if let Some(v) = old.vars.get(k) {
                 self.vars.insert(k.to_string(), v.clone());
@@ -167,6 +230,11 @@ fn live_look(
     cycle: Option<&str>,
 ) -> KeyLook {
     let mut look = look.clone();
+    if let (Some(Action::Macro { .. }), Some(at)) = (tap, cycle)
+        && let Some(progress) = dynamic.macros.get(at)
+    {
+        progress.apply(&mut look);
+    }
     if let (Some(Action::Cycle { steps, show }), Some(at)) = (tap, cycle)
         && !steps.is_empty()
     {
@@ -241,18 +309,36 @@ pub fn build_page(
         let mut entry = ButtonEntry::default();
         if let Some(key) = keys.and_then(|k| k.get(&i)) {
             let at = page_id.map(|id| cycle_key(id, &format!("key:{i}")));
-            let mut look = live_look(&key.look, &key.tap, dynamic, &vars, at.as_deref());
+            let progress = at.as_deref().and_then(|a| dynamic.macros.get(a));
+            let macro_vars;
+            let vars: &BTreeMap<String, String> = if matches!(key.tap, Some(Action::Macro { .. })) {
+                macro_vars = with_macro_vars(&vars, progress);
+                &macro_vars
+            } else {
+                &vars
+            };
+            let bar = progress
+                .filter(|p| p.feedback == Feedback::Progress)
+                .map(MacroProgress::share);
+            let mut look = live_look(&key.look, &key.tap, dynamic, vars, at.as_deref());
             if let Some(params) = params_of(&key.tap) {
                 look.label.text = ulanzi_core::model::fill_params(&look.label.text, params);
             }
             // A key with its own label position gets the label drawn into its picture.
             let own_label = look.label.position.is_some();
             if own_label {
-                look.label.text = resolve_vars(&look.label.text, &vars);
+                look.label.text = resolve_vars(&look.label.text, vars);
             }
-            let lh = look_hash(&look, ctx.profile_dir);
+            let mut lh = look_hash(&look, ctx.profile_dir);
+            if let Some(share) = bar {
+                lh ^= ((share * 1000.0) as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            }
             let png = cache.images.entry(lh).or_insert_with(|| {
-                render_key(&look, ctx).map(|r| {
+                let drawn = match bar {
+                    Some(share) => render_key_progress(&look, ctx, share),
+                    None => render_key(&look, ctx),
+                };
+                drawn.map(|r| {
                     if !r.warnings.is_empty() && cache.warned.insert(lh) {
                         for w in &r.warnings {
                             tracing::warn!("key {i}: {w}");
@@ -270,7 +356,7 @@ pub fn build_page(
                 });
             }
             if !own_label && look.label.visible && !look.label.text.is_empty() {
-                entry.text = Some(resolve_vars(&look.label.text, &vars));
+                entry.text = Some(resolve_vars(&look.label.text, vars));
             }
             lh.hash(&mut h);
             used.insert(lh);
@@ -507,6 +593,85 @@ mod tests {
         assert_eq!(imgs[0].name, "k6_abc_01_u7.png");
         assert_eq!(imgs[0].png, vec![1, 2, 3]);
     }
+    fn macro_profile(feedback: ulanzi_core::model::Feedback) -> (Profile, DynamicState) {
+        let mut p = profile();
+        let tap = Some(Action::Macro {
+            id: uuid::Uuid::new_v4(),
+            own: None,
+        });
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.tap = tap;
+        key.look.label.visible = true;
+        key.look.label.text = "Name".into();
+        let mut d = DynamicState::default();
+        let at = cycle_key(p.pages[0].id, "key:6");
+        d.macros.insert(
+            at,
+            MacroProgress {
+                step: 2,
+                total: 7,
+                name: "Export".into(),
+                feedback,
+                look: Default::default(),
+            },
+        );
+        (p, d)
+    }
+
+    #[test]
+    fn the_key_shows_step_count_then_returns() {
+        use ulanzi_core::model::Feedback;
+        let (p, mut d) = macro_profile(Feedback::Count { show_total: true });
+        let mut cache = RenderCache::default();
+        let page = build_page(&p, 0, &ctx(), &d, &mut cache);
+        assert_eq!(page.entries[&6].text.as_deref(), Some("3/7"));
+        for progress in d.macros.values_mut() {
+            progress.feedback = Feedback::Count { show_total: false };
+        }
+        let page = build_page(&p, 0, &ctx(), &d, &mut cache);
+        assert_eq!(page.entries[&6].text.as_deref(), Some("3"));
+        d.macros.clear();
+        let page = build_page(&p, 0, &ctx(), &d, &mut cache);
+        assert_eq!(page.entries[&6].text.as_deref(), Some("Name"));
+    }
+
+    #[test]
+    fn custom_feedback_uses_each_steps_look() {
+        use ulanzi_core::model::Feedback;
+        let (p, mut d) = macro_profile(Feedback::Custom);
+        for progress in d.macros.values_mut() {
+            progress.look.label = Some("Exporting".into());
+        }
+        let mut cache = RenderCache::default();
+        let page = build_page(&p, 0, &ctx(), &d, &mut cache);
+        assert_eq!(page.entries[&6].text.as_deref(), Some("Exporting"));
+    }
+
+    #[test]
+    fn labels_can_use_the_macro_values() {
+        use ulanzi_core::model::Feedback;
+        let (mut p, d) = macro_profile(Feedback::Off);
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.label.text =
+            "{macro.name} {macro.step}/{macro.total} {macro.percent}% {macro.running}".into();
+        let mut cache = RenderCache::default();
+        let page = build_page(&p, 0, &ctx(), &d, &mut cache);
+        assert_eq!(page.entries[&6].text.as_deref(), Some("Export 3/7 43% 1"));
+    }
+
+    #[test]
+    fn the_progress_bar_changes_the_picture() {
+        use ulanzi_core::model::Feedback;
+        let (p, mut d) = macro_profile(Feedback::Progress);
+        let mut cache = RenderCache::default();
+        let a = build_page(&p, 0, &ctx(), &d, &mut cache);
+        for progress in d.macros.values_mut() {
+            progress.step = 5;
+        }
+        let b = build_page(&p, 0, &ctx(), &d, &mut cache);
+        assert_ne!(a.entries[&6].icon, b.entries[&6].icon);
+    }
+
     #[test]
     fn label_with_own_position_goes_into_the_image() {
         let mut p = profile();

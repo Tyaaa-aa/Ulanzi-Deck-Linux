@@ -45,6 +45,10 @@ pub enum PlayerEvent {
         control: Control,
         message: String,
     },
+    /// Time to take a finished macro's look off its key. Sent by the deck to itself.
+    Clear {
+        control: Control,
+    },
     /// A step the deck runs itself, such as changing page.
     DeckAction {
         control: Control,
@@ -323,7 +327,7 @@ impl Inner {
             Trigger::Once { .. } => loop {
                 self.steps(m, &all, signals, 0).await?;
                 if queued
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                     .is_err()
                 {
                     return Ok(());

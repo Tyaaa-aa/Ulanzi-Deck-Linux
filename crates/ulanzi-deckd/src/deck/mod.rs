@@ -14,7 +14,8 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use ulanzi_core::model::{
-    Action, AudioTarget, BrightnessOp, ClockStyle, Model, Profile, ScreenConfig, Settings, Slot,
+    Action, AudioTarget, BrightnessOp, ClockStyle, Feedback, Macro, MacroLibrary, Model, MouseButton,
+    Profile, ScreenConfig, Settings, Slot, Trigger,
 };
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
@@ -27,10 +28,13 @@ use uuid::Uuid;
 
 pub use nav::NavState;
 pub use press::{Gesture, PressTracker};
-pub use push::{BuiltPage, DynamicState, RenderCache, SCREEN_INDEX, build_page};
+pub use push::{BuiltPage, DynamicState, MacroProgress, RenderCache, SCREEN_INDEX, build_page};
 pub use sleep::SleepTimer;
 
+use crate::actions::ActionError;
 use crate::actions::ActionRunner;
+use crate::actions::mouse::InputSink;
+use crate::macros::{Player, PlayerEvent};
 use crate::transport::{DeviceState, Transport};
 use screen_rt::ScreenRuntime;
 
@@ -42,6 +46,10 @@ const UNLOCK_EVERY: Duration = Duration::from_secs(30);
 /// Minimum time between uploads. With correct framing (report ID 0) the deck took back-to-back
 /// full and partial uploads on hardware; the gap is a safety margin that also folds rapid changes.
 const MIN_UPLOAD_GAP: Duration = Duration::from_millis(500);
+/// Minimum time between uploads while a macro plays. The deck took 30 small updates a second.
+const MACRO_UPLOAD_GAP: Duration = Duration::from_millis(100);
+/// How long a finished macro's key stays on its last look.
+const FINISH_FLASH: Duration = Duration::from_millis(300);
 /// How long to wait for the device-info reply (the deck's "ready") before uploading anyway.
 const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -88,6 +96,10 @@ pub enum DeckMsg {
     },
     /// A plugin instance ended (stopped, crashed, replaced or removed): forget its state values.
     PluginCleared(String),
+    /// The macro library changed.
+    Macros(MacroLibrary),
+    /// Stop every macro.
+    StopMacros,
     Shutdown,
 }
 
@@ -134,6 +146,18 @@ pub fn spawn_deck(
     (tx, events)
 }
 
+/// [`spawn_deck`] with macros played through `input`.
+pub fn spawn_deck_with(
+    store: Store,
+    settings: Settings,
+    runner: Arc<dyn ActionRunner>,
+    input: Arc<std::sync::Mutex<dyn InputSink>>,
+) -> (mpsc::Sender<DeckMsg>, broadcast::Receiver<DeckEvent>) {
+    let (tx, rx) = mpsc::channel(256);
+    let events = start_deck_with(store, settings, runner, input, rx);
+    (tx, events)
+}
+
 /// Start the deck actor on an existing channel (messages sent before this wait in the channel).
 pub fn start_deck(
     store: Store,
@@ -141,10 +165,60 @@ pub fn start_deck(
     runner: Arc<dyn ActionRunner>,
     rx: mpsc::Receiver<DeckMsg>,
 ) -> broadcast::Receiver<DeckEvent> {
+    start_deck_with(
+        store,
+        settings,
+        runner,
+        Arc::new(std::sync::Mutex::new(NoInput)),
+        rx,
+    )
+}
+
+/// [`start_deck`] with macros played through `input`.
+pub fn start_deck_with(
+    store: Store,
+    settings: Settings,
+    runner: Arc<dyn ActionRunner>,
+    input: Arc<std::sync::Mutex<dyn InputSink>>,
+    rx: mpsc::Receiver<DeckMsg>,
+) -> broadcast::Receiver<DeckEvent> {
     let (events, events_rx) = broadcast::channel(256);
-    let deck = Deck::new(store, settings, runner, events);
+    let deck = Deck::new(store, settings, runner, input, events);
     tokio::spawn(deck.run(rx));
     events_rx
+}
+
+/// For decks with no input devices: a macro reports it.
+struct NoInput;
+
+impl NoInput {
+    fn none<T>() -> Result<T, ActionError> {
+        Err(ActionError::Unavailable("macros are not available here".into()))
+    }
+}
+
+impl InputSink for NoInput {
+    fn key(&mut self, _: &str, _: bool) -> Result<(), ActionError> {
+        Self::none()
+    }
+    fn button(&mut self, _: MouseButton, _: bool) -> Result<(), ActionError> {
+        Self::none()
+    }
+    fn scroll(&mut self, _: i32, _: i32) -> Result<(), ActionError> {
+        Self::none()
+    }
+    fn move_by(&mut self, _: i32, _: i32) -> Result<(), ActionError> {
+        Self::none()
+    }
+    fn move_to(&mut self, _: f32, _: f32) -> Result<(), ActionError> {
+        Self::none()
+    }
+}
+
+/// A macro playing, and where its key is.
+struct Playing {
+    page: Uuid,
+    m: Macro,
 }
 
 /// Reads the volume after volume actions, off the action queue, one read at a time: a burst of
@@ -229,6 +303,13 @@ struct Deck {
     /// Volume levels read after volume actions, for the overlay.
     level_tx: LevelReader,
     level_rx: Option<mpsc::UnboundedReceiver<Level>>,
+    player: Player,
+    player_tx: mpsc::UnboundedSender<PlayerEvent>,
+    player_rx: Option<mpsc::UnboundedReceiver<PlayerEvent>>,
+    library: Arc<std::sync::RwLock<MacroLibrary>>,
+    playing: HashMap<Control, Playing>,
+    /// Controls that started a macro on key down; their key up goes to the player.
+    macro_down: Vec<Control>,
 }
 
 impl Deck {
@@ -236,8 +317,16 @@ impl Deck {
         store: Store,
         settings: Settings,
         runner: Arc<dyn ActionRunner>,
+        input: Arc<std::sync::Mutex<dyn InputSink>>,
         events: broadcast::Sender<DeckEvent>,
     ) -> Deck {
+        let library = store.load_macros().unwrap_or_else(|e| {
+            tracing::error!("macros unreadable: {e}");
+            MacroLibrary::default()
+        });
+        let library = Arc::new(std::sync::RwLock::new(library));
+        let (player_tx, player_rx) = mpsc::unbounded_channel();
+        let player = Player::new(input, runner.clone(), library.clone(), player_tx.clone());
         let mut profiles: Vec<Profile> = store
             .list_profiles()
             .into_iter()
@@ -289,6 +378,12 @@ impl Deck {
             screen_hash: None,
             level_tx,
             level_rx: Some(level_rx),
+            player,
+            player_tx,
+            player_rx: Some(player_rx),
+            library,
+            playing: HashMap::new(),
+            macro_down: Vec::new(),
         }
     }
 
@@ -305,6 +400,7 @@ impl Deck {
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let wake = self.screen.wake.clone();
         let mut levels = self.level_rx.take().expect("run once");
+        let mut player = self.player_rx.take().expect("run once");
         loop {
             let hold_deadline = self.press.next_deadline();
             // Only arm the upload timer when an upload can actually happen; otherwise a deadline in
@@ -321,6 +417,7 @@ impl Deck {
                     None | Some(DeckMsg::Shutdown) => break,
                     Some(m) => self.on_msg(m).await,
                 },
+                Some(e) = player.recv() => self.on_player(e).await,
                 report = async {
                     match transport {
                         Some(t) => t.recv().await,
@@ -366,7 +463,14 @@ impl Deck {
                 self.set_device(DeviceState::Ready { node });
                 self.configure().await;
             }
+            DeckMsg::Macros(library) => {
+                if let Ok(mut l) = self.library.write() {
+                    *l = library;
+                }
+            }
+            DeckMsg::StopMacros => self.player.stop_all(),
             DeckMsg::DeviceDown(state) => {
+                self.player.stop_all();
                 self.transport = None;
                 self.upload_pending = false;
                 self.set_device(state);
@@ -663,7 +767,12 @@ impl Deck {
                 bytes / 1024,
                 done.duration_since(now).as_millis()
             );
-            self.next_upload_at = Some(done + upload_cooldown(bytes));
+            let gap = if self.playing.is_empty() {
+                upload_cooldown(bytes)
+            } else {
+                MACRO_UPLOAD_GAP
+            };
+            self.next_upload_at = Some(done + gap);
             self.shown = Some(Shown {
                 at: here,
                 entries: built.entries,
@@ -687,6 +796,7 @@ impl Deck {
 
     async fn lost(&mut self, e: &std::io::Error) {
         tracing::warn!("device connection lost: {e}");
+        self.player.stop_all();
         self.transport = None;
         self.shown = None;
         self.firmware = None;
@@ -764,10 +874,20 @@ impl Deck {
         }
         match ev.kind {
             InputKind::Press => {
+                if let Some(a) = self.macro_on_press(ev.control) {
+                    self.macro_down.push(ev.control);
+                    self.start_macro(ev.control, &a);
+                    return;
+                }
                 let has_hold = self.hold_action(ev.control).is_some();
                 self.press.on_press(ev.control, now, has_hold);
             }
             InputKind::Release => {
+                if let Some(i) = self.macro_down.iter().position(|c| *c == ev.control) {
+                    self.macro_down.remove(i);
+                    self.player.release(ev.control);
+                    return;
+                }
                 if let Some(i) = self.swallowed.iter().position(|c| *c == ev.control) {
                     self.swallowed.remove(i);
                     self.press.forget(ev.control);
@@ -883,8 +1003,112 @@ impl Deck {
         Some(steps[now].action.clone())
     }
 
+    /// The macro to start now that `c` went down. A key that also has a When Held action waits to
+    /// see whether this is a tap, unless its macro needs the key's release.
+    fn macro_on_press(&self, c: Control) -> Option<Action> {
+        let a = self.tap_action(c)?;
+        let Action::Macro { .. } = &a else {
+            return None;
+        };
+        let m = self.macro_for(&a);
+        let needs_release = m
+            .as_ref()
+            .is_some_and(|m| matches!(m.trigger, Trigger::WhileHeld { .. } | Trigger::Sequence));
+        (needs_release || self.hold_action(c).is_none()).then_some(a)
+    }
+
+    fn macro_for(&self, a: &Action) -> Option<Macro> {
+        match a {
+            Action::Macro { own: Some(m), .. } => Some((**m).clone()),
+            Action::Macro { id, own: None } => self.library.read().ok()?.get(*id).cloned(),
+            _ => None,
+        }
+    }
+
+    fn start_macro(&mut self, c: Control, a: &Action) {
+        let Some(m) = self.macro_for(a) else {
+            self.emit(DeckEvent::ActionFailed {
+                control: c.as_str(),
+                message: "This macro no longer exists".into(),
+            });
+            return;
+        };
+        if let Some(page) = self.profile().pages.get(self.nav.page).map(|p| p.id) {
+            self.playing.insert(c, Playing { page, m: m.clone() });
+        }
+        self.player.press(c, m);
+    }
+
+    async fn on_player(&mut self, e: PlayerEvent) {
+        match e {
+            PlayerEvent::Step {
+                control,
+                index,
+                total,
+                name,
+            } => {
+                let Some(playing) = self.playing.get(&control) else {
+                    return;
+                };
+                let at = push::cycle_key(playing.page, &control.as_str());
+                let progress = MacroProgress {
+                    step: index,
+                    total,
+                    name,
+                    feedback: playing.m.feedback,
+                    look: playing
+                        .m
+                        .steps
+                        .get(index)
+                        .map(|s| s.look.clone())
+                        .unwrap_or_default(),
+                };
+                self.dynamic.macros.insert(at, progress);
+                self.push_page(false).await;
+            }
+            PlayerEvent::Ended { control } => {
+                let Some(playing) = self.playing.get(&control) else {
+                    return;
+                };
+                let at = push::cycle_key(playing.page, &control.as_str());
+                if playing.m.feedback == Feedback::Off {
+                    self.dynamic.macros.remove(&at);
+                    self.playing.remove(&control);
+                } else if let Some(p) = self.dynamic.macros.get_mut(&at) {
+                    p.step = p.total;
+                    let tx = self.player_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(FINISH_FLASH).await;
+                        let _ = tx.send(PlayerEvent::Clear { control });
+                    });
+                }
+                self.push_page(false).await;
+            }
+            PlayerEvent::Clear { control } => {
+                // Played again meanwhile: that run clears it.
+                if let Some(playing) = self.playing.remove(&control) {
+                    let at = push::cycle_key(playing.page, &control.as_str());
+                    self.dynamic.macros.remove(&at);
+                    self.push_page(false).await;
+                }
+            }
+            PlayerEvent::Failed { control, message } => self.emit(DeckEvent::ActionFailed {
+                control: control.as_str(),
+                message,
+            }),
+            PlayerEvent::DeckAction { action, .. } => {
+                self.internal(&action).await;
+            }
+        }
+    }
+
     /// Deck-internal actions run here; everything else goes to the control's ordered queue.
     async fn dispatch(&mut self, c: Control, a: Action) {
+        if matches!(a, Action::Macro { .. }) {
+            self.start_macro(c, &a);
+            self.player.release(c);
+            return;
+        }
         if self.internal(&a).await {
             return;
         }
@@ -925,6 +1149,10 @@ impl Deck {
         let pages = self.profile().pages.clone();
         let find = |id: &Uuid| pages.iter().position(|p| p.id == *id);
         match a {
+            Action::StopMacros => {
+                self.player.stop_all();
+                return true;
+            }
             Action::NextPage => self.nav.next(&pages),
             Action::PrevPage => self.nav.prev(&pages),
             Action::Back => self.nav.back(),

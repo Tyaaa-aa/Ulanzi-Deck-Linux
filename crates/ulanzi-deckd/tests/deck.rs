@@ -757,3 +757,193 @@ async fn deck_settings_changes_are_announced() {
     }
     assert!(saw, "no SettingsChanged after a brightness change");
 }
+
+#[derive(Default)]
+struct KeysPressed(Vec<String>);
+
+impl ulanzi_deckd::actions::mouse::InputSink for KeysPressed {
+    fn key(&mut self, key: &str, down: bool) -> Result<(), ActionError> {
+        self.0.push(format!("{}{key}", if down { "+" } else { "-" }));
+        Ok(())
+    }
+    fn button(&mut self, _: MouseButton, _: bool) -> Result<(), ActionError> {
+        Ok(())
+    }
+    fn scroll(&mut self, _: i32, _: i32) -> Result<(), ActionError> {
+        Ok(())
+    }
+    fn move_by(&mut self, _: i32, _: i32) -> Result<(), ActionError> {
+        Ok(())
+    }
+    fn move_to(&mut self, _: f32, _: f32) -> Result<(), ActionError> {
+        Ok(())
+    }
+}
+
+type Keys = Arc<Mutex<KeysPressed>>;
+
+fn tap_a(delay_ms: u32) -> Vec<MacroStep> {
+    let step = |event, delay_ms| MacroStep {
+        event,
+        delay_ms,
+        look: LookOverride::default(),
+        part: SequencePart::Press,
+    };
+    vec![
+        step(MacroEvent::KeyDown { key: "a".into() }, delay_ms),
+        step(MacroEvent::KeyUp { key: "a".into() }, delay_ms),
+    ]
+}
+
+/// A deck whose key 7 runs `m`, with `hold` as its When Held action.
+async fn macro_rig(mut m: Macro, hold: Option<Action>) -> (Rig, Keys) {
+    let mut p = profile();
+    if m.steps.is_empty() {
+        m.steps = tap_a(0);
+    }
+    let tap = Some(Action::Macro { id: m.id, own: None });
+    p.pages[0].keys.insert(7, key(tap, hold));
+    p.pages[1].keys.insert(7, key(Some(cmd("other page")), None));
+    let dir = tempfile::tempdir().expect("tmp");
+    let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
+    store.save_profile(&p).expect("save");
+    store
+        .save_macros(&MacroLibrary { macros: vec![m] })
+        .expect("macros");
+    let settings = Settings {
+        default_profile: Some(p.id),
+        ..Settings::default()
+    };
+    let runner = FakeRunner::default();
+    let keys: Keys = Arc::default();
+    let (tx, events) =
+        ulanzi_deckd::deck::spawn_deck_with(store, settings, Arc::new(runner.clone()), keys.clone());
+    let (t, mock) = answering_mock();
+    tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
+        .await
+        .expect("send");
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    (
+        Rig {
+            _dir: dir,
+            tx,
+            events,
+            mock,
+            runner,
+        },
+        keys,
+    )
+}
+
+fn pressed(keys: &Keys) -> Vec<String> {
+    keys.lock().expect("keys").0.clone()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_macro_starts_on_key_down() {
+    let (r, keys) = macro_rig(Macro::new("M"), None).await;
+    r.press(7).await;
+    assert_eq!(pressed(&keys), ["+a", "-a"]);
+    r.release(7).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn with_a_when_held_action_it_starts_on_a_tap() {
+    let (r, keys) = macro_rig(Macro::new("M"), Some(cmd("hold"))).await;
+    r.press(7).await;
+    assert!(pressed(&keys).is_empty());
+    r.release(7).await;
+    assert_eq!(pressed(&keys), ["+a", "-a"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn while_held_stops_on_key_up() {
+    let mut m = Macro::new("M");
+    m.trigger = Trigger::WhileHeld {
+        on_release: Release::StopNow,
+    };
+    m.steps = tap_a(50);
+    let (r, keys) = macro_rig(m, None).await;
+    r.press(7).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    r.release(7).await;
+    let count = pressed(&keys).len();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(pressed(&keys).len(), count);
+    assert_eq!(pressed(&keys).last().map(String::as_str), Some("-a"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deleted_macro_says_so() {
+    let (mut r, keys) = macro_rig(Macro::new("M"), None).await;
+    r.tx.send(DeckMsg::Macros(MacroLibrary::default()))
+        .await
+        .expect("send");
+    settle().await;
+    while r.events.try_recv().is_ok() {}
+    r.click(7).await;
+    assert!(pressed(&keys).is_empty());
+    let failed = std::iter::from_fn(|| r.events.try_recv().ok())
+        .find_map(|e| match e {
+            DeckEvent::ActionFailed { message, .. } => Some(message),
+            _ => None,
+        })
+        .expect("ActionFailed event");
+    assert_eq!(failed, "This macro no longer exists");
+}
+
+#[tokio::test(start_paused = true)]
+async fn stop_all_macros_stops_them() {
+    let mut p = Macro::new("M");
+    p.steps = tap_a(100);
+    let (r, keys) = macro_rig(p, None).await;
+    r.press(7).await;
+    r.tx.send(DeckMsg::StopMacros).await.expect("send");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(pressed(&keys), ["+a", "-a"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fast_macro_updates_the_key_every_100_ms_at_most() {
+    let mut m = Macro::new("M");
+    m.feedback = Feedback::Count { show_total: true };
+    m.steps = (0..50).flat_map(|_| tap_a(10)).collect();
+    let (r, _keys) = macro_rig(m, None).await;
+    r.mock.clear();
+    r.press(7).await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let uploads = r
+        .mock
+        .commands()
+        .iter()
+        .filter(|c| **c == PARTIAL || **c == BUTTONS)
+        .count();
+    assert!((5..=11).contains(&uploads), "{uploads} uploads in a second");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_page_change_keeps_the_macro_playing() {
+    let mut m = Macro::new("M");
+    m.feedback = Feedback::Count { show_total: true };
+    m.steps = tap_a(100);
+    let (r, keys) = macro_rig(m, None).await;
+    r.press(7).await;
+    r.tx.send(DeckMsg::SetPage(1)).await.expect("send");
+    settle().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(pressed(&keys), ["+a", "-a"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_deck_unplug_releases_held_input() {
+    let mut m = Macro::new("M");
+    m.steps = tap_a(1000);
+    let (r, keys) = macro_rig(m, None).await;
+    r.press(7).await;
+    assert_eq!(pressed(&keys), ["+a"]);
+    r.tx.send(DeckMsg::DeviceDown(DeviceState::NotFound))
+        .await
+        .expect("send");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(pressed(&keys), ["+a", "-a"]);
+}

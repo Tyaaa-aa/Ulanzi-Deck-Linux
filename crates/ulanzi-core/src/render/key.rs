@@ -30,11 +30,38 @@ pub struct Rendered {
 /// Draw a key at [`KEY_PX`]². `None` means there is nothing to draw (no image and a black background),
 /// so the device should show the key empty.
 pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
+    draw_key(look, ctx, None)
+}
+
+/// [`render_key`] with a progress bar along the bottom, `share` of the way across.
+pub fn render_key_progress(look: &KeyLook, ctx: &RenderCtx, share: f32) -> Option<Rendered> {
+    draw_key(look, ctx, Some(share))
+}
+
+/// Height of the progress bar.
+const BAR_PX: u32 = 8;
+
+fn draw_bar(pix: &mut Pixmap, color: Color, share: f32) {
+    let width = (KEY_PX as f32 * share.clamp(0.0, 1.0)).round();
+    let top = (KEY_PX - BAR_PX) as f32;
+    if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, top, width, BAR_PX as f32) {
+        let [r, g, b, a] = color.0;
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(r, g, b, a);
+        pix.fill_rect(rect, &paint, Transform::identity(), None);
+    }
+}
+
+fn draw_key(look: &KeyLook, ctx: &RenderCtx, bar: Option<f32>) -> Option<Rendered> {
     let own_label = look
         .label
         .position
         .filter(|_| look.label.visible && !look.label.text.trim().is_empty());
-    if look.source == ImageSource::None && look.background == Color::BLACK && own_label.is_none() {
+    if look.source == ImageSource::None
+        && look.background == Color::BLACK
+        && own_label.is_none()
+        && bar.is_none()
+    {
         return None;
     }
     let mut pix = Pixmap::new(KEY_PX, KEY_PX)?;
@@ -95,6 +122,9 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
         && let Err(e) = super::text::draw_label(&mut pix, &look.label.text, pos)
     {
         warnings.push(format!("label: {e}"));
+    }
+    if let Some(share) = bar {
+        draw_bar(&mut pix, look.foreground, share);
     }
     let png = pix.encode_png().ok()?;
     Some(Rendered { png, warnings })

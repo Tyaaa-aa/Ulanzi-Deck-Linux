@@ -711,6 +711,15 @@ const VARIABLES: [(&str, &str); 10] = [
     ("profile", "Profile name"),
 ];
 
+/// What a macro's key can show while it plays.
+const MACRO_LABELS: [(&str, &str); 5] = [
+    ("{macro.step}/{macro.total}", "Step of total"),
+    ("{macro.step}", "Step number"),
+    ("{macro.percent}%", "Percent done"),
+    ("{macro.name}", "Macro name"),
+    ("{macro.running}", "Playing (1) or not (0)"),
+];
+
 /// The look of `keys` (image, colours, icon size and live state) folded into one row, since a
 /// fresh action already gives the key its look; and their label.
 fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::PreferencesGroup) {
@@ -974,9 +983,19 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     (group, label_group)
 }
 
-/// The label values the keys' plugin action offers, when they all have the same one.
+/// The label values the keys offer: a macro's, or their plugin action's when they all have the same one.
 fn label_choices(state: &State, keys: &[u8]) -> Vec<ulanzi_core::plugin::ManifestLabel> {
     let e = state.editor.borrow();
+    let is_macro = |k: &u8| matches!(e.key(*k).and_then(|k| k.tap.as_ref()), Some(Action::Macro { .. }));
+    if !keys.is_empty() && keys.iter().all(is_macro) {
+        return MACRO_LABELS
+            .iter()
+            .map(|(text, title)| ulanzi_core::plugin::ManifestLabel {
+                text: (*text).to_string(),
+                title: (*title).to_string(),
+            })
+            .collect();
+    }
     let mut actions = keys.iter().map(|k| match e.key(*k).and_then(|k| k.tap.as_ref()) {
         Some(Action::Plugin { plugin, action, .. }) => Some((plugin.clone(), action.clone())),
         _ => None,

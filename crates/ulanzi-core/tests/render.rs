@@ -226,3 +226,26 @@ fn label_with_own_position_is_drawn_into_the_key() {
     assert_eq!(rows_with_text(LabelPosition::Middle), (false, true, false));
     assert_eq!(rows_with_text(LabelPosition::Bottom), (false, false, true));
 }
+
+#[test]
+fn the_progress_bar_grows_with_the_share() {
+    let d = tempfile::tempdir().expect("tmp");
+    let look = KeyLook {
+        foreground: Color::rgb(255, 255, 255),
+        background: Color::BLACK,
+        source: ImageSource::None,
+        ..KeyLook::default()
+    };
+    let width = |share: f32| {
+        let png = ulanzi_core::render::render_key_progress(&look, &ctx(d.path()), share)
+            .expect("drawn")
+            .png;
+        let img = decode(&png);
+        (0..KEY_PX)
+            .filter(|x| near(img.get_pixel(*x, KEY_PX - 3).0, [255, 255, 255, 255]))
+            .count() as u32
+    };
+    assert_eq!(width(0.0), 0);
+    assert!(width(0.5).abs_diff(KEY_PX / 2) <= 1);
+    assert_eq!(width(1.0), KEY_PX);
+}
