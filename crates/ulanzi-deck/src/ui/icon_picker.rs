@@ -9,6 +9,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use ulanzi_core::Color;
+use ulanzi_core::apps::AppEntry;
 use ulanzi_core::edit::Field;
 use ulanzi_core::import::import_image;
 use ulanzi_core::model::{IconSet, ImageSource};
@@ -206,9 +207,9 @@ fn icon_items(set: IconSet) -> Vec<Item> {
         .collect()
 }
 
-fn app_items() -> Vec<Item> {
-    installed_apps()
-        .iter()
+/// Finding each app's icon searches the icon themes, so this belongs off the UI thread.
+fn app_items(apps: &[AppEntry]) -> Vec<Item> {
+    apps.iter()
         .map(|a| Item {
             label: a.name.clone(),
             hay: format!("{} {} {}", a.name, a.desktop_id, a.keywords.join(" ")).to_lowercase(),
@@ -253,38 +254,88 @@ fn steam_items() -> Vec<Item> {
 
 type Textures = Rc<RefCell<HashMap<String, Option<gdk::Texture>>>>;
 
-fn texture_for(v: &Visual, cache: &Textures, fg: Color) -> Option<gdk::Texture> {
-    let key = match v {
-        Visual::Icon(set, name) => format!("{set:?}/{name}"),
-        Visual::File(p) => p.to_string_lossy().into_owned(),
-        _ => return None,
-    };
-    cache
-        .borrow_mut()
-        .entry(key)
-        .or_insert_with(|| match v {
-            Visual::Icon(set, name) => IconLibrary::bundled()
-                .icon_png(*set, name, 64, fg)
-                .and_then(|png| gdk::Texture::from_bytes(&glib::Bytes::from(&png)).ok()),
-            Visual::File(p) => gdk::Texture::from_filename(p).ok(),
-            _ => None,
-        })
-        .clone()
+/// Pictures kept at most: enough for several full scrolls, far fewer than the icons there are.
+const MAX_TEXTURES: usize = 1500;
+
+thread_local! {
+    /// Kept between openings, so the picker shows at once the second time.
+    static TEXTURES: Textures = Rc::default();
+    /// The apps with their icons, found once like the app list itself.
+    static APP_ITEMS: RefCell<Option<Rc<Vec<Item>>>> = const { RefCell::new(None) };
+}
+
+fn cache_key(v: &Visual, fg: Color) -> Option<String> {
+    match v {
+        Visual::Icon(set, name) => Some(format!("{set:?}/{name}/{fg:?}")),
+        Visual::File(p) => Some(p.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
+fn remember(cache: &Textures, key: String, texture: Option<gdk::Texture>) {
+    let mut cache = cache.borrow_mut();
+    if cache.len() >= MAX_TEXTURES {
+        cache.clear();
+    }
+    cache.insert(key, texture);
+}
+
+/// A bundled icon, drawn now: it takes a fraction of a millisecond.
+fn icon_texture(set: IconSet, name: &str, key: String, cache: &Textures, fg: Color) -> Option<gdk::Texture> {
+    let cached = cache.borrow().get(&key).cloned();
+    cached.unwrap_or_else(|| {
+        let texture = IconLibrary::bundled()
+            .icon_png(set, name, 64, fg)
+            .and_then(|png| gdk::Texture::from_bytes(&glib::Bytes::from(&png)).ok());
+        remember(cache, key, texture.clone());
+        texture
+    })
+}
+
+/// Show a picture file on `image`, decoding it off the UI thread: cover art is large enough to
+/// stutter the scrolling. `current` says whether the cell still shows this item when it is ready.
+fn show_file(
+    image: &gtk::Image,
+    path: &Path,
+    key: String,
+    cache: &Textures,
+    current: impl Fn() -> bool + 'static,
+) {
+    let cached = cache.borrow().get(&key).cloned();
+    if let Some(texture) = cached {
+        match texture {
+            Some(t) => image.set_paintable(Some(&t)),
+            None => image.set_icon_name(Some("image-missing-symbolic")),
+        }
+        return;
+    }
+    image.set_paintable(gdk::Paintable::NONE);
+    let (path, image, cache) = (path.to_path_buf(), image.clone(), cache.clone());
+    crate::runtime::run(
+        async move { tokio::task::spawn_blocking(move || gdk::Texture::from_filename(path).ok()).await },
+        move |r| {
+            let texture = r.ok().flatten();
+            remember(&cache, key, texture.clone());
+            if current() {
+                match texture {
+                    Some(t) => image.set_paintable(Some(&t)),
+                    None => image.set_icon_name(Some("image-missing-symbolic")),
+                }
+            }
+        },
+    );
 }
 
 /// A searchable, virtualised grid of items; `on_pick` gets the chosen source.
 fn grid(
-    items: Vec<Item>,
+    items: Rc<Vec<Item>>,
     search: &gtk::SearchEntry,
     cache: &Textures,
     fill_cells: bool,
     on_pick: Rc<dyn Fn(ImageSource)>,
 ) -> gtk::Widget {
-    let items = Rc::new(items);
-    let model = gtk::StringList::new(&[]);
-    for i in 0..items.len() {
-        model.append(&i.to_string());
-    }
+    let indexes: Vec<String> = (0..items.len()).map(|i| i.to_string()).collect();
+    let model = gtk::StringList::new(&indexes.iter().map(String::as_str).collect::<Vec<_>>());
     let filter = {
         let (items, search) = (items.clone(), search.clone());
         gtk::CustomFilter::new(move |obj| {
@@ -338,8 +389,9 @@ fn grid(
             let Some(li) = obj.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
-            let Some(i) = li
-                .item()
+            let bound = li.item();
+            let Some(i) = bound
+                .clone()
                 .and_downcast::<gtk::StringObject>()
                 .and_then(|s| s.string().parse::<usize>().ok())
             else {
@@ -366,13 +418,26 @@ fn grid(
                     emoji.set_visible(true);
                     emoji.set_label(ch);
                 }
-                v => {
+                Visual::Icon(set, name) => {
                     emoji.set_visible(false);
                     image.set_visible(true);
-                    match texture_for(v, &cache, fg) {
+                    let key = cache_key(&item.visual, fg).unwrap_or_default();
+                    match icon_texture(*set, name, key, &cache, fg) {
                         Some(t) => image.set_paintable(Some(&t)),
                         None => image.set_icon_name(Some("image-missing-symbolic")),
                     }
+                }
+                Visual::File(path) => {
+                    emoji.set_visible(false);
+                    image.set_visible(true);
+                    let key = cache_key(&item.visual, fg).unwrap_or_default();
+                    let li = li.clone();
+                    show_file(&image, path, key, &cache, move || li.item() == bound);
+                }
+                Visual::Placeholder => {
+                    emoji.set_visible(false);
+                    image.set_visible(true);
+                    image.set_icon_name(Some("image-missing-symbolic"));
                 }
             }
         });
@@ -409,8 +474,54 @@ fn empty_page(icon: &str, title: &str, description: &str) -> gtk::Widget {
         .title(title)
         .description(description)
         .css_classes(["compact"])
+        .vexpand(true)
         .build()
         .upcast()
+}
+
+/// Put `items` in `holder`: a grid, or `empty` when there are none.
+fn fill(
+    holder: &gtk::Box,
+    items: Rc<Vec<Item>>,
+    search: &gtk::SearchEntry,
+    cache: &Textures,
+    fill_cells: bool,
+    on_pick: Rc<dyn Fn(ImageSource)>,
+    empty: impl FnOnce() -> gtk::Widget,
+) {
+    while let Some(child) = holder.first_child() {
+        holder.remove(&child);
+    }
+    if items.is_empty() {
+        holder.append(&empty());
+    } else {
+        holder.append(&grid(items, search, cache, fill_cells, on_pick));
+    }
+}
+
+/// A spinner for a tab whose items are still loading.
+fn loading() -> gtk::Widget {
+    adw::Spinner::builder()
+        .width_request(32)
+        .height_request(32)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Center)
+        .vexpand(true)
+        .hexpand(true)
+        .build()
+        .upcast()
+}
+
+fn no_apps() -> gtk::Widget {
+    empty_page("application-x-executable-symbolic", "No Apps Found", "")
+}
+
+fn no_games() -> gtk::Widget {
+    empty_page(
+        "input-gaming-symbolic",
+        "No Steam Games",
+        "Games installed with Steam show up here with their cover art",
+    )
 }
 
 /// Open the picker for the selected keys.
@@ -459,7 +570,12 @@ fn show(
         .content_width(640)
         .content_height(620)
         .build();
-    let stack = adw::ViewStack::new();
+    // A tab is built when first shown, and tabs are not sized to the largest: measuring every grid
+    // when the dialog opens took a full second.
+    let stack = adw::ViewStack::builder()
+        .hhomogeneous(false)
+        .vhomogeneous(false)
+        .build();
     let switcher = adw::ViewSwitcher::builder()
         .stack(&stack)
         .policy(adw::ViewSwitcherPolicy::Wide)
@@ -491,74 +607,104 @@ fn show(
             dialog.close();
         })
     };
-    let cache: Textures = Rc::new(RefCell::new(HashMap::new()));
+    let cache = TEXTURES.with(Rc::clone);
 
+    type Build = Box<dyn FnOnce(&gtk::Box)>;
+    let tabs: Rc<RefCell<HashMap<&'static str, (gtk::Box, Build)>>> = Rc::default();
     let page = |w: &gtk::Widget, name: &str, title: &str, icon: &str| {
         stack.add_titled_with_icon(w, Some(name), title, icon);
     };
-    page(
-        &grid(icon_items(IconSet::Lucide), &search, &cache, false, pick.clone()),
-        "icons",
-        "Icons",
-        "shapes-symbolic",
-    );
-    let brands = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    brands.append(&grid(
-        icon_items(IconSet::Brands),
-        &search,
-        &cache,
-        false,
-        pick.clone(),
-    ));
-    brands.append(
-        &gtk::Label::builder()
-            .label("Logos from Simple Icons. Trademarks belong to their owners.")
-            .css_classes(["dim-label", "caption"])
-            .margin_top(6)
-            .margin_bottom(8)
-            .build(),
-    );
-    page(brands.upcast_ref(), "brands", "Brands", "starred-symbolic");
-    let apps = app_items();
-    if apps.is_empty() {
-        page(
-            &empty_page("application-x-executable-symbolic", "No Apps Found", ""),
-            "apps",
-            "Apps",
-            "view-app-grid-symbolic",
-        );
-    } else {
-        page(
-            &grid(apps, &search, &cache, false, pick.clone()),
-            "apps",
-            "Apps",
-            "view-app-grid-symbolic",
+    let add_tab = |name: &'static str, title: &str, icon: &str, build: Build| {
+        let holder = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        page(holder.upcast_ref(), name, title, icon);
+        tabs.borrow_mut().insert(name, (holder, build));
+    };
+    {
+        let (search, cache, pick) = (search.clone(), cache.clone(), pick.clone());
+        add_tab(
+            "icons",
+            "Icons",
+            "shapes-symbolic",
+            Box::new(move |holder| {
+                let items = Rc::new(icon_items(IconSet::Lucide));
+                holder.append(&grid(items, &search, &cache, false, pick));
+            }),
         );
     }
-    page(
-        &grid(emoji_items(), &search, &cache, false, pick.clone()),
-        "emoji",
-        "Emoji",
-        "emoji-people-symbolic",
-    );
-    let games = steam_items();
-    if games.is_empty() {
-        page(
-            &empty_page(
-                "input-gaming-symbolic",
-                "No Steam Games",
-                "Games installed with Steam show up here with their cover art",
-            ),
-            "steam",
-            "Steam",
-            "input-gaming-symbolic",
+    {
+        let (search, cache, pick) = (search.clone(), cache.clone(), pick.clone());
+        add_tab(
+            "brands",
+            "Brands",
+            "starred-symbolic",
+            Box::new(move |holder| {
+                let items = Rc::new(icon_items(IconSet::Brands));
+                holder.append(&grid(items, &search, &cache, false, pick));
+                holder.append(
+                    &gtk::Label::builder()
+                        .label("Logos from Simple Icons. Trademarks belong to their owners.")
+                        .css_classes(["dim-label", "caption"])
+                        .margin_top(6)
+                        .margin_bottom(8)
+                        .build(),
+                );
+            }),
         );
-    } else {
-        page(
-            &grid(games, &search, &cache, true, pick.clone()),
+    }
+    {
+        let (search, cache, pick) = (search.clone(), cache.clone(), pick.clone());
+        add_tab(
+            "apps",
+            "Apps",
+            "view-app-grid-symbolic",
+            Box::new(move |holder| {
+                if let Some(items) = APP_ITEMS.with_borrow(Clone::clone) {
+                    fill(holder, items, &search, &cache, false, pick, no_apps);
+                    return;
+                }
+                holder.append(&loading());
+                let apps = installed_apps().to_vec();
+                let holder = holder.clone();
+                crate::runtime::run(
+                    async move { tokio::task::spawn_blocking(move || app_items(&apps)).await },
+                    move |r| {
+                        let items = Rc::new(r.unwrap_or_default());
+                        APP_ITEMS.with_borrow_mut(|a| *a = Some(items.clone()));
+                        fill(&holder, items, &search, &cache, false, pick, no_apps);
+                    },
+                );
+            }),
+        );
+    }
+    {
+        let (search, cache, pick) = (search.clone(), cache.clone(), pick.clone());
+        add_tab(
+            "emoji",
+            "Emoji",
+            "emoji-people-symbolic",
+            Box::new(move |holder| {
+                let items = Rc::new(emoji_items());
+                holder.append(&grid(items, &search, &cache, false, pick));
+            }),
+        );
+    }
+    {
+        let (search, cache, pick) = (search.clone(), cache.clone(), pick.clone());
+        add_tab(
             "steam",
             "Steam",
             "input-gaming-symbolic",
+            Box::new(move |holder| {
+                holder.append(&loading());
+                let holder = holder.clone();
+                crate::runtime::run(
+                    async move { tokio::task::spawn_blocking(steam_items).await },
+                    move |r| {
+                        let items = Rc::new(r.unwrap_or_default());
+                        fill(&holder, items, &search, &cache, true, pick, no_games);
+                    },
+                );
+            }),
         );
     }
 
@@ -621,11 +767,20 @@ fn show(
     }
     page(file_page.upcast_ref(), "file", "File", "folder-pictures-symbolic");
 
+    let build_tab = move |name: &str| {
+        // Out of the map first: building may ask for it again.
+        let tab = tabs.borrow_mut().remove(name);
+        if let Some((holder, build)) = tab {
+            build(&holder);
+        }
+    };
     // The search only makes sense for the grids.
     {
-        let search_bar = search_bar.clone();
+        let (search_bar, build_tab) = (search_bar.clone(), build_tab.clone());
         stack.connect_visible_child_name_notify(move |s| {
-            search_bar.set_visible(s.visible_child_name().as_deref() != Some("file"));
+            let name = s.visible_child_name();
+            search_bar.set_visible(name.as_deref() != Some("file"));
+            build_tab(name.as_deref().unwrap_or_default());
         });
     }
     // Start on the tab that matches the current image.
@@ -639,6 +794,7 @@ fn show(
         Some(ImageSource::Image { .. }) => "file",
         _ => "icons",
     }));
+    build_tab(stack.visible_child_name().as_deref().unwrap_or_default());
     dialog.present(Some(parent));
     search.grab_focus();
 }

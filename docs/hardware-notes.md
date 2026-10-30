@@ -65,6 +65,24 @@ what the old "padding file" workaround was dodging. With the prefix the workarou
   the device-info reply before the first upload after connecting, and sends only the changed keys for
   changes on the same page.
 
+## GIFs and key speed (U6)
+
+Measured on 2026-10-31 with `ulanzictl probe gif`.
+
+* **The deck plays GIFs by itself.** A looping 196×196 GIF (12 frames, 100 ms each) animated with no
+  host traffic, in both a full-page upload and a partial update (0x000d).
+* **The file name decides.** The same GIF under a `.png` name left the key blank, so the deck goes by
+  the extension, not the content.
+* Two GIFs of about 7.5 KB each ran side by side. Thirteen at once, large files and labels over a GIF
+  are untested.
+* One key took 72 partial updates of a 1.3 KB PNG back to back at 30 updates a second, with no gap, no
+  blinking and no glitches. Bigger pictures take longer: this is a best case, not a frame rate to
+  count on.
+* Reacting to a press took about 3.3 ms to write, yet the key sometimes changed up to about a second
+  late, mostly on the first press after a pause, and quickly on presses right after. The delay is on
+  the deck's side (input report or drawing); which one is not known. The probe sends no idle traffic,
+  so the once-a-second small-window update may change this.
+
 ## Other commands **[homedeck]**
 
 `0x0004` lock screen, `0x0009` screensaver image (ZIP with one image), `0x001a` deck sleep time in

@@ -33,6 +33,9 @@ pub enum Probe {
     Modes,
     /// Upload realistic full pages 2 s apart and report if the deck reboots (USB disconnect); no user needed.
     Crash,
+    /// Does the deck play a GIF by itself, how fast can one key change, and how late does a press
+    /// show on the key?
+    Gif,
 }
 
 pub async fn run(what: Probe) -> Result<(), String> {
@@ -45,6 +48,7 @@ pub async fn run(what: Probe) -> Result<(), String> {
         Probe::Omit => omit(&mut dev).await,
         Probe::Modes => modes(&mut dev).await,
         Probe::Crash => crash(&mut dev).await,
+        Probe::Gif => gif(&mut dev).await,
     }
 }
 
@@ -485,6 +489,169 @@ async fn crash(dev: &mut Hidraw) -> Result<(), String> {
         );
         if !ok {
             return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// A 196×196 looping GIF: a white bar crossing a coloured key, twelve frames of 100 ms.
+fn test_gif(rgb: [u8; 3]) -> Vec<u8> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    use image::{Delay, Frame, Rgba, RgbaImage};
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new(&mut out);
+        enc.set_repeat(Repeat::Infinite).expect("gif");
+        for f in 0..12u32 {
+            let img = RgbaImage::from_fn(196, 196, |x, _| {
+                if x / 16 == f {
+                    Rgba([255, 255, 255, 255])
+                } else {
+                    Rgba([rgb[0], rgb[1], rgb[2], 255])
+                }
+            });
+            let delay = Delay::from_numer_denom_ms(100, 1);
+            enc.encode_frame(Frame::from_parts(img, 0, 0, delay))
+                .expect("gif");
+        }
+    }
+    out
+}
+
+/// One frame of a white bar crossing a dark key, as PNG.
+fn bar_frame(f: u32, frames: u32) -> Vec<u8> {
+    let bar = 196 * (f % frames) / frames;
+    let img = image::RgbaImage::from_fn(196, 196, |x, _| {
+        if x >= bar && x < bar + 16 {
+            image::Rgba([255, 255, 255, 255])
+        } else {
+            image::Rgba([20, 40, 80, 255])
+        }
+    });
+    let mut out = Vec::new();
+    let _ =
+        image::DynamicImage::ImageRgba8(img).write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png);
+    out
+}
+
+async fn gif(dev: &mut Hidraw) -> Result<(), String> {
+    let window = SmallWindow {
+        mode: ScreenMode::Clock,
+        cpu: 0,
+        mem: 0,
+        time: "12:00:00".into(),
+        gpu: 0,
+        clock_24h: true,
+        date: String::new(),
+    };
+    send(dev, &[ulanzi_proto::unlock(), small_window(&window)]).await?;
+    send(
+        dev,
+        &page(&(0..13).map(|i| (i, solid([40, 40, 40]))).collect::<Vec<_>>()),
+    )
+    .await?;
+    wait_enter("TEST 1 of 4: all 13 keys should be dark grey.");
+
+    // A GIF in a whole-page upload, in a partial update, and under a .png name.
+    let mut entries = BTreeMap::new();
+    let mut images = Vec::new();
+    for (i, name, rgb) in [
+        (0u8, "gif_page.gif", [200, 40, 40]),
+        (1, "gif_named.png", [40, 160, 60]),
+    ] {
+        entries.insert(
+            i,
+            ButtonEntry {
+                state: 0,
+                text: None,
+                icon: Some(format!("icons/{name}")),
+            },
+        );
+        images.push(ButtonImage {
+            name: name.into(),
+            png: test_gif(rgb),
+        });
+    }
+    let bytes: usize = images.iter().map(|i| i.png.len()).sum();
+    println!("two GIFs, {bytes} bytes");
+    send(
+        dev,
+        &file_packets(Command::SetButtons, &zip_for(&entries, &images)),
+    )
+    .await?;
+    let mut partial = BTreeMap::new();
+    partial.insert(
+        2u8,
+        ButtonEntry {
+            state: 0,
+            text: None,
+            icon: Some("icons/gif_partial.gif".into()),
+        },
+    );
+    let img = [ButtonImage {
+        name: "gif_partial.gif".into(),
+        png: test_gif([40, 80, 200]),
+    }];
+    send(
+        dev,
+        &file_packets(Command::PartialUpdate, &zip_for(&partial, &img)),
+    )
+    .await?;
+    wait_enter(
+        "TEST 2 of 4: look at the first three keys (red, green, blue). Note for EACH one: \
+         a moving white bar, a still picture, or blank. Then press Enter",
+    );
+
+    send(
+        dev,
+        &page(&(0..13).map(|i| (i, solid([40, 40, 40]))).collect::<Vec<_>>()),
+    )
+    .await?;
+    wait_enter("TEST 3 of 4: key 1 will show a white bar crossing it, as fast as the link allows.");
+    let frames: Vec<Vec<u8>> = (0..24).map(|f| bar_frame(f, 24)).collect();
+    println!("frame size {} bytes", frames[0].len());
+    let t = Instant::now();
+    for (n, f) in frames.iter().cycle().take(72).enumerate() {
+        send(dev, &partial_packets(&[(0, f.clone())])).await?;
+        if n % 24 == 23 {
+            println!("{} frames in {:?}", n + 1, t.elapsed());
+        }
+    }
+    println!(
+        "72 frames in {:?}: {:.1} frames a second written",
+        t.elapsed(),
+        72.0 / t.elapsed().as_secs_f32()
+    );
+    wait_enter("Did the bar glide, stutter, or freeze? Did any key blink or go black? Then press Enter");
+
+    send(
+        dev,
+        &page(&(0..13).map(|i| (i, solid([40, 40, 40]))).collect::<Vec<_>>()),
+    )
+    .await?;
+    println!(
+        "TEST 4 of 4: press and release key 1 several times. It turns white while held. \
+         Note how late that feels. Press Enter here when done."
+    );
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    loop {
+        tokio::select! {
+            _ = stdin.next_line() => break,
+            r = dev.recv() => {
+                let Ok(buf) = r else { break };
+                let Some(e) = parse_input(&buf) else { continue };
+                if !matches!(e.control, ulanzi_proto::Control::Key(_)) {
+                    continue;
+                }
+                let colour = match e.kind {
+                    ulanzi_proto::InputKind::Press => [255, 255, 255],
+                    ulanzi_proto::InputKind::Release => [40, 40, 40],
+                    _ => continue,
+                };
+                let t = Instant::now();
+                send(dev, &partial_packets(&[(e.raw_index, solid(colour))])).await?;
+                println!("{:?} written in {:?}", e.kind, t.elapsed());
+            }
         }
     }
     Ok(())
