@@ -36,5 +36,7 @@ do_or_show git tag -a "$tag" -m "Ulanzi Deck $version"
 do_or_show git push origin "refs/tags/$tag"
 assets=(dist/*.tar.gz dist/*.deb dist/*.rpm dist/*.pkg.tar.zst dist/PKGBUILD dist/SRCINFO dist/SHA256SUMS)
 compgen -G "dist/*.AppImage" >/dev/null && assets+=(dist/*.AppImage)
-do_or_show gh release create "$tag" --title "Ulanzi Deck $version" --notes-file packaging/release-notes.md "${assets[@]}"
+# The repository by its origin URL, so gh needs no default repository set.
+repo=$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+do_or_show gh release create "$tag" -R "$repo" --title "Ulanzi Deck $version" --notes-file packaging/release-notes.md "${assets[@]}"
 [ $go = 1 ] && say "Published." || say "Nothing was sent. Run with --go to publish."
