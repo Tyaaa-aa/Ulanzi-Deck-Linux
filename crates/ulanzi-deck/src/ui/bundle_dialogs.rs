@@ -101,6 +101,14 @@ pub fn open_import(state: &State, parent: &impl IsA<gtk::Widget>, path: &Path) {
     let p2 = path.clone();
     runtime::run(async move { c.preview_bundle(&p2).await }, move |r| match r {
         Ok(preview) => import_dialog(&st, &parent, &path, preview),
+        Err(e) if e.to_string().contains("newer Ulanzi Deck") => {
+            let (st, parent) = (st.clone(), parent.clone());
+            toast_with(
+                "That file needs a newer version of Ulanzi Deck",
+                "Update",
+                move || crate::ui::updates::open(&st, &parent),
+            );
+        }
         Err(e) => crate::ui::toast(&st, &format!("Can't import that file: {e}")),
     });
 }
@@ -239,12 +247,24 @@ fn import_dialog(state: &State, parent: &gtk::Widget, path: &Path, preview: crat
                             if !done.notes.is_empty()
                                 && let Some(window) = window.and_downcast::<gtk::Window>()
                             {
-                                adw::AlertDialog::builder()
+                                let alert = adw::AlertDialog::builder()
                                     .heading("Some Keys Need a Newer Version")
                                     .body(done.notes.join("\n"))
                                     .close_response("ok")
-                                    .build()
-                                    .present(Some(&window));
+                                    .build();
+                                alert.add_response("ok", "OK");
+                                if st.update.borrow().as_ref().is_some_and(|s| s.offered.is_some()) {
+                                    alert.add_response("update", "Update");
+                                    alert.set_response_appearance(
+                                        "update",
+                                        adw::ResponseAppearance::Suggested,
+                                    );
+                                }
+                                let (s2, w2) = (st.clone(), window.clone());
+                                alert.connect_response(Some("update"), move |_, _| {
+                                    crate::ui::updates::open(&s2, &w2)
+                                });
+                                alert.present(Some(&window));
                             }
                             let n = done.imported.len();
                             let st2 = st.clone();

@@ -488,6 +488,21 @@ fn foreign_view(ctx: &C, content: &gtk::Box, slot: Slot) {
         });
     });
     content.append(&padded(clear));
+    if state
+        .update
+        .borrow()
+        .as_ref()
+        .is_some_and(|s| s.offered.is_some())
+    {
+        let update = gtk::Button::builder()
+            .label("Update")
+            .halign(gtk::Align::Center)
+            .css_classes(["suggested-action", "pill"])
+            .build();
+        let st = state.clone();
+        update.connect_clicked(move |b| crate::ui::updates::open(&st, b));
+        content.append(&padded(update));
+    }
 }
 
 fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {

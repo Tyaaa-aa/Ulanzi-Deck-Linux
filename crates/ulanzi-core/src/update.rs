@@ -243,6 +243,8 @@ impl UpdateState {
 pub struct UpdateStatus {
     pub current: String,
     pub offered: Option<Release>,
+    /// The release this copy is, when it was seen on offer: What's New shows its notes.
+    pub current_release: Option<Release>,
     pub kind: InstallKind,
     pub can_install: bool,
     pub check: bool,

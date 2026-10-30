@@ -434,6 +434,7 @@ fn integrations_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
     }
     input.add(&row);
     page.add(&input);
+    page.add(&crate::ui::updates::preferences_group(state));
     page
 }
 

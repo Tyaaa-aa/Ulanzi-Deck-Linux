@@ -255,7 +255,7 @@ pub fn build(state: &State) -> gtk::Box {
             }
         ));
         move |c: Change| {
-            if matches!(c, Change::Profiles | Change::Profile) {
+            if matches!(c, Change::Profiles | Change::Profile | Change::Update) {
                 while let Some(row) = profiles.row_at_index(0) {
                     profiles.remove(&row);
                 }
@@ -281,7 +281,24 @@ pub fn build(state: &State) -> gtk::Box {
                 }
                 for name in state.too_new.borrow().iter() {
                     let row = profile_row(name, "Needs a newer version", false);
-                    row.set_sensitive(false);
+                    row.set_activatable(false);
+                    row.add_css_class("dim-label");
+                    if state
+                        .update
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|s| s.offered.is_some())
+                    {
+                        let update = gtk::Button::builder()
+                            .label("Update")
+                            .valign(gtk::Align::Center)
+                            .build();
+                        let st = state.clone();
+                        update.connect_clicked(move |b| crate::ui::updates::open(&st, b));
+                        if let Some(b) = row.child().and_downcast::<gtk::Box>() {
+                            b.append(&update);
+                        }
+                    }
                     profiles.append(&row);
                 }
             }

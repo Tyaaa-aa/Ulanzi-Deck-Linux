@@ -408,6 +408,13 @@ fn main() -> glib::ExitCode {
                 Some("about") => {
                     gio::prelude::ActionGroupExt::activate_action(&app, "about", None);
                 }
+                Some("updates") => {
+                    let (state, window) = (state2.clone(), window.clone());
+                    ui::updates::refresh(&state);
+                    glib::timeout_add_local_once(Duration::from_millis(800), move || {
+                        ui::updates::open(&state, &window)
+                    });
+                }
                 Some(o) if o.starts_with("picker") => {
                     ui::icon_picker::open_at(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }

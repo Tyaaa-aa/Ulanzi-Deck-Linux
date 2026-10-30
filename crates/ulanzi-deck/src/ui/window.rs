@@ -228,6 +228,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     let content_view = adw::ToolbarView::new();
     content_view.add_top_bar(&header);
     content_view.add_top_bar(&banner(state));
+    content_view.add_top_bar(&crate::ui::updates::banner(state));
     let inner_split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::End)
         .min_sidebar_width(320.0)
@@ -452,6 +453,7 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
             }
         });
     }
+    *state.window.borrow_mut() = Some(window.clone().upcast());
     if let Some(app) = window.application() {
         for (action, accels) in APP_ACCELS {
             app.set_accels_for_action(action, accels);
@@ -574,6 +576,7 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
                     *state.client.borrow_mut() = Some(c);
                     *state.profiles.borrow_mut() = profiles;
                     *state.too_new.borrow_mut() = too_new;
+                    crate::ui::updates::refresh(&state);
                     *state.settings.borrow_mut() = settings;
                     *state.status.borrow_mut() = Status::Device {
                         state: hello.device_state,
@@ -644,6 +647,9 @@ fn follow_events(state: &State, c: &Client) {
                     state.notify(Change::Plugins);
                 }
                 ClientEvent::PluginsChanged => refresh_plugins(&state),
+                ClientEvent::UpdateProgress { stage, done, total } => {
+                    crate::ui::updates::progress(&stage, done, total)
+                }
                 ClientEvent::InstallProgress {
                     id,
                     stage,

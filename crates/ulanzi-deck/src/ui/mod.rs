@@ -21,6 +21,7 @@ pub mod preferences;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod templates;
+pub mod updates;
 pub mod widgets_editor;
 pub mod window;
 

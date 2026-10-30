@@ -53,6 +53,7 @@ pub fn status(store: &Store, src: &Source) -> UpdateStatus {
         current: src.current.clone(),
         can_install: offered.as_ref().is_some_and(|r| can_install(r, src.kind)),
         offered,
+        current_release: state.offered.clone().filter(|r| r.version() == src.current),
         kind: src.kind,
         check: state.check,
         last_check: state.last_check,
@@ -98,7 +99,10 @@ pub fn run(store: &Store, src: &Source, force: bool) -> Result<UpdateStatus, Upd
                 return failed(store);
             };
             state.etag = etag;
-            state.offered = update::parse_latest(&body).filter(|r| update::is_newer(&r.tag, &src.current));
+            let newer = update::parse_latest(&body).filter(|r| update::is_newer(&r.tag, &src.current));
+            // The release this copy is stays known, for What's New.
+            let installed = state.offered.take().filter(|r| r.version() == src.current);
+            state.offered = newer.or(installed);
         }
         _ => return failed(store),
     }

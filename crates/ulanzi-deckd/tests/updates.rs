@@ -318,3 +318,16 @@ fn state_is_kept_in_its_own_file() {
     assert_eq!(UpdateState::load(&st).etag.as_deref(), Some("\"tag1\""));
     assert!(st.state_dir().join("updates.toml").exists());
 }
+
+#[test]
+fn the_installed_release_stays_known_for_whats_new() {
+    let d = tempfile::tempdir().expect("tmp");
+    let st = store(&d);
+    let (base, _) = release_server("v9.9.9", &ALL, 200);
+    check::run(&st, &source(&base), false).expect("offered");
+    let mut updated = source(&base);
+    updated.current = "9.9.9".into();
+    let s = check::run(&st, &updated, false).expect("after the update");
+    assert_eq!(s.offered, None);
+    assert_eq!(s.current_release.map(|r| r.tag), Some("v9.9.9".to_string()));
+}

@@ -23,6 +23,8 @@ pub enum Change {
     /// The list of profiles.
     Profiles,
     Settings,
+    /// What is known about updates.
+    Update,
     /// A physical control was pressed.
     Pressed(Slot),
     /// A live preview of an appearance change on the selected keys started or ended.
@@ -64,6 +66,12 @@ pub struct AppState {
     pub profiles: RefCell<Vec<(Uuid, String)>>,
     /// Profiles a newer version wrote, which this one lists but cannot open.
     pub too_new: RefCell<Vec<String>>,
+    /// What the service knows about updates.
+    pub update: RefCell<Option<ulanzi_core::update::UpdateStatus>>,
+    /// The update banner was put off until the next start.
+    pub update_dismissed: Cell<bool>,
+    /// The main window, for dialogs nothing else opens.
+    pub window: RefCell<Option<gtk::Window>>,
     pub status: RefCell<Status>,
     pub client: RefCell<Option<Client>>,
     /// True while showing built-in demo data (no service).
@@ -124,6 +132,9 @@ impl AppState {
             settings: RefCell::new(Settings::default()),
             profiles: RefCell::new(Vec::new()),
             too_new: RefCell::new(Vec::new()),
+            update: RefCell::new(None),
+            update_dismissed: Cell::new(false),
+            window: RefCell::new(None),
             status: RefCell::new(Status::Connecting),
             client: RefCell::new(None),
             demo: Cell::new(false),
