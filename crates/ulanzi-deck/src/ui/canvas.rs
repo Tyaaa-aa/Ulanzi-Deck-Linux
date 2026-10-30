@@ -393,6 +393,7 @@ pub fn key_problem(state: &State, key: &ulanzi_core::model::Key) -> Option<Strin
         pages: &pages,
         profiles: &profiles,
         plugin: &|p, a| state.plugins.borrow().action_problem(p, a),
+        macro_exists: &|id| state.editor.borrow().library().get(id).is_some(),
     };
     [&key.tap, &key.hold]
         .into_iter()

@@ -119,7 +119,7 @@ fn load_css() {
     }
 }
 
-fn save_screenshot(window: &adw::ApplicationWindow, path: &std::path::Path) -> Result<(), String> {
+fn save_screenshot(window: &gtk::Window, path: &std::path::Path) -> Result<(), String> {
     let paintable = gtk::WidgetPaintable::new(Some(window));
     let (w, h) = (window.width() as f64, window.height() as f64);
     let snapshot = gtk::Snapshot::new();
@@ -408,6 +408,16 @@ fn main() -> glib::ExitCode {
                 Some("about") => {
                     gio::prelude::ActionGroupExt::activate_action(&app, "about", None);
                 }
+                Some("macro") => {
+                    let library = state2.editor.borrow().library().clone();
+                    let target = library
+                        .macros
+                        .first()
+                        .map_or(ui::macro_editor::MacroTarget::New, |m| {
+                            ui::macro_editor::MacroTarget::Library(m.id)
+                        });
+                    ui::macro_editor::open(&state2, &window, target);
+                }
                 Some("updates") => {
                     let (state, window) = (state2.clone(), window.clone());
                     ui::updates::refresh(&state);
@@ -427,7 +437,18 @@ fn main() -> glib::ExitCode {
                     window.width(),
                     window.height()
                 );
-                match save_screenshot(&window, &shot.path) {
+                // A window of its own, such as the macro editor, is what the picture is of.
+                let top = gtk::Window::list_toplevels()
+                    .into_iter()
+                    .filter_map(|w| w.downcast::<gtk::Window>().ok())
+                    .find(|w| {
+                        w.is_visible() && w.upcast_ref::<gtk::Window>() != window.upcast_ref::<gtk::Window>()
+                    });
+                let saved = match &top {
+                    Some(w) => save_screenshot(w, &shot.path),
+                    None => save_screenshot(window.upcast_ref(), &shot.path),
+                };
+                match saved {
                     Ok(()) => println!("saved {}", shot.path.display()),
                     Err(e) => eprintln!("screenshot failed: {e}"),
                 }

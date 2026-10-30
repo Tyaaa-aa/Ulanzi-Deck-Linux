@@ -25,6 +25,8 @@ pub enum Change {
     Settings,
     /// What is known about updates.
     Update,
+    /// The macro library.
+    Macros,
     /// A physical control was pressed.
     Pressed(Slot),
     /// A live preview of an appearance change on the selected keys started or ended.
@@ -262,16 +264,28 @@ impl AppState {
     }
 
     fn after_edit(&self) {
-        let profile = {
+        let (profile, library) = {
             let mut e = self.editor.borrow_mut();
             if !e.is_dirty() {
                 return;
             }
             e.mark_clean();
-            e.profile().clone()
+            let library = e.take_library_changed().then(|| e.library().clone());
+            (e.profile().clone(), library)
         };
-        if let Some(c) = self.client.borrow().as_ref() {
+        if let Some(c) = self.client.borrow().clone() {
             c.apply(profile);
+            if let Some(library) = &library {
+                let library = library.clone();
+                crate::runtime::run(async move { c.set_macros(&library).await }, |r| {
+                    if let Err(e) = r {
+                        tracing::error!("macros not saved: {e}");
+                    }
+                });
+            }
+        }
+        if library.is_some() {
+            self.notify(Change::Macros);
         }
         self.notify(Change::Profile);
     }
@@ -302,7 +316,9 @@ impl AppState {
 
     pub fn load_profile(&self, profile: Profile) {
         let page = self.editor.borrow().page();
+        let library = self.editor.borrow().library().clone();
         let mut editor = Editor::new(profile);
+        editor.set_library(library);
         editor.set_page(page);
         *self.editor.borrow_mut() = editor;
         self.selection.borrow_mut().clear();

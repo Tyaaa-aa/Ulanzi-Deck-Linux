@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use ulanzi_core::catalog::{self, Category};
-use ulanzi_core::model::Action;
+use ulanzi_core::model::{Action, MacroLibrary};
 
 use crate::plugins::{Plugins, defaults};
 
@@ -144,6 +144,48 @@ fn filtered(group: &Group, words: &[String]) -> Option<Group> {
 }
 
 impl Catalog {
+    /// With a group for the macro library: its macros, and a way to make a new one.
+    pub fn with_macros(mut self, library: &MacroLibrary) -> Catalog {
+        let mut entries: Vec<Entry> = library
+            .macros
+            .iter()
+            .map(|m| Entry {
+                title: m.name.clone(),
+                plugin: None,
+                icon: None,
+                action: Action::Macro { id: m.id, own: None },
+            })
+            .collect();
+        sort_entries(&mut entries);
+        entries.insert(
+            0,
+            Entry {
+                title: "New Macro".to_string(),
+                plugin: None,
+                icon: None,
+                action: Action::Macro {
+                    id: uuid::Uuid::nil(),
+                    own: None,
+                },
+            },
+        );
+        self.groups.insert(
+            self.builtin_groups(),
+            Group {
+                id: "cat:macros".to_string(),
+                title: "Macros".to_string(),
+                icon: None,
+                plugin: false,
+                entries,
+            },
+        );
+        self
+    }
+
+    fn builtin_groups(&self) -> usize {
+        self.groups.iter().filter(|g| !g.plugin).count()
+    }
+
     /// The built-in actions (without Multi Action unless `include_multi`) and the actions of every
     /// plugin that can be loaded.
     pub fn new(plugins: &Plugins, include_multi: bool) -> Catalog {

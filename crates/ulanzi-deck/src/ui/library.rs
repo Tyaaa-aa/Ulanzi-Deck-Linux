@@ -81,7 +81,13 @@ impl Inner {
     }
 
     fn fresh_catalog(&self) -> Catalog {
-        Catalog::new(&self.state.plugins.borrow(), self.include_multi())
+        let catalog = Catalog::new(&self.state.plugins.borrow(), self.include_multi());
+        // Only for a key itself: a Multi Action step can't play a macro.
+        if self.include_multi() {
+            catalog.with_macros(self.state.editor.borrow().library())
+        } else {
+            catalog
+        }
     }
 
     /// The remembered category, or All when it is gone.
@@ -610,7 +616,7 @@ pub fn build(state: &State, on_assign: impl Fn() + 'static) -> Library {
             if root.upgrade().is_none() {
                 return false;
             }
-            if c == Change::Plugins && plugins_changed(&inner) == Some(true) {
+            if c == Change::Macros || (c == Change::Plugins && plugins_changed(&inner) == Some(true)) {
                 reload();
             }
             true

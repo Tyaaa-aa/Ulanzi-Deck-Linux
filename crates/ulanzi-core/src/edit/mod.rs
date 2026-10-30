@@ -119,6 +119,8 @@ pub struct Editor {
     profile: Profile,
     page: usize,
     library: MacroLibrary,
+    /// The library changed since [`Editor::take_library_changed`] last asked.
+    library_changed: bool,
     undo: Vec<(Profile, MacroLibrary)>,
     redo: Vec<(Profile, MacroLibrary)>,
     clipboard: Option<Clip>,
@@ -135,6 +137,7 @@ impl Editor {
             profile,
             page: 0,
             library: MacroLibrary::default(),
+            library_changed: false,
             undo: Vec::new(),
             redo: Vec::new(),
             clipboard: None,
@@ -202,6 +205,7 @@ impl Editor {
             return;
         }
         self.dirty = true;
+        self.library_changed |= self.library != before.1;
         self.redo.clear();
         let merging = self.merge.is_some() && self.merge == self.last_merge && !self.undo.is_empty();
         self.last_merge = self.merge;
@@ -242,7 +246,36 @@ impl Editor {
         );
         self.page = self.page.min(self.profile.pages.len().saturating_sub(1));
         self.dirty = true;
+        self.library_changed |= self.library != old.1;
         old
+    }
+
+    /// Whether the library changed since this was last asked.
+    pub fn take_library_changed(&mut self) -> bool {
+        std::mem::take(&mut self.library_changed)
+    }
+
+    /// What a press of `slot` runs now. Undoable; leaves the key's look alone.
+    pub fn set_slot_action(&mut self, slot: Slot, action: Action) {
+        if self.is_foreign(slot) {
+            return;
+        }
+        self.edit(|p, page| match slot {
+            Slot::Key(i) => {
+                if i < KEYS {
+                    let key = p.pages[page].keys.entry(i).or_default();
+                    key.tap = Some(action);
+                }
+            }
+            Slot::Dial(d) => {
+                if let Some(dial) = p.pages[page].dials.get_mut(d as usize) {
+                    dial.press = Some(action);
+                }
+            }
+            Slot::Small(0) => p.small_buttons.left = Some(action),
+            Slot::Small(_) => p.small_buttons.right = Some(action),
+            Slot::Screen => {}
+        });
     }
 
     pub fn library(&self) -> &MacroLibrary {

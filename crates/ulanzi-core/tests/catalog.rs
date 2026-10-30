@@ -207,6 +207,7 @@ fn problems_name_what_is_missing() {
     use ulanzi_core::catalog::{Problems, problem};
     let page = uuid::Uuid::new_v4();
     let ctx = Problems {
+        macro_exists: &|_| true,
         app_installed: &|id| id == "firefox.desktop",
         file_exists: &|p| p == "/sounds/ding.oga",
         pages: &[page],
@@ -260,6 +261,7 @@ fn problems_name_what_is_missing() {
 fn plugin_problem_comes_from_the_callback() {
     use ulanzi_core::catalog::{Problems, problem};
     let ctx = Problems {
+        macro_exists: &|_| true,
         app_installed: &|_| true,
         file_exists: &|_| true,
         pages: &[],

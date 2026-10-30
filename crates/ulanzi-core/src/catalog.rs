@@ -577,7 +577,7 @@ fn ellipsize(s: &str, max: usize) -> String {
     out
 }
 
-fn pretty_combo(keys: &str) -> String {
+pub fn pretty_combo(keys: &str) -> String {
     keys.split('+')
         .map(|k| {
             let k = k.trim();
@@ -656,6 +656,8 @@ pub struct Problems<'a> {
     pub profiles: &'a [Uuid],
     /// Why a plugin action can't work (plugin id, action id); `None` when it looks fine.
     pub plugin: &'a dyn Fn(&str, &str) -> Option<String>,
+    /// Whether a macro is in the library.
+    pub macro_exists: &'a dyn Fn(Uuid) -> bool,
 }
 
 /// Why this action can't work as it is, in words for a warning badge; `None` when it looks fine.
@@ -681,6 +683,10 @@ pub fn problem(a: &Action, c: &Problems) -> Option<String> {
         }
         Action::SwitchProfile { profile } if !c.profiles.is_empty() && !c.profiles.contains(profile) => {
             Some("That profile no longer exists".into())
+        }
+        Action::Macro { id, own: None } if id.is_nil() => Some("No macro made yet".into()),
+        Action::Macro { id, own: None } if !(c.macro_exists)(*id) => {
+            Some("This macro no longer exists".into())
         }
         Action::Multi { steps } => steps.iter().find_map(|s| problem(&s.action, c)),
         Action::Cycle { steps, .. } => steps.iter().find_map(|s| problem(&s.action, c)),

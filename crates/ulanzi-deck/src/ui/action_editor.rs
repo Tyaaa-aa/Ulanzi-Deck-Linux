@@ -152,6 +152,20 @@ pub fn output_devices() -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// The name of the macro `action` runs.
+fn macro_title(state: &State, action: &Action) -> String {
+    match action {
+        Action::Macro { own: Some(m), .. } => m.name.clone(),
+        Action::Macro { id, own: None } => state
+            .editor
+            .borrow()
+            .library()
+            .get(*id)
+            .map_or_else(|| "New Macro".to_string(), |m| m.name.clone()),
+        _ => String::new(),
+    }
+}
+
 fn keycaps(keys: &str) -> gtk::Box {
     let b = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
     fill_keycaps(&b, keys);
@@ -216,7 +230,7 @@ impl Recording {
 }
 
 /// The GDK name of the key itself, ignoring modifiers, so Shift+1 records as shift+1, not "exclam".
-fn base_key_name(w: &impl IsA<gtk::Widget>, keyval: gdk::Key, code: u32) -> String {
+pub fn base_key_name(w: &impl IsA<gtk::Widget>, keyval: gdk::Key, code: u32) -> String {
     let base = w
         .display()
         .translate_key(code, gdk::ModifierType::empty(), 0)
@@ -1267,7 +1281,30 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
         Action::Cycle { steps, show } => cycle_rows(&ed, state, path, steps, *show),
         Action::Timer { op } => timer_rows(&ed, *op),
-        Action::Macro { .. } | Action::StopMacros => Vec::new(),
+        Action::Macro { .. } => {
+            let row = adw::ActionRow::builder()
+                .title(macro_title(state, action))
+                .build();
+            let edit = gtk::Button::builder()
+                .label("Edit Macro")
+                .valign(gtk::Align::Center)
+                .build();
+            let (state, on) = (state.clone(), ed.clone());
+            edit.connect_clicked(move |b| {
+                let _ = &on;
+                let keys = state.selection.borrow().slots();
+                if let [slot] = keys.as_slice() {
+                    crate::ui::macro_editor::open(
+                        &state,
+                        b,
+                        crate::ui::macro_editor::MacroTarget::Key(*slot),
+                    );
+                }
+            });
+            row.add_suffix(&edit);
+            vec![row.upcast()]
+        }
+        Action::StopMacros => Vec::new(),
         Action::NextPage
         | Action::PrevPage
         | Action::Back
@@ -1876,7 +1913,7 @@ const MODIFIER_KEYS: &[&str] = &[
 
 /// The sendable base key for a GDK name that is only an alternate form of it: Shift+Tab arrives as
 /// `ISO_Left_Tab`, which the service presses as `tab` with Shift held. Other names pass through.
-fn sendable_alias(key: &str) -> &str {
+pub fn sendable_alias(key: &str) -> &str {
     match key.to_ascii_lowercase().as_str() {
         "iso_left_tab" => "tab",
         "sys_req" => "sysrq",

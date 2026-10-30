@@ -334,3 +334,23 @@ row.drop-target {
   background-color: alpha(@success_color, 0.15);
   color: @success_color;
 }
+
+/* Macro editor */
+.macro-step {
+  font-feature-settings: "tnum";
+}
+.macro-delay {
+  font-size: 0.85em;
+  min-height: 0;
+  padding: 2px 6px;
+}
+.macro-type {
+  padding: 8px;
+}
+.macro-type:checked {
+  outline: 2px solid @accent_color;
+  outline-offset: -2px;
+}
+.macro-pad {
+  padding: 12px;
+}

@@ -590,6 +590,18 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
         "Runs instead of Press when the key is held for half a second",
     ));
     hold_group.add(&held);
+    // Repeat While Holding and Sequence use the key's release themselves.
+    let macro_needs_release = {
+        let e = state.editor.borrow();
+        match e.key(k).and_then(|k| k.tap.as_ref()) {
+            Some(Action::Macro { id, own }) => own
+                .as_deref()
+                .or_else(|| e.library().get(*id))
+                .is_some_and(|m| matches!(m.trigger, Trigger::WhileHeld { .. } | Trigger::Sequence)),
+            _ => false,
+        }
+    };
+    hold_group.set_visible(!macro_needs_release);
     view.page(Section::Hold).append(&hold_group);
 
     let clear = gtk::Button::builder()

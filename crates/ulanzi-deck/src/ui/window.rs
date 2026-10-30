@@ -567,11 +567,13 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
             let profiles = c.profiles().await?;
             let settings = c.settings().await?;
             let too_new = c.too_new_profiles().await.unwrap_or_default();
-            Ok::<_, crate::client::ClientError>((c, hello, profile, profiles, settings, too_new))
+            let macros = c.macros().await.unwrap_or_default();
+            Ok::<_, crate::client::ClientError>((c, hello, profile, profiles, settings, too_new, macros))
         },
         move |r| {
             match r {
-                Ok((c, hello, profile, profiles, settings, too_new)) => {
+                Ok((c, hello, profile, profiles, settings, too_new, macros)) => {
+                    state.editor.borrow_mut().set_library(macros);
                     follow_events(&state, &c);
                     *state.client.borrow_mut() = Some(c);
                     *state.profiles.borrow_mut() = profiles;
@@ -647,7 +649,17 @@ fn follow_events(state: &State, c: &Client) {
                     state.notify(Change::Plugins);
                 }
                 ClientEvent::PluginsChanged => refresh_plugins(&state),
-                ClientEvent::MacrosChanged => {}
+                ClientEvent::MacrosChanged => {
+                    let s = state.clone();
+                    if let Some(c) = state.client.borrow().clone() {
+                        runtime::run(async move { c.macros().await }, move |l| {
+                            if let Ok(l) = l {
+                                s.editor.borrow_mut().set_library(l);
+                                s.notify(Change::Macros);
+                            }
+                        });
+                    }
+                }
                 ClientEvent::UpdateProgress { stage, done, total } => {
                     crate::ui::updates::progress(&stage, done, total)
                 }

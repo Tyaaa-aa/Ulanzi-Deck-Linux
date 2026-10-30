@@ -15,6 +15,8 @@ pub mod item_picker;
 pub(crate) mod key_routing;
 pub mod key_sets;
 pub mod library;
+pub mod macro_editor;
+pub mod macro_steps;
 pub mod onboarding;
 pub mod plugin_fields;
 pub mod plugins_window;
