@@ -4,6 +4,7 @@ pub mod actions;
 pub mod dbus;
 pub mod deck;
 pub mod focus;
+pub mod macros;
 pub mod plugins;
 pub mod screen;
 pub mod sysinfo;
