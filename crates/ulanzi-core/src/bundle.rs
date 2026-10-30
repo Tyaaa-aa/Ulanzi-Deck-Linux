@@ -8,10 +8,14 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::model::{Model, Profile, Settings};
+use crate::model::{Model, Profile, Settings, Slot};
 use crate::store::{ProfileLoad, Store, parse_profile, profile_to_toml};
 
 pub const FORMAT: u32 = 1;
+/// The format of a file with parts older apps may not read.
+const FORMAT_NEWER_PARTS: u32 = 2;
+/// The highest format this version reads.
+pub const MAX_FORMAT: u32 = FORMAT_NEWER_PARTS;
 /// Largest total (uncompressed) size accepted.
 pub const MAX_TOTAL: u64 = 50 * 1024 * 1024;
 const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "svg"];
@@ -26,6 +30,9 @@ pub struct Manifest {
     pub includes_settings: bool,
     #[serde(default)]
     pub profiles: Vec<ManifestProfile>,
+    /// The oldest app that reads all of this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_app: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,6 +114,9 @@ pub struct ImportReport {
     pub replaced: Vec<Uuid>,
     pub skipped: Vec<String>,
     pub warnings: Vec<String>,
+    /// Profiles with parts this version kept but cannot use: name, how many keys, the version
+    /// they need when the file says.
+    pub foreign: Vec<(String, u32, Option<String>)>,
 }
 
 fn all_profiles(store: &Store) -> Vec<Profile> {
@@ -165,8 +175,12 @@ pub fn export_with(
     } else {
         None
     };
+    let newer_parts = out
+        .iter()
+        .any(|bp| bp.profile.min_app.is_some() || !bp.profile.foreign.is_empty());
     let manifest = Manifest {
-        format: FORMAT,
+        format: if newer_parts { FORMAT_NEWER_PARTS } else { FORMAT },
+        min_app: out.iter().find_map(|bp| bp.profile.min_app.clone()),
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         includes_settings: include_settings,
@@ -328,7 +342,7 @@ pub fn read(bytes: &[u8]) -> Result<Bundle, BundleError> {
         match kind {
             Entry::Manifest => {
                 let m: Manifest = toml::from_str(&text()?).map_err(|_| BundleError::NotABundle)?;
-                if m.format > FORMAT {
+                if m.format > MAX_FORMAT {
                     return Err(BundleError::NewerFormat(m.format));
                 }
                 manifest = Some(m);
@@ -444,6 +458,16 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
         }
         write_profile(store, &p, &bp.icons)?;
         names.push(p.name.clone());
+        if !p.foreign.is_empty() {
+            let keys = p
+                .foreign
+                .iter()
+                .filter(|f| matches!(f.slot, Slot::Key(_)))
+                .count();
+            report
+                .foreign
+                .push((p.name.clone(), keys as u32, p.min_app.clone()));
+        }
         if clash && opts.conflict == Conflict::Replace {
             report.replaced.push(p.id);
         } else {
@@ -458,12 +482,32 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
     Ok(report)
 }
 
+/// The `cmd` and `exec` values anywhere inside a part from a newer version.
+fn foreign_commands(v: &toml::Value, out: &mut Vec<String>) {
+    match v {
+        toml::Value::Table(t) => {
+            for (k, v) in t {
+                match v.as_str() {
+                    Some(s) if k == "cmd" || k == "exec" => out.push(s.to_string()),
+                    _ => foreign_commands(v, out),
+                }
+            }
+        }
+        toml::Value::Array(a) => a.iter().for_each(|v| foreign_commands(v, out)),
+        _ => {}
+    }
+}
+
 /// Every shell command the bundle's profiles would run (Run Command, Launch App by command line,
 /// the Command Output widget), for the import preview: imported files come from other people.
 pub fn commands(b: &Bundle) -> Vec<String> {
     use crate::model::{Action, ScreenConfig, Widget};
     let mut out = Vec::new();
     for bp in &b.profiles {
+        // These run once the app is updated, with no later chance to show them.
+        for f in &bp.profile.foreign {
+            foreign_commands(&f.raw, &mut out);
+        }
         for a in bp.profile.actions() {
             match a {
                 Action::Command { cmd, .. } => out.push(cmd.clone()),

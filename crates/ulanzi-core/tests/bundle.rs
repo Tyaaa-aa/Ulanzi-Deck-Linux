@@ -242,6 +242,7 @@ fn bundles_list_the_commands_they_would_run() {
             app_version: "2.0.0".into(),
             created: String::new(),
             includes_settings: false,
+            min_app: None,
             profiles: vec![],
         },
         profiles: vec![ulanzi_core::bundle::BundleProfile {
@@ -258,4 +259,83 @@ fn bundles_list_the_commands_they_would_run() {
             "uptime".to_string()
         ]
     );
+}
+
+fn foreign_profile() -> Profile {
+    let mut p = Profile::new_default("Newer", Model::D200X);
+    p.min_app = Some("2.2.0".into());
+    p.foreign.push(ForeignSlot {
+        page: Some(p.pages[0].id),
+        slot: Slot::Key(3),
+        raw: toml::Value::Table(toml::from_str("tap = { type = \"macro\", cmd = \"rm x\" }").expect("raw")),
+    });
+    p
+}
+
+#[test]
+fn an_export_with_a_newer_profile_is_format_2() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let p = foreign_profile();
+    s.save_profile(&p).expect("save");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    assert_eq!(b.manifest.format, 2);
+    assert_eq!(b.manifest.min_app.as_deref(), Some("2.2.0"));
+}
+
+#[test]
+fn a_plain_export_stays_format_1() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let p = Profile::new_default("Plain", Model::D200X);
+    s.save_profile(&p).expect("save");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    assert_eq!(b.manifest.format, 1);
+    assert_eq!(b.manifest.min_app, None);
+}
+
+#[test]
+fn format_3_is_refused() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let p = Profile::new_default("Plain", Model::D200X);
+    s.save_profile(&p).expect("save");
+    let mut b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    b.manifest.format = 3;
+    let bytes = ulanzi_core::bundle::to_bytes(&b).expect("bytes");
+    assert!(matches!(read(&bytes), Err(BundleError::NewerFormat(3))));
+}
+
+#[test]
+fn import_reports_foreign_keys_and_keeps_them() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let p = foreign_profile();
+    s.save_profile(&p).expect("save");
+    let bytes = export(&s, &[p.id], false).expect("export");
+    let e = tempfile::tempdir().expect("tmp");
+    let other = store(e.path());
+    let opts = ImportOptions {
+        conflict: Conflict::KeepBoth,
+        keep_rules: true,
+        settings: false,
+        device: None,
+    };
+    let report = import(&other, &read(&bytes).expect("read"), &opts).expect("import");
+    assert_eq!(
+        report.foreign,
+        vec![("Newer".to_string(), 1, Some("2.2.0".to_string()))]
+    );
+    let back = other.load_profile(p.id).expect("load");
+    assert_eq!(back.foreign, p.foreign);
+}
+
+#[test]
+fn commands_inside_foreign_keys_are_shown_before_import() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let p = foreign_profile();
+    s.save_profile(&p).expect("save");
+    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    assert!(ulanzi_core::bundle::commands(&b).contains(&"rm x".to_string()));
 }
