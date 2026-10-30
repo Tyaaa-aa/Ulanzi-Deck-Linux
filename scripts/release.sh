@@ -5,7 +5,7 @@
 #   ulanzi-deck-VERSION-1-ARCH.pkg.tar.zst (+ PKGBUILD, .SRCINFO), ulanzi-deck-VERSION-source.tar.gz
 #   Ulanzi_Deck-VERSION-ARCH.AppImage (when appimagetool is installed)
 #   SHA256SUMS
-# Needs: cargo-deb, cargo-generate-rpm, makepkg (Arch). Builds from the committed tree (HEAD).
+# Needs: Docker, cargo-deb, cargo-generate-rpm, makepkg (Arch). Builds from the committed tree (HEAD).
 # Optional live board: set SB_STATE to a state directory (status-board plugin).
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -40,11 +40,12 @@ fail() { [ $board = 1 ] && { sb_fail "$1"; sb_finish; }; echo "FAILED: $1" >&2; 
 trap 'fail "step failed (see the terminal output)"' ERR
 
 # 1. Binaries, and the /usr tree the packages share.
-step 1 "Binaries" "cargo build --release"
-cargo build --release --locked --bins
+step 1 "Binaries" "cargo build on Debian 13"
+scripts/build-binaries.sh
+export BIN_DIR=target/container/release
 rm -rf "$repo/target/pkgroot"
 NO_BUILD=1 sh scripts/stage.sh /usr "$repo/target/pkgroot" >/dev/null
-done_step 1 target/release/ulanzi-deck
+done_step 1 target/container/release/ulanzi-deck
 
 # 2. Tarball with its own installer.
 step 2 "Tarball" "packing"

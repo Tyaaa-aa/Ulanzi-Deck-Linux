@@ -12,7 +12,10 @@ use super::UpdateError;
 
 /// Keys that sign app releases (minisign, Ed25519). Separate from the plugin store's key, which is
 /// held in CI: plugins are sandboxed and the app is not. A list, so a key can be rotated.
-pub const TRUSTED_KEYS: &[&str] = &[];
+pub const TRUSTED_KEYS: &[&str] = &[
+    // packaging/release-key.pub, which scripts/publish.sh checks releases against.
+    "RWRggS6K7GTDoxAnEXcIlq/wDo8kR579Lh8q5cv1ztbDwtiKyaCWLlKR",
+];
 
 /// The signed comment of a release's checksum file.
 const SUMS_COMMENT: &str = "file:SHA256SUMS";
@@ -176,6 +179,12 @@ XrS8yrkr9afS43d1eof1ELBODWs6jLc1s+xAsm3q1skN98XiL6dafSC8JiD+rR4B+6pkJRXHX6shPaIb
             check_with(&[KEY], SUMS.as_bytes(), OTHER_SIG, NAME, &p),
             Err(UpdateError::Unverified)
         );
+    }
+
+    #[test]
+    fn the_built_in_key_is_the_one_releases_are_checked_against() {
+        let file = include_str!("../../../../packaging/release-key.pub");
+        assert_eq!(file.lines().last(), TRUSTED_KEYS.last().copied());
     }
 
     #[test]

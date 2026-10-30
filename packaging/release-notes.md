@@ -9,6 +9,12 @@ this one by hand; from here on the app can update itself.
 - **Files from newer versions.** A key this version doesn't understand is kept unchanged and shows a
   **⚠** with the version it needs. A profile too new to read stays in place instead of disappearing.
 
+### Fixed
+
+- The `.deb`, tarball and AppImage now start on Debian 13, Ubuntu 25.04 and newer. They need glibc
+  2.39 or later.
+- The `.rpm` now installs on Fedora and openSUSE.
+
 ### Changed
 
 - The image picker opens at once.

@@ -15,7 +15,7 @@ maintainer = "Tyaaa-aa <https://github.com/Tyaaa-aa>"
 copyright = "2026, Tya"
 section = "utils"
 priority = "optional"
-depends = "libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libc6, dbus-user-session"
+depends = "libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libc6 (>= 2.39), dbus-user-session"
 recommends = "pipewire-pulse, wireplumber, wl-clipboard"
 extended-description = """\
 Set up the keys, dials and wide screen of an Ulanzi D200 or D200X stream deck: actions for media,\
@@ -71,6 +71,7 @@ assets = [
 [package.metadata.generate-rpm.requires]
 "libgtk-4.so.1()(64bit)" = "*"
 "libadwaita-1.so.0()(64bit)" = "*"
+"libc.so.6(GLIBC_2.39)(64bit)" = "*"
 
 [dependencies]
 chrono.workspace = true

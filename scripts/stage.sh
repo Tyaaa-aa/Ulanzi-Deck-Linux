@@ -4,7 +4,7 @@
 #
 #   scripts/stage.sh PREFIX DESTDIR     e.g. scripts/stage.sh /usr target/pkgroot
 #
-# Builds the release binaries first unless NO_BUILD=1.
+# Builds the release binaries first unless NO_BUILD=1. BIN_DIR says where they are.
 set -eu
 prefix=$1
 dest=$2
@@ -14,7 +14,8 @@ cd "$repo"
 root="$dest$prefix"
 gui=crates/ulanzi-deck/data
 id=io.github.tyaaa_aa.UlanziDeck
-install -Dm0755 -t "$root/bin" target/release/ulanzi-deck target/release/ulanzi-deckd target/release/ulanzictl
+bin=${BIN_DIR:-target/release}
+install -Dm0755 -t "$root/bin" "$bin/ulanzi-deck" "$bin/ulanzi-deckd" "$bin/ulanzictl"
 install -Dm0644 "$gui/$id.desktop" "$root/share/applications/$id.desktop"
 install -Dm0644 "$gui/$id.metainfo.xml" "$root/share/metainfo/$id.metainfo.xml"
 install -Dm0644 "$gui/$id.mime.xml" "$root/share/mime/packages/$id.mime.xml"

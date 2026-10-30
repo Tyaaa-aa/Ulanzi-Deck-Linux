@@ -24,6 +24,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ### Fixed
 
+- The `.deb`, tarball and AppImage needed the C library of the computer that built them, so they
+  would not start on Debian 13, Ubuntu 25.04 or other systems with an older one. Release binaries
+  are now built on Debian 13.
+- The `.rpm` could not be installed on Fedora or openSUSE, because it asked for the build computer's
+  exact library versions.
 - A profile from a newer version no longer fails as a whole. Keys this version doesn't understand
   are kept unchanged and show a ⚠ with the version they need.
 - A profile too new to read stays in place and is listed as "Needs a newer version". It used to be
