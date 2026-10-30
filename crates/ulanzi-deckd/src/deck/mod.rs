@@ -221,8 +221,12 @@ impl InputSink for NoInput {
 
 /// A macro playing, and where its key is.
 struct Playing {
+    run: u64,
+    control: Control,
     page: Uuid,
     m: Macro,
+    /// Whether the key shows anything of it, so a step is worth a redraw.
+    shows: bool,
 }
 
 /// Reads the volume after volume actions, off the action queue, one read at a time: a burst of
@@ -311,7 +315,7 @@ struct Deck {
     player_tx: mpsc::UnboundedSender<PlayerEvent>,
     player_rx: Option<mpsc::UnboundedReceiver<PlayerEvent>>,
     library: Arc<std::sync::RwLock<MacroLibrary>>,
-    playing: HashMap<Control, Playing>,
+    playing: HashMap<u64, Playing>,
     /// Controls that started a macro on key down; their key up goes to the player.
     macro_down: Vec<Control>,
 }
@@ -472,10 +476,18 @@ impl Deck {
                     *l = library;
                 }
             }
-            DeckMsg::TryMacro(m) => self.player.press(Control::Unknown(TRY_CONTROL), *m),
+            DeckMsg::TryMacro(m) => {
+                // Once through, whatever its type: nothing will press or release a key for it.
+                let m = Macro {
+                    trigger: Trigger::default(),
+                    ..*m
+                };
+                self.player.press(Control::Unknown(TRY_CONTROL), m);
+            }
             DeckMsg::StopMacros => self.player.stop_all(),
             DeckMsg::DeviceDown(state) => {
                 self.player.stop_all();
+                self.macro_down.clear();
                 self.transport = None;
                 self.upload_pending = false;
                 self.set_device(state);
@@ -738,6 +750,7 @@ impl Deck {
         let here = (profile.id, self.nav.page);
         let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
         let same_page = self.shown.as_ref().filter(|s| !force && s.at == here);
+        let partial = same_page.is_some();
         let packets = match same_page {
             // Same page: send only the keys that changed (what Ulanzi Studio does).
             Some(shown) => {
@@ -772,10 +785,13 @@ impl Deck {
                 bytes / 1024,
                 done.duration_since(now).as_millis()
             );
-            let gap = if self.playing.is_empty() {
-                upload_cooldown(bytes)
-            } else {
+            // Only small updates for a key on screen: a full page needs its time to unpack.
+            let page = self.profile().pages.get(self.nav.page).map(|p| p.id);
+            let showing = self.playing.values().any(|p| p.shows && Some(p.page) == page);
+            let gap = if partial && showing {
                 MACRO_UPLOAD_GAP
+            } else {
+                upload_cooldown(bytes)
             };
             self.next_upload_at = Some(done + gap);
             self.shown = Some(Shown {
@@ -802,6 +818,7 @@ impl Deck {
     async fn lost(&mut self, e: &std::io::Error) {
         tracing::warn!("device connection lost: {e}");
         self.player.stop_all();
+        self.macro_down.clear();
         self.transport = None;
         self.shown = None;
         self.firmware = None;
@@ -819,7 +836,7 @@ impl Deck {
             tracing::warn!("the deck did not answer the info request; uploading anyway");
             self.deck_ready().await;
         }
-        if self.sleep.should_sleep(now) {
+        if self.macro_down.is_empty() && self.sleep.should_sleep(now) {
             self.sleep.sleep();
             tracing::info!("sleeping after inactivity");
             self.send(&[brightness(self.settings.sleep_brightness)]).await;
@@ -867,6 +884,14 @@ impl Deck {
     async fn on_input(&mut self, ev: InputEvent) {
         let now = Instant::now();
         self.emit(DeckEvent::Input(ev));
+        // Before the sleep check: a held key can outlast the sleep timer.
+        if ev.kind == InputKind::Release
+            && let Some(i) = self.macro_down.iter().position(|c| *c == ev.control)
+        {
+            self.macro_down.remove(i);
+            self.player.release(ev.control);
+            return;
+        }
         self.sleep.touch(now);
         if self.sleep.is_asleep() {
             self.sleep.wake(now);
@@ -888,11 +913,6 @@ impl Deck {
                 self.press.on_press(ev.control, now, has_hold);
             }
             InputKind::Release => {
-                if let Some(i) = self.macro_down.iter().position(|c| *c == ev.control) {
-                    self.macro_down.remove(i);
-                    self.player.release(ev.control);
-                    return;
-                }
                 if let Some(i) = self.swallowed.iter().position(|c| *c == ev.control) {
                     self.swallowed.remove(i);
                     self.press.forget(ev.control);
@@ -1038,24 +1058,50 @@ impl Deck {
             });
             return;
         };
-        if let Some(page) = self.profile().pages.get(self.nav.page).map(|p| p.id) {
-            self.playing.insert(c, Playing { page, m: m.clone() });
+        let page = self.profile().pages.get(self.nav.page).map(|p| p.id);
+        let shows = m.feedback != Feedback::Off || self.label_uses_macro(c);
+        if let (Some(run), Some(page)) = (self.player.press(c, m.clone()), page) {
+            self.playing.insert(
+                run,
+                Playing {
+                    run,
+                    control: c,
+                    page,
+                    m,
+                    shows,
+                },
+            );
         }
-        self.player.press(c, m);
+    }
+
+    /// Whether the key's look reads the `{macro.*}` values.
+    fn label_uses_macro(&self, c: Control) -> bool {
+        let Control::Key(i) = c else {
+            return false;
+        };
+        self.profile()
+            .pages
+            .get(self.nav.page)
+            .and_then(|p| p.keys.get(&i))
+            .is_some_and(|k| format!("{:?}", k.look).contains("{macro."))
     }
 
     async fn on_player(&mut self, e: PlayerEvent) {
         match e {
             PlayerEvent::Step {
-                control,
+                run,
                 index,
                 total,
                 name,
+                ..
             } => {
-                let Some(playing) = self.playing.get(&control) else {
+                let Some(playing) = self.playing.get(&run) else {
                     return;
                 };
-                let at = push::cycle_key(playing.page, &control.as_str());
+                if !playing.shows {
+                    return;
+                }
+                let at = push::cycle_key(playing.page, &playing.control.as_str());
                 let progress = MacroProgress {
                     step: index,
                     total,
@@ -1071,29 +1117,38 @@ impl Deck {
                 self.dynamic.macros.insert(at, progress);
                 self.push_page(false).await;
             }
-            PlayerEvent::Ended { control } => {
-                let Some(playing) = self.playing.get(&control) else {
+            PlayerEvent::Ended { control, run } => {
+                let Some(playing) = self.playing.get(&run) else {
                     return;
                 };
-                let at = push::cycle_key(playing.page, &control.as_str());
-                if playing.m.feedback == Feedback::Off {
-                    self.dynamic.macros.remove(&at);
-                    self.playing.remove(&control);
-                } else if let Some(p) = self.dynamic.macros.get_mut(&at) {
-                    p.step = p.total;
-                    let tx = self.player_tx.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(FINISH_FLASH).await;
-                        let _ = tx.send(PlayerEvent::Clear { control });
-                    });
+                let at = push::cycle_key(playing.page, &playing.control.as_str());
+                match self.dynamic.macros.get_mut(&at) {
+                    Some(p) if playing.m.feedback != Feedback::Off => {
+                        p.step = p.total;
+                        let tx = self.player_tx.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(FINISH_FLASH).await;
+                            let _ = tx.send(PlayerEvent::Clear { control, run });
+                        });
+                    }
+                    _ => {
+                        self.dynamic.macros.remove(&at);
+                        self.playing.remove(&run);
+                    }
                 }
                 self.push_page(false).await;
             }
-            PlayerEvent::Clear { control } => {
-                // Played again meanwhile: that run clears it.
-                if let Some(playing) = self.playing.remove(&control) {
-                    let at = push::cycle_key(playing.page, &control.as_str());
-                    self.dynamic.macros.remove(&at);
+            PlayerEvent::Clear { run, .. } => {
+                if let Some(playing) = self.playing.remove(&run) {
+                    let at = push::cycle_key(playing.page, &playing.control.as_str());
+                    // Played again meanwhile: the newer run owns the key's progress.
+                    let newer = self
+                        .playing
+                        .values()
+                        .any(|p| p.page == playing.page && p.control == playing.control);
+                    if !newer {
+                        self.dynamic.macros.remove(&at);
+                    }
                     self.push_page(false).await;
                 }
             }

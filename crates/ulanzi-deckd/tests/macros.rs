@@ -528,3 +528,44 @@ async fn deck_actions_go_back_to_the_deck() {
     assert!(r.runner.0.lock().expect("runner").is_empty());
     advance(Duration::from_millis(1)).await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn another_macro_on_the_same_control_plays_alongside() {
+    let r = rig();
+    let a = macro_of(Trigger::Toggle, vec![down("a", 50), up("a", 50)]);
+    let b = once(PressAgain::Stop, vec![down("b", 0), up("b", 0)]);
+    assert!(r.player.press(KEY, a.clone()).is_some());
+    wait(20).await;
+    assert!(r.player.press(KEY, b).is_some(), "a different macro starts");
+    wait(20).await;
+    assert!(r.log().contains(&"+b".to_string()), "{:?}", r.log());
+    r.clear();
+    wait(100).await;
+    assert!(r.log().contains(&"+a".to_string()), "the first is still going");
+    r.player.press(KEY, a);
+    wait(120).await;
+    assert!(r.held().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn pressing_again_says_whether_a_new_run_started() {
+    let r = rig();
+    let m = once(PressAgain::Ignore, vec![down("a", 100), up("a", 0)]);
+    let first = r.player.press(KEY, m.clone());
+    assert!(first.is_some());
+    assert_eq!(r.player.press(KEY, m), None);
+    let m = once(PressAgain::Restart, vec![down("b", 100), up("b", 0)]);
+    let one = r.player.press(Control::Key(1), m.clone());
+    let two = r.player.press(Control::Key(1), m);
+    assert!(two.is_some());
+    assert_ne!(one, two);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_that_arrives_as_a_run_ends_still_lets_go() {
+    let r = rig();
+    r.player.press(KEY, once(PressAgain::Stop, vec![down("ctrl", 0)]));
+    r.player.stop_all();
+    wait(10).await;
+    assert!(r.held().is_empty(), "{:?}", r.held());
+}

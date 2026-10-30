@@ -292,7 +292,9 @@ impl Profile {
 
     /// Whether any key uses a macro.
     pub fn uses_macros(&self) -> bool {
-        self.actions().iter().any(|a| matches!(a, Action::Macro { .. }))
+        self.actions()
+            .iter()
+            .any(|a| matches!(a, Action::Macro { .. } | Action::StopMacros))
     }
 
     /// The ids of the plugins this profile's actions use: everywhere [`Profile::actions`] looks,

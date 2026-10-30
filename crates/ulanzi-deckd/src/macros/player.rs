@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -16,6 +16,7 @@ use ulanzi_core::model::{
     Trigger,
 };
 use ulanzi_proto::Control;
+use uuid::Uuid;
 
 use crate::actions::mouse::InputSink;
 use crate::actions::{ActionError, ActionRunner};
@@ -34,12 +35,14 @@ pub enum PlayerEvent {
     /// Step `index` of the macro's `total` is starting.
     Step {
         control: Control,
+        run: u64,
         index: usize,
         total: usize,
         name: String,
     },
     Ended {
         control: Control,
+        run: u64,
     },
     Failed {
         control: Control,
@@ -48,6 +51,7 @@ pub enum PlayerEvent {
     /// Time to take a finished macro's look off its key. Sent by the deck to itself.
     Clear {
         control: Control,
+        run: u64,
     },
     /// A step the deck runs itself, such as changing page.
     DeckAction {
@@ -75,6 +79,7 @@ impl From<ActionError> for Halt {
 }
 
 struct Run {
+    id: u64,
     stop: watch::Sender<bool>,
     released: watch::Sender<bool>,
     queued: Arc<AtomicU32>,
@@ -87,15 +92,18 @@ struct Inner {
     runner: Arc<dyn ActionRunner>,
     library: Arc<RwLock<MacroLibrary>>,
     events: mpsc::UnboundedSender<PlayerEvent>,
-    runs: Mutex<HashMap<Control, Run>>,
-    /// Everything down, and which control's macro pressed it.
-    held: Mutex<Vec<(Held, Control)>>,
+    /// By control and macro: two macros on one control (on different pages) play side by side.
+    runs: Mutex<HashMap<(Control, Uuid), Run>>,
+    next_run: AtomicU64,
+    /// Everything down, and which run pressed it.
+    held: Mutex<Vec<(Held, u64)>>,
 }
 
 /// The signals one run listens to.
 #[derive(Clone)]
 struct Signals {
     control: Control,
+    run: u64,
     stop: watch::Receiver<bool>,
     /// Also ends the run early: the key let go of a Repeat While Holding that stops at once.
     cut: Option<watch::Receiver<bool>>,
@@ -146,18 +154,19 @@ impl Player {
                 library,
                 events,
                 runs: Mutex::default(),
+                next_run: AtomicU64::new(1),
                 held: Mutex::default(),
             }),
         }
     }
 
     /// The control running `m` was pressed. Takes a copy: editing the macro leaves this run alone.
-    pub fn press(&self, control: Control, m: Macro) {
-        let Ok(mut runs) = self.inner.runs.lock() else {
-            return;
-        };
+    /// Returns the new run's number, or `None` when the press went to a run already playing.
+    pub fn press(&self, control: Control, m: Macro) -> Option<u64> {
+        let mut runs = self.inner.runs.lock().ok()?;
+        let key = (control, m.id);
         let mut before = None;
-        if let Some(run) = runs.get(&control)
+        if let Some(run) = runs.get(&key)
             && !run.task.is_finished()
         {
             match run.trigger {
@@ -166,42 +175,44 @@ impl Player {
                 }
                 | Trigger::Toggle => {
                     let _ = run.stop.send(true);
-                    return;
+                    return None;
                 }
                 Trigger::Once {
                     again: PressAgain::Queue,
                 } => {
                     run.queued.fetch_add(1, Ordering::SeqCst);
-                    return;
+                    return None;
                 }
                 Trigger::Once {
                     again: PressAgain::Restart,
                 } => {
                     let _ = run.stop.send(true);
-                    before = runs.remove(&control).map(|r| r.task);
+                    before = runs.remove(&key).map(|r| r.task);
                 }
                 Trigger::Once {
                     again: PressAgain::Ignore,
                 }
                 | Trigger::WhileHeld { .. }
-                | Trigger::Sequence => return,
+                | Trigger::Sequence => return None,
             }
         }
         let (stop, stop_rx) = watch::channel(false);
         let (released, released_rx) = watch::channel(false);
         let queued = Arc::new(AtomicU32::new(0));
         let trigger = m.trigger;
+        let id = self.inner.next_run.fetch_add(1, Ordering::SeqCst);
         let inner = self.inner.clone();
         let count = queued.clone();
         let task = tokio::spawn(async move {
             if let Some(task) = before {
                 let _ = task.await;
             }
-            inner.play(control, m, stop_rx, released_rx, count).await;
+            inner.play(control, id, m, stop_rx, released_rx, count).await;
         });
         runs.insert(
-            control,
+            key,
             Run {
+                id,
                 stop,
                 released,
                 queued,
@@ -209,14 +220,17 @@ impl Player {
                 task,
             },
         );
+        Some(id)
     }
 
     /// The control was let go.
     pub fn release(&self, control: Control) {
-        if let Ok(runs) = self.inner.runs.lock()
-            && let Some(run) = runs.get(&control)
-        {
-            let _ = run.released.send(true);
+        if let Ok(runs) = self.inner.runs.lock() {
+            for ((c, _), run) in runs.iter() {
+                if *c == control {
+                    let _ = run.released.send(true);
+                }
+            }
         }
     }
 
@@ -224,10 +238,10 @@ impl Player {
     pub fn stop_all(&self) {
         let mut running = Vec::new();
         if let Ok(runs) = self.inner.runs.lock() {
-            for (control, run) in runs.iter() {
+            for run in runs.values() {
                 if !run.task.is_finished() {
                     let _ = run.stop.send(true);
-                    running.push(*control);
+                    running.push(run.id);
                 }
             }
         }
@@ -253,11 +267,11 @@ impl Inner {
         Ok(f(&mut *sink)?)
     }
 
-    fn press_down(&self, control: Control, what: Held) {
+    fn press_down(&self, run: u64, what: Held) {
         if let Ok(mut held) = self.held.lock()
             && !held.iter().any(|(h, _)| *h == what)
         {
-            held.push((what, control));
+            held.push((what, run));
         }
     }
 
@@ -268,7 +282,7 @@ impl Inner {
     }
 
     /// Release what `owned` selects, last pressed first.
-    fn let_go(&self, owned: impl Fn(Control) -> bool) {
+    fn let_go(&self, owned: impl Fn(u64) -> bool) {
         let Ok(mut held) = self.held.lock() else {
             return;
         };
@@ -294,6 +308,7 @@ impl Inner {
     async fn play(
         self: Arc<Self>,
         control: Control,
+        run: u64,
         m: Macro,
         stop: watch::Receiver<bool>,
         released: watch::Receiver<bool>,
@@ -301,18 +316,19 @@ impl Inner {
     ) {
         let mut signals = Signals {
             control,
+            run,
             stop,
             cut: None,
         };
-        match self.drive(&m, &mut signals, released, queued).await {
-            Ok(()) => {}
-            Err(Halt::Stopped) => self.let_go(|c| c == control),
-            Err(Halt::Failed(message)) => {
-                self.let_go(|c| c == control);
-                let _ = self.events.send(PlayerEvent::Failed { control, message });
-            }
+        let outcome = self.drive(&m, &mut signals, released, queued).await;
+        // A stop that arrived as the run ended still lets go of what it left down.
+        if *signals.stop.borrow() || outcome.is_err() {
+            self.let_go(|owner| owner == run);
         }
-        let _ = self.events.send(PlayerEvent::Ended { control });
+        if let Err(Halt::Failed(message)) = outcome {
+            let _ = self.events.send(PlayerEvent::Failed { control, message });
+        }
+        let _ = self.events.send(PlayerEvent::Ended { control, run });
     }
 
     async fn drive(
@@ -390,6 +406,7 @@ impl Inner {
                 if depth == 0 {
                     let _ = self.events.send(PlayerEvent::Step {
                         control: signals.control,
+                        run: signals.run,
                         index,
                         total: m.steps.len(),
                         name: m.name.clone(),
@@ -408,11 +425,11 @@ impl Inner {
     }
 
     async fn step(&self, event: &MacroEvent, signals: &mut Signals, depth: usize) -> Result<(), Halt> {
-        let control = signals.control;
+        let (control, run) = (signals.control, signals.run);
         match event {
             MacroEvent::KeyDown { key } => {
                 self.input(|s| s.key(key, true))?;
-                self.press_down(control, Held::Key(key.clone()));
+                self.press_down(run, Held::Key(key.clone()));
             }
             MacroEvent::KeyUp { key } => {
                 self.input(|s| s.key(key, false))?;
@@ -420,7 +437,7 @@ impl Inner {
             }
             MacroEvent::MouseDown { button } => {
                 self.input(|s| s.button(*button, true))?;
-                self.press_down(control, Held::Button(*button));
+                self.press_down(run, Held::Button(*button));
             }
             MacroEvent::MouseUp { button } => {
                 self.input(|s| s.button(*button, false))?;

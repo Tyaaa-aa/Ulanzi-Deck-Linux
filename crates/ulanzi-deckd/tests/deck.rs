@@ -947,3 +947,55 @@ async fn a_deck_unplug_releases_held_input() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(pressed(&keys), ["+a", "-a"]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn letting_go_while_the_deck_sleeps_still_stops_the_macro() {
+    let mut m = Macro::new("M");
+    m.trigger = Trigger::WhileHeld {
+        on_release: Release::StopNow,
+    };
+    m.steps = tap_a(50);
+    let (r, keys) = macro_rig(m, None).await;
+    r.press(7).await;
+    // Long past any sleep timer, with the key still down.
+    tokio::time::sleep(Duration::from_secs(20 * 60)).await;
+    r.release(7).await;
+    let count = pressed(&keys).len();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(pressed(&keys).len(), count, "stopped");
+}
+
+#[tokio::test(start_paused = true)]
+async fn try_plays_a_holding_macro_once() {
+    let mut m = Macro::new("M");
+    m.trigger = Trigger::WhileHeld {
+        on_release: Release::FinishPass,
+    };
+    m.steps = tap_a(50);
+    let (r, keys) = macro_rig(m.clone(), None).await;
+    r.tx.send(DeckMsg::TryMacro(Box::new(m))).await.expect("send");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(pressed(&keys), ["+a", "-a"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_press_after_an_unplug_is_a_normal_press() {
+    let mut m = Macro::new("M");
+    m.steps = tap_a(1000);
+    let (r, _keys) = macro_rig(m, None).await;
+    r.press(7).await;
+    r.tx.send(DeckMsg::DeviceDown(DeviceState::NotFound))
+        .await
+        .expect("send");
+    settle().await;
+    let (t, mock) = answering_mock();
+    r.tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
+        .await
+        .expect("send");
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    mock.inject.send(Ok(report(2, 1, 1))).await.expect("press");
+    settle().await;
+    mock.inject.send(Ok(report(2, 1, 0))).await.expect("release");
+    settle().await;
+    assert_eq!(r.runner.ran(), vec![cmd("only-tap")]);
+}
