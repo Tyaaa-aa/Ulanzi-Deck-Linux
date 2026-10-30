@@ -204,7 +204,10 @@ pub fn export_with(
         .any(|bp| bp.profile.min_app.is_some() || !bp.profile.foreign.is_empty());
     let manifest = Manifest {
         format: if newer_parts { FORMAT_NEWER_PARTS } else { FORMAT },
-        min_app: out.iter().find_map(|bp| bp.profile.min_app.clone()),
+        min_app: out
+            .iter()
+            .filter_map(|bp| bp.profile.min_app.clone())
+            .max_by_key(|v| crate::update::parse_version(v)),
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         includes_settings: include_settings,
