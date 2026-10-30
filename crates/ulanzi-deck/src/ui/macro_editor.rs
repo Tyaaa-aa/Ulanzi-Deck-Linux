@@ -75,6 +75,9 @@ fn load(state: &State, target: MacroTarget) -> (Macro, Saving) {
     }
 }
 
+/// What to run after the macro changes.
+type Redraw = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
 /// Everything the editor's parts share.
 #[derive(Clone)]
 struct Ed {
@@ -83,7 +86,7 @@ struct Ed {
     window: adw::Window,
     steps: gtk::Box,
     warning: gtk::Label,
-    redraw: Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+    redraw: Redraw,
 }
 
 impl Ed {
