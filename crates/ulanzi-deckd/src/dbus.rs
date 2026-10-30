@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
-use ulanzi_core::model::{BrightnessOp, Model, Profile, Settings, is_plugin_secret};
+use ulanzi_core::model::{
+    Action, BrightnessOp, Macro, MacroLibrary, Model, Profile, Settings, is_plugin_secret,
+};
 use ulanzi_core::store::{ProfileLoad, Store, parse_profile};
 
 use crate::updates::{self, UpdateError, check::Source};
@@ -292,6 +294,9 @@ pub async fn reload(tx: &mpsc::Sender<DeckMsg>, store: &Store) {
             let _ = tx.send(DeckMsg::Settings(Box::new(s))).await;
         }
         Err(e) => tracing::error!("reload: {e}"),
+    }
+    if let Ok(library) = store.load_macros() {
+        let _ = tx.send(DeckMsg::Macros(library)).await;
     }
     for l in store.list_profiles() {
         if let ProfileLoad::Ok(p) = l {
@@ -775,6 +780,67 @@ impl DeckService {
         serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
+    /// The macro library as TOML.
+    async fn list_macros(&self) -> Result<String> {
+        let library = self
+            .store
+            .load_macros()
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        toml::to_string(&library).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// Replace the macro library. The window keeps it, with undo.
+    async fn set_macros(
+        &self,
+        text: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<()> {
+        let library: MacroLibrary = toml::from_str(&text).map_err(|e| DeckError::Invalid(e.to_string()))?;
+        if library.macros.iter().any(|m| library.would_loop(m)) {
+            return Err(DeckError::Invalid("A macro can't run itself".into()));
+        }
+        self.store
+            .save_macros(&library)
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        self.send(DeckMsg::Macros(library)).await?;
+        let _ = Self::macros_changed(&emitter).await;
+        Ok(())
+    }
+
+    /// How many keys in each profile follow macro `id`: (profile name, keys).
+    async fn macro_usage(&self, id: String) -> Result<Vec<(String, u32)>> {
+        let id = Self::id(&id)?;
+        Ok(self
+            .store
+            .list_profiles()
+            .into_iter()
+            .filter_map(|l| match l {
+                ProfileLoad::Ok(p) => {
+                    let used = |a: &&Action| matches!(a, Action::Macro { id: i, own: None } if *i == id);
+                    let count = p.actions().iter().filter(used).count() as u32;
+                    (count > 0).then(|| (p.name.clone(), count))
+                }
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Play macro `text` (TOML) after `delay_ms`, so there is time to click into the target app.
+    async fn try_macro(&self, text: String, delay_ms: u32) -> Result<()> {
+        let m: Macro = toml::from_str(&text).map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms as u64)).await;
+            let _ = tx.send(DeckMsg::TryMacro(Box::new(m))).await;
+        });
+        Ok(())
+    }
+
+    /// Stop every macro and let go of everything they hold.
+    async fn stop_macros(&self) -> Result<()> {
+        self.send(DeckMsg::StopMacros).await
+    }
+
     /// What is known about updates, as JSON.
     async fn update_status(&self) -> Result<String> {
         let (store, src) = (self.store.clone(), Source::real());
@@ -1096,6 +1162,10 @@ impl DeckService {
     /// Settings changed outside the app (tray, deck keys): read them again.
     #[zbus(signal)]
     async fn settings_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    /// The macro library changed.
+    #[zbus(signal)]
+    async fn macros_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
 
     /// How far `UpdateDownload` is: `stage` is downloading (`done` of `total` bytes), verifying
     /// or ready.

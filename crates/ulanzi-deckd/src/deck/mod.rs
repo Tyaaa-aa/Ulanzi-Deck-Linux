@@ -48,6 +48,8 @@ const UNLOCK_EVERY: Duration = Duration::from_secs(30);
 const MIN_UPLOAD_GAP: Duration = Duration::from_millis(500);
 /// Minimum time between uploads while a macro plays. The deck took 30 small updates a second.
 const MACRO_UPLOAD_GAP: Duration = Duration::from_millis(100);
+/// The control a macro tried from the editor plays under: no key shows it.
+const TRY_CONTROL: u8 = 255;
 /// How long a finished macro's key stays on its last look.
 const FINISH_FLASH: Duration = Duration::from_millis(300);
 /// How long to wait for the device-info reply (the deck's "ready") before uploading anyway.
@@ -98,6 +100,8 @@ pub enum DeckMsg {
     PluginCleared(String),
     /// The macro library changed.
     Macros(MacroLibrary),
+    /// Play a macro from the editor.
+    TryMacro(Box<Macro>),
     /// Stop every macro.
     StopMacros,
     Shutdown,
@@ -468,6 +472,7 @@ impl Deck {
                     *l = library;
                 }
             }
+            DeckMsg::TryMacro(m) => self.player.press(Control::Unknown(TRY_CONTROL), *m),
             DeckMsg::StopMacros => self.player.stop_all(),
             DeckMsg::DeviceDown(state) => {
                 self.player.stop_all();

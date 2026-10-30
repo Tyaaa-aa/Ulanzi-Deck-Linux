@@ -19,6 +19,14 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug, PartialEq)]
+enum MacroCmd {
+    /// List the macro library.
+    List,
+    /// Stop every macro and let go of everything they hold.
+    Stop,
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
 enum UpdateCmd {
     /// Ask GitHub now.
     Check,
@@ -86,6 +94,11 @@ enum Cmd {
     Monitor,
     /// Print versions, session, device state and recent logs for bug reports.
     Diagnostics,
+    /// List macros, or stop every macro that is playing.
+    Macro {
+        #[command(subcommand)]
+        what: MacroCmd,
+    },
     /// Show the running version and any update on offer; `check` asks GitHub now.
     Update {
         #[command(subcommand)]
@@ -534,6 +547,25 @@ async fn run(cli: Cli) -> Result<(), String> {
             }
         }
         Cmd::Diagnostics => diagnostics().await,
+        Cmd::Macro { what: MacroCmd::Stop } => {
+            proxy()
+                .await?
+                .call::<_, _, ()>("StopMacros", &())
+                .await
+                .map_err(not_running)?;
+        }
+        Cmd::Macro { what: MacroCmd::List } => {
+            let text: String = proxy()
+                .await?
+                .call("ListMacros", &())
+                .await
+                .map_err(not_running)?;
+            let library: ulanzi_core::model::MacroLibrary =
+                toml::from_str(&text).map_err(|e| format!("unexpected answer from the service: {e}"))?;
+            for m in library.macros {
+                println!("{}  {} ({} steps)", m.id, m.name, m.steps.len());
+            }
+        }
         Cmd::Update { what } => {
             let method = if what.is_some() {
                 "UpdateCheck"

@@ -891,3 +891,96 @@ trusted comment: file:SHA256SUMS
     let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("snapshots");
     assert!(snaps.iter().any(|s| s.2 == "before-9-9-9"), "{snaps:?}");
 }
+
+fn macros_text(macros: Vec<ulanzi_core::model::Macro>) -> String {
+    toml::to_string(&ulanzi_core::model::MacroLibrary { macros }).expect("toml")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_saved_macro_is_listed() {
+    use ulanzi_core::model::{Macro, MacroLibrary};
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let m = Macro::new("Saved");
+    p.call::<_, _, ()>("SetMacros", &(macros_text(vec![m.clone()]),))
+        .await
+        .expect("set");
+    let text: String = p.call("ListMacros", &()).await.expect("list");
+    let lib: MacroLibrary = toml::from_str(&text).expect("toml");
+    assert_eq!(lib.macros, vec![m]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usage_counts_every_profile() {
+    use ulanzi_core::model::{Action, Key};
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let id = uuid::Uuid::new_v4();
+    let mut profile = r.profile.clone();
+    for i in [1, 2] {
+        profile.pages[0].keys.insert(
+            i,
+            Key {
+                tap: Some(Action::Macro { id, own: None }),
+                ..Key::default()
+            },
+        );
+    }
+    let text = ulanzi_core::store::profile_to_toml(&profile).expect("toml");
+    let _: u64 = p
+        .call("ApplyProfile", &(text.as_str(), 1u64))
+        .await
+        .expect("apply");
+    let used: Vec<(String, u32)> = p.call("MacroUsage", &(id.to_string(),)).await.expect("usage");
+    assert_eq!(used, vec![("Default".to_string(), 2)]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_macro_that_runs_itself_is_refused() {
+    use ulanzi_core::model::{LookOverride, Macro, MacroEvent, MacroStep, SequencePart};
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let mut m = Macro::new("Loop");
+    m.steps = vec![MacroStep {
+        event: MacroEvent::RunMacro { id: m.id },
+        delay_ms: 0,
+        look: LookOverride::default(),
+        part: SequencePart::Press,
+    }];
+    let refused = p.call::<_, _, ()>("SetMacros", &(macros_text(vec![m]),)).await;
+    assert!(refused.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn try_macro_waits_before_playing() {
+    use ulanzi_core::model::{LookOverride, Macro, MacroEvent, MacroStep, SequencePart};
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let mut signals = p.receive_signal("ActionFailed").await.expect("signal");
+    let mut m = Macro::new("Try");
+    m.steps = vec![MacroStep {
+        event: MacroEvent::KeyDown { key: "a".into() },
+        delay_ms: 0,
+        look: LookOverride::default(),
+        part: SequencePart::Press,
+    }];
+    let text = toml::to_string(&m).expect("toml");
+    let start = std::time::Instant::now();
+    p.call::<_, _, ()>("TryMacro", &(text.as_str(), 300u32))
+        .await
+        .expect("try");
+    assert!(start.elapsed() < Duration::from_millis(250), "returns at once");
+    // No input device in this rig, so the first step reports that.
+    tokio::time::timeout(Duration::from_secs(5), signals.next())
+        .await
+        .expect("played")
+        .expect("signal");
+    assert!(start.elapsed() >= Duration::from_millis(300));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_macros_answers() {
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    p.call::<_, _, ()>("StopMacros", &()).await.expect("stop");
+}

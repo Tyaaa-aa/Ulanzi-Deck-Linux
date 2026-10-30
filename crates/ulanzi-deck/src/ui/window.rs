@@ -647,6 +647,7 @@ fn follow_events(state: &State, c: &Client) {
                     state.notify(Change::Plugins);
                 }
                 ClientEvent::PluginsChanged => refresh_plugins(&state),
+                ClientEvent::MacrosChanged => {}
                 ClientEvent::UpdateProgress { stage, done, total } => {
                     crate::ui::updates::progress(&stage, done, total)
                 }

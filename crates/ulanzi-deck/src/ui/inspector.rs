@@ -991,8 +991,9 @@ fn label_choices(state: &State, keys: &[u8]) -> Vec<ulanzi_core::plugin::Manifes
         return MACRO_LABELS
             .iter()
             .map(|(text, title)| ulanzi_core::plugin::ManifestLabel {
+                name: (*title).to_string(),
                 text: (*text).to_string(),
-                title: (*title).to_string(),
+                track: Vec::new(),
             })
             .collect();
     }

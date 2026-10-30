@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use tokio::sync::{Notify, broadcast};
-use ulanzi_core::model::{Profile, Settings};
+use ulanzi_core::model::{Macro, MacroLibrary, Profile, Settings};
 use ulanzi_core::plugin::{Inspected, Manifest, PickItem};
 use ulanzi_core::store::{parse_profile, profile_to_toml};
 use ulanzi_core::update::UpdateStatus;
@@ -132,6 +132,7 @@ pub enum ClientEvent {
     PluginsChanged,
     /// How far installing `id` from the store is: `stage` is preparing, downloading (`done` of
     /// `total` bytes), checking or installing.
+    MacrosChanged,
     UpdateProgress {
         stage: String,
         done: u64,
@@ -520,6 +521,33 @@ impl Client {
             .await?)
     }
 
+    /// The macro library.
+    pub async fn macros(&self) -> Result<MacroLibrary> {
+        let text: String = self.inner.proxy.call("ListMacros", &()).await?;
+        toml::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Replace the macro library.
+    pub async fn set_macros(&self, library: &MacroLibrary) -> Result<()> {
+        let text = toml::to_string(library).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        Ok(self.inner.proxy.call("SetMacros", &(text,)).await?)
+    }
+
+    /// How many keys in each profile follow macro `id`.
+    pub async fn macro_usage(&self, id: Uuid) -> Result<Vec<(String, u32)>> {
+        Ok(self.inner.proxy.call("MacroUsage", &(id.to_string(),)).await?)
+    }
+
+    /// Play `m` after `delay_ms`.
+    pub async fn try_macro(&self, m: &Macro, delay_ms: u32) -> Result<()> {
+        let text = toml::to_string(m).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        Ok(self.inner.proxy.call("TryMacro", &(text, delay_ms)).await?)
+    }
+
+    pub async fn stop_macros(&self) -> Result<()> {
+        Ok(self.inner.proxy.call("StopMacros", &()).await?)
+    }
+
     /// What is known about updates.
     pub async fn update_status(&self) -> Result<UpdateStatus> {
         let text: String = self.inner.proxy.call("UpdateStatus", &()).await?;
@@ -820,6 +848,7 @@ impl Client {
                     "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
                     "SettingsChanged" => Some(ClientEvent::SettingsChanged),
                     "PluginsChanged" => Some(ClientEvent::PluginsChanged),
+                    "MacrosChanged" => Some(ClientEvent::MacrosChanged),
                     "UpdateProgress" => body
                         .deserialize::<(String, u64, u64)>()
                         .ok()
