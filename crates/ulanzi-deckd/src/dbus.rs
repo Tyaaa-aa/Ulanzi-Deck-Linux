@@ -816,8 +816,11 @@ impl DeckService {
             .into_iter()
             .filter_map(|l| match l {
                 ProfileLoad::Ok(p) => {
-                    let used = |a: &&Action| matches!(a, Action::Macro { id: i, own: None } if *i == id);
-                    let count = p.actions().iter().filter(used).count() as u32;
+                    let count = p
+                        .actions()
+                        .into_iter()
+                        .filter(|a| matches!(a, Action::Macro { id: i, own: None } if *i == id))
+                        .count() as u32;
                     (count > 0).then(|| (p.name.clone(), count))
                 }
                 _ => None,
