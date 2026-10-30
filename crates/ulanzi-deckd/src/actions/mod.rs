@@ -5,6 +5,7 @@ pub mod command;
 pub mod keys;
 pub mod launch;
 pub mod media;
+pub mod mouse;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -99,6 +100,12 @@ impl Executor {
 fn shortcut(kb: &Mutex<Option<VirtualKeyboard>>, combo: &str) -> Result<(), ActionError> {
     let keys = keys::parse_combo(combo)?;
     with_keyboard(kb, |k| k.press_combo(&keys))
+}
+
+/// Press or release one key, for macros.
+pub fn set_key(kb: &Mutex<Option<VirtualKeyboard>>, name: &str, down: bool) -> Result<(), ActionError> {
+    let key = keys::key_named(name).ok_or_else(|| ActionError::Failed(format!("unknown key \"{name}\"")))?;
+    with_keyboard(kb, |k| k.set_key(key, down))
 }
 
 fn with_keyboard<T>(

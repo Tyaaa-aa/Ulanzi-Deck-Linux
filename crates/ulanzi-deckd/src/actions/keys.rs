@@ -24,7 +24,7 @@ pub fn parse_combo(s: &str) -> Result<Vec<KeyCode>, ActionError> {
 
 /// The key code for a name [`ulanzi_core::keys::is_sendable`] accepts (the GUI's recorder stores
 /// only those); `None` for any other name.
-fn key_named(name: &str) -> Option<KeyCode> {
+pub fn key_named(name: &str) -> Option<KeyCode> {
     use KeyCode as K;
     if !ulanzi_core::keys::is_sendable(name) {
         return None;
@@ -295,6 +295,13 @@ impl VirtualKeyboard {
             .build()
             .map_err(unavailable)?;
         Ok(VirtualKeyboard { dev })
+    }
+
+    /// Press or release one key, for macros.
+    pub fn set_key(&mut self, key: KeyCode, down: bool) -> Result<(), ActionError> {
+        self.dev
+            .emit(&[InputEvent::new(EventType::KEY.0, key.0, down as i32)])
+            .map_err(|e| ActionError::Failed(format!("could not send keys: {e}")))
     }
 
     /// Press keys in order, then release them in reverse.
