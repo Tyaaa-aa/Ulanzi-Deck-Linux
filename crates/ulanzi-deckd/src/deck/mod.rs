@@ -243,7 +243,7 @@ impl Deck {
             .into_iter()
             .filter_map(|l| match l {
                 ProfileLoad::Ok(p) => Some(*p),
-                ProfileLoad::Invalid { .. } => None,
+                ProfileLoad::Invalid { .. } | ProfileLoad::TooNew { .. } => None,
             })
             .collect();
         if profiles.is_empty() {

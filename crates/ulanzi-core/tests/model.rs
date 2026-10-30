@@ -185,7 +185,7 @@ fn invalid_profile_is_reported_not_fatal() {
     );
     let invalid = loads.iter().find_map(|l| match l {
         ProfileLoad::Invalid { path, error } => Some((path.clone(), error.clone())),
-        ProfileLoad::Ok(_) => None,
+        _ => None,
     });
     let (path, error) = invalid.expect("invalid reported");
     assert!(
@@ -592,11 +592,11 @@ fn with_macro_key(p: &Profile) -> String {
         .or_insert(toml::Value::Table(toml::Table::new()))
         .as_table_mut()
         .expect("keys");
+    keys.insert("0".into(), toml::Value::try_from(Key::default()).expect("key"));
     keys.insert(
-        "0".into(),
-        toml::Value::try_from(Key::default()).expect("key"),
+        "3".into(),
+        toml::from_str("tap = { type = \"macro\", id = 7 }").expect("key"),
     );
-    keys.insert("3".into(), toml::from_str("tap = { type = \"macro\", id = 7 }").expect("key"));
     toml::to_string(&t).expect("text")
 }
 
@@ -656,4 +656,99 @@ fn an_unknown_field_above_the_keys_still_fails() {
     let mut t = table_of(&Profile::new_default("F", Model::D200X));
     t.insert("something_new".into(), toml::Value::Integer(1));
     assert!(parse_profile(&toml::to_string(&t).expect("text")).is_err());
+}
+
+fn saved_table(s: &Store, id: Uuid) -> toml::Table {
+    let text = std::fs::read_to_string(s.profile_dir(id).join("profile.toml")).expect("read");
+    toml::from_str(&text).expect("table")
+}
+
+#[test]
+fn foreign_keys_survive_a_save_unchanged() {
+    let (_d, s) = store();
+    let original = Profile::new_default("F", Model::D200X);
+    let p = parse_profile(&with_macro_key(&original)).expect("loads");
+    s.save_profile(&p).expect("save");
+    let t = saved_table(&s, p.id);
+    let page = &t["pages"].as_array().expect("pages")[0];
+    let key = &page["keys"]["3"];
+    assert_eq!(key["tap"]["type"].as_str(), Some("macro"));
+    assert_eq!(key["tap"]["id"].as_integer(), Some(7));
+    let again = s.load_profile(p.id).expect("load again");
+    assert_eq!(again.foreign, p.foreign);
+}
+
+#[test]
+fn every_kind_of_foreign_slot_goes_back_where_it_came_from() {
+    let mut p = Profile::new_default("F", Model::D200X);
+    let raw: toml::Value = toml::Value::Table(toml::from_str("type = \"macro\"").expect("raw"));
+    for (page, slot) in [
+        (None, Slot::Small(1)),
+        (None, Slot::Screen),
+        (Some(p.pages[0].id), Slot::Dial(2)),
+    ] {
+        p.foreign.push(ForeignSlot {
+            page,
+            slot,
+            raw: raw.clone(),
+        });
+    }
+    let back = parse_profile(&ulanzi_core::store::profile_to_toml(&p).expect("toml")).expect("parse");
+    assert_eq!(back.foreign, p.foreign);
+}
+
+#[test]
+fn a_plain_profile_is_written_as_before() {
+    let p = Profile::new_default("F", Model::D200X);
+    let text = ulanzi_core::store::profile_to_toml(&p).expect("toml");
+    assert_eq!(text, toml::to_string_pretty(&p).expect("pretty"));
+    assert!(!text.contains("min_app"));
+}
+
+#[test]
+fn a_profile_with_a_higher_version_stays_where_it_is() {
+    let (_d, s) = store();
+    let p = Profile::new_default("F", Model::D200X);
+    s.save_profile(&p).expect("save");
+    let path = s.profile_dir(p.id).join("profile.toml");
+    let text = std::fs::read_to_string(&path).expect("read");
+    std::fs::write(&path, text.replacen("version = 2", "version = 3", 1)).expect("write");
+    let loads = s.list_profiles();
+    assert!(
+        matches!(loads[..], [ProfileLoad::TooNew { found: 3, .. }]),
+        "{loads:?}"
+    );
+    assert!(path.exists());
+}
+
+#[test]
+fn a_profile_unreadable_above_key_level_is_too_new() {
+    let (_d, s) = store();
+    let p = Profile::new_default("F", Model::D200X);
+    s.save_profile(&p).expect("save");
+    let path = s.profile_dir(p.id).join("profile.toml");
+    let mut t = saved_table(&s, p.id);
+    t["pages"].as_array_mut().expect("pages")[0]
+        .as_table_mut()
+        .expect("page")
+        .insert("layout".into(), toml::Value::Integer(4));
+    std::fs::write(&path, toml::to_string(&t).expect("text")).expect("write");
+    assert!(matches!(s.list_profiles()[..], [ProfileLoad::TooNew { .. }]));
+    assert!(path.exists());
+}
+
+#[test]
+fn unknown_settings_survive_a_save() {
+    let (_d, s) = store();
+    let mut settings = s.load_settings().expect("load");
+    settings
+        .extra
+        .insert("from_the_future".into(), toml::Value::Boolean(true));
+    s.save_settings(&settings).expect("save");
+    let back = s.load_settings().expect("load again");
+    assert_eq!(
+        back.extra.get("from_the_future"),
+        Some(&toml::Value::Boolean(true))
+    );
+    assert_eq!(back, settings);
 }

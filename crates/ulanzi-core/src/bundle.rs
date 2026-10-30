@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::model::{Model, Profile, Settings};
-use crate::store::{ProfileLoad, Store, parse_profile};
+use crate::store::{ProfileLoad, Store, parse_profile, profile_to_toml};
 
 pub const FORMAT: u32 = 1;
 /// Largest total (uncompressed) size accepted.
@@ -208,7 +208,8 @@ pub fn to_bytes(b: &Bundle) -> Result<Vec<u8>, BundleError> {
     }
     for bp in &b.profiles {
         let dir = format!("profiles/{}", bp.profile.id);
-        put(&format!("{dir}/profile.toml"), to_toml(&bp.profile)?.as_bytes())?;
+        let profile = profile_to_toml(&bp.profile).map_err(|e| BundleError::Io(e.to_string()))?;
+        put(&format!("{dir}/profile.toml"), profile.as_bytes())?;
         for (rel, data) in &bp.icons {
             put(&format!("{dir}/{rel}"), data)?;
         }
@@ -388,7 +389,7 @@ fn write_profile(store: &Store, p: &Profile, icons: &[(String, Vec<u8>)]) -> Res
     let result = (|| -> Result<(), BundleError> {
         std::fs::write(
             tmp.join("profile.toml"),
-            toml::to_string_pretty(p).map_err(|e| BundleError::Io(e.to_string()))?,
+            profile_to_toml(p).map_err(|e| BundleError::Io(e.to_string()))?,
         )?;
         for (rel, data) in icons {
             let file = Path::new(rel)

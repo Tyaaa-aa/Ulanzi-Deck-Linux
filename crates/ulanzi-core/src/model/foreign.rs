@@ -7,15 +7,7 @@ use uuid::Uuid;
 
 use super::{Action, Dial, Key, Profile, ScreenConfig};
 
-/// Where a foreign part sits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Slot {
-    Key(u8),
-    Dial(u8),
-    /// The small buttons: 0 is the left one.
-    Small(u8),
-    Screen,
-}
+pub use crate::edit::Slot;
 
 /// A slot from a newer version, kept as written. Not serialized by serde: see `store`.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,4 +93,53 @@ pub fn separate(table: &mut toml::Table) -> Vec<ForeignSlot> {
         }
     }
     out
+}
+
+/// Put `foreign` back into a profile's table, where [`separate`] found each one.
+pub fn restore(table: &mut toml::Table, foreign: &[ForeignSlot]) {
+    let new_table = || toml::Value::Table(toml::Table::new());
+    for f in foreign {
+        match f.slot {
+            Slot::Small(i) => {
+                let Some(small) = table
+                    .entry("small_buttons")
+                    .or_insert_with(new_table)
+                    .as_table_mut()
+                else {
+                    continue;
+                };
+                small.insert(SMALL[(i as usize).min(1)].into(), f.raw.clone());
+            }
+            Slot::Screen => {
+                table.insert("screen".into(), f.raw.clone());
+            }
+            Slot::Key(_) | Slot::Dial(_) => {
+                let id = f.page.map(|id| id.to_string());
+                let page = table
+                    .get_mut("pages")
+                    .and_then(|v| v.as_array_mut())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_table_mut())
+                    .find(|p| p.get("id").and_then(|v| v.as_str()) == id.as_deref());
+                let Some(page) = page else { continue };
+                match f.slot {
+                    Slot::Key(i) => {
+                        if let Some(keys) = page.entry("keys").or_insert_with(new_table).as_table_mut() {
+                            keys.insert(i.to_string(), f.raw.clone());
+                        }
+                    }
+                    Slot::Dial(i) => {
+                        let dials = page
+                            .entry("dials")
+                            .or_insert_with(|| toml::Value::Array(vec![new_table(); 3]));
+                        if let Some(d) = dials.as_array_mut().and_then(|d| d.get_mut(i as usize)) {
+                            *d = f.raw.clone();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }

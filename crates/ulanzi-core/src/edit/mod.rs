@@ -13,6 +13,21 @@ use crate::model::*;
 pub const HISTORY_LIMIT: usize = 200;
 const KEYS: u8 = 13;
 
+/// Small buttons and the wide screen belong to the profile, everything else to a page.
+fn global(slot: Slot) -> bool {
+    matches!(slot, Slot::Small(_) | Slot::Screen)
+}
+
+/// Whether `slot` holds something from a newer version, which edits must leave alone.
+fn taken(p: &Profile, page: usize, slot: Slot) -> bool {
+    let id = if global(slot) {
+        None
+    } else {
+        Some(p.pages[page].id)
+    };
+    p.foreign_at(id, slot).is_some()
+}
+
 /// One appearance property, applied to every selected key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Field {
@@ -207,17 +222,39 @@ impl Editor {
         )
     }
 
+    /// Whether `slot` on the current page holds something from a newer version.
+    pub fn is_foreign(&self, slot: Slot) -> bool {
+        taken(&self.profile, self.page, slot)
+    }
+
+    /// Remove what a newer version left in `slot` (one undo step).
+    pub fn clear_foreign(&mut self, slot: Slot) {
+        self.edit(|p, page| {
+            let id = if global(slot) {
+                None
+            } else {
+                Some(p.pages[page].id)
+            };
+            p.foreign.retain(|f| !(f.page == id && f.slot == slot));
+        });
+    }
+
     /// Set one appearance field on every key in `keys` (one undo step).
     pub fn set_field(&mut self, keys: &[u8], field: Field) {
         self.edit(|p, page| {
             for &i in keys.iter().filter(|i| **i < KEYS) {
-                apply_field(&mut p.pages[page].keys.entry(i).or_default().look, &field);
+                if !taken(p, page, Slot::Key(i)) {
+                    apply_field(&mut p.pages[page].keys.entry(i).or_default().look, &field);
+                }
             }
         });
     }
 
     /// Assign `action` to a slot. An empty key also gets the action's default look.
     pub fn drop_action(&mut self, slot: Slot, action: Action) {
+        if self.is_foreign(slot) {
+            return;
+        }
         self.edit(|p, page| match slot {
             Slot::Key(i) if i < KEYS => {
                 let key = p.pages[page].keys.entry(i).or_default();
@@ -241,6 +278,9 @@ impl Editor {
 
     /// Set a key's tap and hold actions (one undo step).
     pub fn set_key_actions(&mut self, index: u8, tap: Option<Action>, hold: Option<Action>) {
+        if self.is_foreign(Slot::Key(index)) {
+            return;
+        }
         self.edit(|p, page| {
             if index < KEYS {
                 let key = p.pages[page].keys.entry(index).or_default();
@@ -273,6 +313,9 @@ impl Editor {
     }
 
     pub fn set_dial(&mut self, dial: u8, f: impl FnOnce(&mut Dial)) {
+        if self.is_foreign(Slot::Dial(dial)) {
+            return;
+        }
         self.edit(|p, page| {
             if let Some(d) = p.pages[page].dials.get_mut(dial as usize) {
                 f(d);
@@ -281,6 +324,9 @@ impl Editor {
     }
 
     pub fn set_small_button(&mut self, which: u8, action: Option<Action>) {
+        if self.is_foreign(Slot::Small(which)) {
+            return;
+        }
         self.edit(|p, _| {
             if which == 0 {
                 p.small_buttons.left = action;
@@ -313,11 +359,15 @@ impl Editor {
     }
 
     pub fn set_screen(&mut self, screen: ScreenConfig) {
+        if self.is_foreign(Slot::Screen) {
+            return;
+        }
         self.edit(|p, _| p.screen = screen);
     }
 
     pub fn swap(&mut self, a: u8, b: u8) {
-        if a >= KEYS || b >= KEYS || a == b {
+        if a >= KEYS || b >= KEYS || a == b || self.is_foreign(Slot::Key(a)) || self.is_foreign(Slot::Key(b))
+        {
             return;
         }
         self.edit(|p, page| {
@@ -352,7 +402,7 @@ impl Editor {
         self.edit(|p, page| {
             for (offset, key) in items {
                 let i = at + offset;
-                if i < KEYS {
+                if i < KEYS && !taken(p, page, Slot::Key(i)) {
                     p.pages[page].keys.insert(i, key);
                 }
             }
@@ -388,6 +438,8 @@ impl Editor {
         self.edit(|p, page| {
             for i in keys {
                 p.pages[page].keys.remove(i);
+                let id = Some(p.pages[page].id);
+                p.foreign.retain(|f| !(f.page == id && f.slot == Slot::Key(*i)));
             }
         });
     }
@@ -413,7 +465,7 @@ impl Editor {
         self.edit(|p, page| {
             let moving: Vec<Key> = keys.iter().filter_map(|i| p.pages[page].keys.remove(i)).collect();
             let mut free = (0..KEYS)
-                .filter(|i| !p.pages[target].keys.contains_key(i))
+                .filter(|i| !p.pages[target].keys.contains_key(i) && !taken(p, target, Slot::Key(*i)))
                 .collect::<Vec<_>>()
                 .into_iter();
             for key in moving {
@@ -454,11 +506,15 @@ impl Editor {
             }
             for group in groups {
                 let group: Vec<Key> = group.into_iter().take(KEYS as usize).collect();
-                let free = |pg: &Page| (0..KEYS).filter(|i| !pg.keys.contains_key(i)).collect::<Vec<_>>();
-                if free(&p.pages[at]).len() < group.len() {
+                let free = |p: &Profile, at: usize| {
+                    (0..KEYS)
+                        .filter(|i| !p.pages[at].keys.contains_key(i) && !taken(p, at, Slot::Key(*i)))
+                        .collect::<Vec<_>>()
+                };
+                if free(p, at).len() < group.len() {
                     at = add_page(p, at);
                 }
-                for (slot, key) in free(&p.pages[at]).into_iter().zip(group) {
+                for (slot, key) in free(p, at).into_iter().zip(group) {
                     p.pages[at].keys.insert(slot, key);
                 }
                 first.get_or_insert(at);
@@ -470,7 +526,9 @@ impl Editor {
     /// Free key slots on the current page.
     pub fn free_keys(&self) -> usize {
         let keys = &self.profile.pages[self.page].keys;
-        (0..KEYS).filter(|i| !keys.contains_key(i)).count()
+        (0..KEYS)
+            .filter(|i| !keys.contains_key(i) && !self.is_foreign(Slot::Key(*i)))
+            .count()
     }
 
     /// Add a page after the current one; returns its index.
@@ -500,7 +558,8 @@ impl Editor {
             return false;
         }
         self.edit(|p, _| {
-            p.pages.remove(page);
+            let gone = p.pages.remove(page).id;
+            p.foreign.retain(|f| f.page != Some(gone));
         });
         self.page = self.page.min(self.profile.pages.len() - 1);
         true

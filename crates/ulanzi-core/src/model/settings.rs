@@ -16,7 +16,7 @@ pub enum AppearancePref {
 
 /// App and device settings (`settings.toml`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Settings {
     pub version: u32,
     pub appearance: AppearancePref,
@@ -47,6 +47,9 @@ pub struct Settings {
     pub plugins: BTreeMap<String, PluginEntry>,
     /// Allows installing plugins from a folder.
     pub developer_mode: bool,
+    /// What a newer version wrote; kept so a save does not lose it.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 /// One plugin's entry in `settings.toml`.
@@ -119,6 +122,7 @@ impl Default for Settings {
             profile_order: Vec::new(),
             plugins: BTreeMap::new(),
             developer_mode: false,
+            extra: toml::Table::new(),
         }
     }
 }

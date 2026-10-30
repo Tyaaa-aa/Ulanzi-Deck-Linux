@@ -109,7 +109,13 @@ pub fn instantiate(t: &Template) -> Result<Bundle, BundleError> {
     for bp in &mut b.profiles {
         bp.profile.id = Uuid::new_v4();
         for pg in &mut bp.profile.pages {
-            pg.id = Uuid::new_v4();
+            let new = Uuid::new_v4();
+            for f in &mut bp.profile.foreign {
+                if f.page == Some(pg.id) {
+                    f.page = Some(new);
+                }
+            }
+            pg.id = new;
         }
     }
     for (mp, bp) in b.manifest.profiles.iter_mut().zip(&b.profiles) {

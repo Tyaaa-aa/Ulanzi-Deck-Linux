@@ -491,6 +491,9 @@ async fn run(cli: Cli) -> Result<(), String> {
                             bad += 1;
                             println!("INVALID  {}: {error}", path.display());
                         }
+                        ProfileLoad::TooNew { path, .. } => {
+                            println!("NEWER    {}: needs a newer version", path.display());
+                        }
                     }
                 }
                 if bad > 0 {

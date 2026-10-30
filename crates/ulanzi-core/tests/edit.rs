@@ -452,3 +452,73 @@ fn add_keys_keeps_each_group_on_one_page() {
     assert_eq!(first, 1);
     assert_eq!(e.profile().pages[1].keys[&0].look.label.text, "a");
 }
+
+/// A profile whose key 3 and dial 1 came from a newer version.
+fn with_foreign() -> Profile {
+    let mut p = Profile::new_default("F", Model::D200X);
+    let page = Some(p.pages[0].id);
+    let raw: toml::Value = toml::Value::Table(toml::from_str("kind = \"new\"").expect("raw"));
+    p.foreign.push(ForeignSlot {
+        page,
+        slot: Slot::Key(3),
+        raw: raw.clone(),
+    });
+    p.foreign.push(ForeignSlot {
+        page,
+        slot: Slot::Dial(1),
+        raw,
+    });
+    p
+}
+
+#[test]
+fn pasting_onto_a_foreign_key_is_refused() {
+    let mut e = Editor::new(with_foreign());
+    e.set_field(&[2], Field::Background(Color::rgb(1, 2, 3)));
+    e.copy_keys(&[2]);
+    e.paste_keys(3);
+    assert!(!e.profile().pages[0].keys.contains_key(&3));
+    assert_eq!(e.profile().foreign.len(), 2);
+}
+
+#[test]
+fn nothing_else_writes_over_a_foreign_slot() {
+    let mut e = Editor::new(with_foreign());
+    e.set_field(&[3], Field::Background(Color::rgb(1, 2, 3)));
+    e.drop_action(Slot::Key(3), Action::NextPage);
+    e.set_key_actions(3, Some(Action::NextPage), None);
+    e.set_field(&[2], Field::Background(Color::rgb(1, 2, 3)));
+    e.swap(2, 3);
+    assert!(!e.profile().pages[0].keys.contains_key(&3));
+    assert!(e.profile().pages[0].keys.contains_key(&2));
+    e.set_dial(1, |d| d.press = Some(Action::NextPage));
+    e.drop_action(Slot::Dial(1), Action::NextPage);
+    assert_eq!(e.dials()[1], Dial::default());
+}
+
+#[test]
+fn new_keys_do_not_land_on_a_foreign_slot() {
+    let mut e = Editor::new(with_foreign());
+    assert_eq!(e.free_keys(), 12);
+    e.add_keys(vec![vec![Key::default(); 4]], "More", false);
+    assert!(!e.profile().pages[0].keys.contains_key(&3));
+    assert!(e.profile().pages[0].keys.contains_key(&4));
+}
+
+#[test]
+fn clearing_a_foreign_key_removes_it() {
+    let mut e = Editor::new(with_foreign());
+    e.clear(&[3]);
+    assert_eq!(e.profile().foreign.len(), 1);
+    assert_eq!(e.profile().foreign[0].slot, Slot::Dial(1));
+    e.clear_foreign(Slot::Dial(1));
+    assert!(e.profile().foreign.is_empty());
+}
+
+#[test]
+fn removing_a_page_removes_its_foreign_slots() {
+    let mut e = Editor::new(with_foreign());
+    e.add_page("Second");
+    e.remove_page(0);
+    assert!(e.profile().foreign.is_empty());
+}

@@ -32,6 +32,12 @@ pub enum ProfileLoad {
         path: PathBuf,
         error: String,
     },
+    /// A newer version wrote this in a way this one cannot read. Left where it is, under its own
+    /// name, for when the app is updated.
+    TooNew {
+        path: PathBuf,
+        found: i64,
+    },
 }
 
 fn xdg(var: &str, fallback: &str) -> Result<PathBuf, CoreError> {
@@ -185,7 +191,7 @@ impl Store {
 
     pub fn save_profile(&self, p: &Profile) -> Result<(), CoreError> {
         let path = self.profile_dir(p.id).join(PROFILE_FILE);
-        write_atomic(&path, to_toml(p)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
+        write_atomic(&path, profile_to_toml(p)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
     }
 
     /// Move a profile's directory aside to `profiles/.deleted-<id>-<unix-ts>` (recoverable by hand).
@@ -221,6 +227,15 @@ impl Store {
             }
             match self.load_profile_at(&path) {
                 Ok(p) => out.push(ProfileLoad::Ok(Box::new(p))),
+                Err(CoreError::UnsupportedVersion { found, .. }) => {
+                    out.push(ProfileLoad::TooNew { path, found });
+                }
+                Err(err) if from_newer_version(&err) => {
+                    out.push(ProfileLoad::TooNew {
+                        path,
+                        found: FORMAT_VERSION as i64,
+                    });
+                }
                 Err(err) => {
                     let ts = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -251,6 +266,22 @@ pub fn parse_profile(text: &str) -> Result<Profile, CoreError> {
     let mut p = parse_tolerant(Path::new("<profile>"), text)?;
     p.normalize();
     Ok(p)
+}
+
+/// A profile as TOML, with what a newer version wrote back in its place.
+pub fn profile_to_toml(p: &Profile) -> Result<String, CoreError> {
+    if p.foreign.is_empty() {
+        return to_toml(p);
+    }
+    let mut table = toml::Table::try_from(p).map_err(|e| CoreError::Serialize(e.to_string()))?;
+    crate::model::foreign::restore(&mut table, &p.foreign);
+    to_toml(&table)
+}
+
+/// Does this parse error mean a newer version wrote the file, rather than a damaged file?
+fn from_newer_version(e: &CoreError) -> bool {
+    matches!(e, CoreError::Parse { message, .. }
+        if message.contains("unknown field") || message.contains("unknown variant"))
 }
 
 /// Parse a profile, setting aside the keys and other slots a newer version wrote.
