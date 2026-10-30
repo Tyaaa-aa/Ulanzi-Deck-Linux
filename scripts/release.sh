@@ -79,7 +79,8 @@ if command -v makepkg >/dev/null; then
   mkdir -p "$a"
   sed "s/^pkgver=.*/pkgver=$version/" packaging/arch/PKGBUILD >"$a/PKGBUILD"
   cp "$src" "$a/ulanzi-deck-$version.tar.gz"
-  (cd "$a" && makepkg -f --noconfirm --nodeps >makepkg.log 2>&1 && makepkg --printsrcinfo >.SRCINFO)
+  # Built here for Arch, which always has the newest libraries, so not from the Debian binaries.
+  (cd "$a" && env -u BIN_DIR makepkg -f --noconfirm --nodeps >makepkg.log 2>&1 && makepkg --printsrcinfo >.SRCINFO)
   cp "$a/.SRCINFO" packaging/arch/.SRCINFO
   cp "$a"/ulanzi-deck-"$version"-*.pkg.tar.zst "$a/PKGBUILD" "$dist/"
   cp "$a/.SRCINFO" "$dist/SRCINFO"
