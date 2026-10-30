@@ -19,6 +19,12 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug, PartialEq)]
+enum UpdateCmd {
+    /// Ask GitHub now.
+    Check,
+}
+
+#[derive(Subcommand, Debug, PartialEq)]
 enum Cmd {
     /// Show device and service status.
     Status {
@@ -80,6 +86,11 @@ enum Cmd {
     Monitor,
     /// Print versions, session, device state and recent logs for bug reports.
     Diagnostics,
+    /// Show the running version and any update on offer; `check` asks GitHub now.
+    Update {
+        #[command(subcommand)]
+        what: Option<UpdateCmd>,
+    },
     /// Talk to the device directly (the service must be stopped).
     Probe {
         #[command(subcommand)]
@@ -523,6 +534,22 @@ async fn run(cli: Cli) -> Result<(), String> {
             }
         }
         Cmd::Diagnostics => diagnostics().await,
+        Cmd::Update { what } => {
+            let method = if what.is_some() {
+                "UpdateCheck"
+            } else {
+                "UpdateStatus"
+            };
+            let json: String = proxy().await?.call(method, &()).await.map_err(not_running)?;
+            let s: ulanzi_core::update::UpdateStatus = serde_json::from_str(&json)
+                .map_err(|e| format!("unexpected answer from the service: {e}"))?;
+            println!("version  {}", s.current);
+            match s.offered {
+                Some(r) if s.can_install => println!("update   {} (the app can install it)", r.tag),
+                Some(r) => println!("update   {} (download it from GitHub)", r.tag),
+                None => println!("update   none"),
+            }
+        }
         Cmd::Probe { what } => probe::run(what).await?,
     }
     Ok(())

@@ -11,6 +11,7 @@ use tokio::sync::{Notify, broadcast};
 use ulanzi_core::model::{Profile, Settings};
 use ulanzi_core::plugin::{Inspected, Manifest, PickItem};
 use ulanzi_core::store::{parse_profile, profile_to_toml};
+use ulanzi_core::update::UpdateStatus;
 use uuid::Uuid;
 use zbus::Connection;
 
@@ -131,6 +132,11 @@ pub enum ClientEvent {
     PluginsChanged,
     /// How far installing `id` from the store is: `stage` is preparing, downloading (`done` of
     /// `total` bytes), checking or installing.
+    UpdateProgress {
+        stage: String,
+        done: u64,
+        total: u64,
+    },
     InstallProgress {
         id: String,
         stage: String,
@@ -514,6 +520,40 @@ impl Client {
             .await?)
     }
 
+    /// What is known about updates.
+    pub async fn update_status(&self) -> Result<UpdateStatus> {
+        let text: String = self.inner.proxy.call("UpdateStatus", &()).await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Ask GitHub for the latest release now.
+    pub async fn update_check(&self) -> Result<UpdateStatus> {
+        let text: String = self.inner.proxy.call("UpdateCheck", &()).await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    /// Download and verify the offered release; returns the file.
+    pub async fn update_download(&self) -> Result<String> {
+        Ok(self.inner.proxy.call("UpdateDownload", &()).await?)
+    }
+
+    /// Back up, and for an AppImage put `file` in place.
+    pub async fn update_apply(&self, file: &str) -> Result<()> {
+        Ok(self.inner.proxy.call("UpdateApply", &(file,)).await?)
+    }
+
+    pub async fn update_skip(&self, version: &str) -> Result<()> {
+        Ok(self.inner.proxy.call("UpdateSkip", &(version,)).await?)
+    }
+
+    pub async fn update_set_check(&self, on: bool) -> Result<()> {
+        Ok(self.inner.proxy.call("UpdateSetCheck", &(on,)).await?)
+    }
+
+    pub async fn update_whats_new_shown(&self, version: &str) -> Result<()> {
+        Ok(self.inner.proxy.call("UpdateWhatsNewShown", &(version,)).await?)
+    }
+
     /// The plugin store's signed list (the last one seen when the store can't be reached).
     /// A copy under 30 minutes old is used unless `refresh`.
     pub async fn plugin_store_index(&self, refresh: bool) -> Result<ulanzi_core::plugin::store::Listing> {
@@ -775,6 +815,10 @@ impl Client {
                     "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
                     "SettingsChanged" => Some(ClientEvent::SettingsChanged),
                     "PluginsChanged" => Some(ClientEvent::PluginsChanged),
+                    "UpdateProgress" => body
+                        .deserialize::<(String, u64, u64)>()
+                        .ok()
+                        .map(|(stage, done, total)| ClientEvent::UpdateProgress { stage, done, total }),
                     "PluginInstallProgress" => body.deserialize::<(String, String, u64, u64)>().ok().map(
                         |(id, stage, done, total)| ClientEvent::InstallProgress {
                             id,

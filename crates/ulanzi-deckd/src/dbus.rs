@@ -7,6 +7,8 @@ use std::sync::Mutex;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use ulanzi_core::model::{BrightnessOp, Model, Profile, Settings, is_plugin_secret};
 use ulanzi_core::store::{ProfileLoad, Store, parse_profile};
+
+use crate::updates::{self, UpdateError, check::Source};
 use ulanzi_proto::InputKind;
 use uuid::Uuid;
 use zbus::object_server::SignalEmitter;
@@ -256,6 +258,10 @@ fn absolute_file(path: &str) -> Result<()> {
 }
 
 /// A plugin error as a D-Bus error; the message is the sentence shown to the user.
+fn update_err(e: UpdateError) -> DeckError {
+    DeckError::Unavailable(e.to_string())
+}
+
 fn plugin_err(e: PluginError) -> DeckError {
     let msg = e.to_string();
     match e {
@@ -753,6 +759,101 @@ impl DeckService {
         serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
+    /// What is known about updates, as JSON.
+    async fn update_status(&self) -> Result<String> {
+        let (store, src) = (self.store.clone(), Source::real());
+        let status = tokio::task::spawn_blocking(move || updates::check::status(&store, &src))
+            .await
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?;
+        serde_json::to_string(&status).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// Ask GitHub now; the result is the same JSON as `UpdateStatus`.
+    async fn update_check(&self) -> Result<String> {
+        let (store, src) = (self.store.clone(), Source::real());
+        let status = tokio::task::spawn_blocking(move || updates::check::run(&store, &src, true))
+            .await
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?
+            .map_err(update_err)?;
+        serde_json::to_string(&status).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// Stop offering `version`.
+    async fn update_skip(&self, version: String) -> Result<()> {
+        updates::check::skip(&self.store, &version).map_err(update_err)
+    }
+
+    /// Turn the daily check on or off.
+    async fn update_set_check(&self, on: bool) -> Result<()> {
+        updates::check::set_checking(&self.store, on).map_err(update_err)
+    }
+
+    /// Remember that What's New was shown for `version`.
+    async fn update_whats_new_shown(&self, version: String) -> Result<()> {
+        updates::check::whats_new_shown(&self.store, &version).map_err(update_err)
+    }
+
+    /// Download and verify the offered release, sending `UpdateProgress`; returns the file.
+    async fn update_download(&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>) -> Result<String> {
+        let src = Source::real();
+        let store = self.store.clone();
+        let release = updates::check::status(&store, &src)
+            .offered
+            .ok_or_else(|| DeckError::Invalid("no update is on offer".into()))?;
+        let (tx, mut rx) = mpsc::unbounded_channel::<(String, u64, u64)>();
+        // At most ten download updates a second; every change of stage.
+        let last = std::sync::Mutex::new((std::time::Instant::now(), String::new()));
+        let kind = src.kind;
+        let fetch = tokio::task::spawn_blocking(move || {
+            updates::download::fetch(&store, &release, kind, |stage, done, total| {
+                let Ok(mut last) = last.lock() else { return };
+                let now = std::time::Instant::now();
+                if last.1 == stage && now.duration_since(last.0) < std::time::Duration::from_millis(100) {
+                    return;
+                }
+                *last = (now, stage.to_string());
+                let _ = tx.send((stage.to_string(), done, total));
+            })
+        });
+        tokio::pin!(fetch);
+        let fetched = loop {
+            tokio::select! {
+                r = &mut fetch => break r,
+                Some((stage, done, total)) = rx.recv() => {
+                    let _ = DeckService::update_progress(&emitter, &stage, done, total).await;
+                }
+            }
+        };
+        while let Ok((stage, done, total)) = rx.try_recv() {
+            let _ = DeckService::update_progress(&emitter, &stage, done, total).await;
+        }
+        let path = fetched
+            .map_err(|e| DeckError::Unavailable(e.to_string()))?
+            .map_err(update_err)?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
+    /// Back up, and for an AppImage put the downloaded `file` in place. Other kinds are installed
+    /// by the window, which has the password prompt.
+    async fn update_apply(&self, file: String) -> Result<()> {
+        let src = Source::real();
+        let release = updates::check::status(&self.store, &src)
+            .offered
+            .ok_or_else(|| DeckError::Invalid("no update is on offer".into()))?;
+        let downloads = self.store.cache_dir().join("updates").join(release.version());
+        let file = std::path::PathBuf::from(file);
+        if !file.starts_with(&downloads) {
+            return Err(DeckError::Invalid("that is not a downloaded update".into()));
+        }
+        self.snap(&format!("before-{}", release.version()))?;
+        if src.kind == ulanzi_core::update::InstallKind::AppImage {
+            let target = std::env::var_os("APPIMAGE")
+                .ok_or_else(|| DeckError::Invalid("this is not running from an AppImage".into()))?;
+            updates::download::swap_appimage(&file, std::path::Path::new(&target)).map_err(update_err)?;
+        }
+        Ok(())
+    }
+
     /// Install plugin `id` from the store (signed: no Developer mode needed); returns its id. Sends
     /// `PluginInstallProgress` as it goes.
     async fn plugin_store_install(
@@ -968,6 +1069,11 @@ impl DeckService {
     /// Settings changed outside the app (tray, deck keys): read them again.
     #[zbus(signal)]
     async fn settings_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    /// How far `UpdateDownload` is: `stage` is downloading (`done` of `total` bytes), verifying
+    /// or ready.
+    #[zbus(signal)]
+    async fn update_progress(e: &SignalEmitter<'_>, stage: &str, done: u64, total: u64) -> zbus::Result<()>;
 
     /// How far `PluginStoreInstall` of `id` is: `stage` is preparing, downloading (`done` of
     /// `total` bytes), checking or installing.

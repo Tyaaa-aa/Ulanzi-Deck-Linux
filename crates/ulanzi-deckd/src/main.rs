@@ -136,6 +136,7 @@ async fn main() -> ExitCode {
         PluginSlot::start(async move { start_plugins(&store, &settings, deck).await })
     };
     tokio::spawn(plugins_ready(conn.clone(), plugins.clone(), store.clone()));
+    tokio::spawn(ulanzi_deckd::updates::run(store.clone()));
     let executor = Arc::new(Executor::new(Some(conn.clone())).with_plugin_slot(plugins.clone()));
     {
         let ex = executor.clone();
