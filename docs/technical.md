@@ -88,12 +88,14 @@ album art, plugin store), ksni (tray), x11rb (X11 focus) and evdev (virtual keyb
 | `~/.config/ulanzi-deck/profiles/<uuid>/profile.toml` | One profile |
 | `~/.config/ulanzi-deck/profiles/<uuid>/icons/` | Pictures used by that profile |
 | `~/.local/state/ulanzi-deck/snapshots/` | Backups (`YYYYmmdd-HHMMSS-NNN-reason.ulanzideck`, newest 20 kept) |
+| `~/.local/state/ulanzi-deck/updates.toml` | Update check state: whether to check, the last check, the release on offer, the skipped version |
 | `~/.local/state/ulanzi-deck/onboarded` | Created when first-run setup completes |
 | `~/.local/state/ulanzi-deck/kwin-focus.js` | The KWin script used for auto-switch on Plasma |
 | `~/.config/ulanzi-deck/plugin-secrets.toml` | Plugin secrets when no system keyring answers (mode 0600) |
 | `~/.local/share/ulanzi-deck/plugins/<id>/` | An installed plugin: `plugin.toml`, `plugin.wasm`, optional `assets/`, and a `.verified` marker for signed installs |
 | `~/.local/share/ulanzi-deck/plugins/.store-index.json`, `.store-icons/` | Cached plugin store index (with its signature) and icons |
 | `~/.cache/ulanzi-deck/plugins/` | Compiled plugins (safe to delete) |
+| `~/.cache/ulanzi-deck/updates/` | Downloaded updates (safe to delete) |
 | `~/.cache/ulanzi-deck/art/` | Album art (downloaded or copied from players; newest 100 kept) |
 | `~/.local/share/ulanzi-deck/templates/` | User templates (`.ulanzideck`) |
 | `/etc/udev/rules.d/70-ulanzi-deck.rules` (or `/usr/lib/udev/rules.d/`) | Grants the logged-in user access to the deck and `/dev/uinput` |
@@ -162,12 +164,27 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). To inspect it, run
 | Sharing and backups | `PreviewBundle`, `BundleCommands`, `ImportBundle`, `ExportBundle`, `ListSnapshots`, `TakeSnapshot`, `RestoreSnapshot`, `Migrate` |
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
 | Widgets and sound | `NowPlaying`, `WeatherPlaces`, `WeatherNow`, `PlaySound` (path, device, volume) |
+| Updates | `UpdateStatus` and `UpdateCheck` (JSON), `UpdateDownload` (reports `UpdateProgress`; returns the verified file), `UpdateApply` (file; backs up, and swaps an AppImage), `UpdateSkip` (version), `UpdateSetCheck` (on), `UpdateWhatsNewShown` (version) |
 | Plugin store | `PluginStoreIndex` (refresh; the signed index as JSON, from cache when recent), `PluginStoreInstall` (id; reports `PluginInstallProgress`), `PluginVerified` and `PluginOfficial` (ids of installed plugins that are signed, and signed as official) |
 | Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginInstallFile` / `PluginInspectFile` (the same for a `.ulanziplugin` package: an absolute path; installing needs Developer mode, inspecting does not; the package is unpacked into a hidden `.unpack-*` folder inside the plugins folder, limits 64 MiB file, 1000 entries, 64 MiB unpacked), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
 
 Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
 `ActionFailed`, `PluginsChanged`, and `PluginInstallProgress` (id, stage, bytes done, bytes total;
 stage is `preparing`, `downloading`, `checking` or `installing`).
+
+### Compatibility with newer versions
+
+`version` in a profile only goes up for a change an older app cannot safely skip. New actions and
+look options stay on version 2.
+
+A key, dial, small button or wide-screen setup that does not parse is set aside as written
+(`Profile.foreign`) and the rest of the profile loads. `store::profile_to_toml` puts it back on every
+save and export, so nothing is lost passing through an older version. `min_app`, written only when
+needed, names the version it takes. A profile that fails above that level, or has a higher
+`version`, is reported as `ProfileLoad::TooNew` and left in place.
+
+A `.ulanzideck` file records `format` and `app_version`. `format` 2 means a profile inside has parts
+older apps may not read; this version reads formats 1 and 2.
 
 ## Plugins
 
@@ -221,6 +238,8 @@ ulanzictl probe …                talk to the deck directly (stop the service f
 | `ULANZI_LOG` | Log filter for the service, e.g. `debug` or `ulanzi_deckd::plugins=debug` |
 | `ULANZI_DEMO=1` | The service uses a simulated deck and does not access hardware (screenshots, tests) |
 | `ULANZI_BIN` | `scripts/sandbox.sh`: directory of the binaries to run |
+| `ULANZI_RELEASES_URL` | Where to ask for the latest release, for testing |
+| `ULANZI_TEST_RELEASE_KEY` | Debug builds only: one more trusted release key, for `scripts/fake-release.sh` |
 | `ULANZI_PLUGINS_REPO` | `scripts/screenshots.sh`: path to a Ulanzi-Deck-Plugins checkout (default `../Ulanzi-Deck-Plugins`) |
 
 ## Logs

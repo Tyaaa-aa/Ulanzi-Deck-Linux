@@ -809,3 +809,78 @@ async fn failed_set_secret_keeps_the_settings_copy() {
     assert_eq!(s.plugins["probe"].settings["password"].as_str(), Some("hunter2"));
     assert_eq!(s.plugins["probe"].settings["greeting"].as_str(), Some("hi"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_from_a_newer_version_survives_the_window() {
+    use ulanzi_core::model::{ForeignSlot, Slot};
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let mut profile = r.profile.clone();
+    profile.foreign.push(ForeignSlot {
+        page: Some(profile.pages[0].id),
+        slot: Slot::Key(3),
+        raw: toml::Value::Table(toml::from_str("tap = { type = \"macro\" }").expect("raw")),
+    });
+    let text = ulanzi_core::store::profile_to_toml(&profile).expect("toml");
+    let _: u64 = p
+        .call("ApplyProfile", &(text.as_str(), 1u64))
+        .await
+        .expect("apply");
+    let back: String = p
+        .call("GetProfile", &(profile.id.to_string(),))
+        .await
+        .expect("get");
+    assert!(back.contains("macro"), "{back}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(unsafe_code)]
+async fn an_update_is_found_fetched_and_swapped_in() {
+    use common::http::{reply, serve_late};
+    const KEY: &str = "RWSs/atOYGdNly+XXewka2b44HRpYWS3v+8YvPtCQRRCzq2cw/8hVmRJ";
+    const SUMS: &str = "84293ed06cb3210e7d549afec3140d0c48494416ad25b7f25196afffaa5eb796  Ulanzi_Deck-9.9.9-x86_64.AppImage\n";
+    const SIG: &str = "untrusted comment: signature from minisign secret key
+RUSs/atOYGdNl4/T6e0ANX1ZNjzAj99eG41ifrnMSPXk7oI56tOYLznY46X4ThsNc3mjcsjPLzsdCr5qmXhS2Cm81zdt+saSlgs=
+trusted comment: file:SHA256SUMS
+6oGLrfaCxJlDrCBCLbzjjfkgKcH3KzE3640CbHDEyNNWd7XNiweYbG/Neacs+qB085vpcaQil9606E3hJ4X5Ag==
+";
+    let Some(r) = rig().await else { return };
+    let p = proxy(&r.client).await;
+    let appimage = r._dir.path().join("Ulanzi.AppImage");
+    std::fs::write(&appimage, b"old").expect("write");
+    let (base, _) = serve_late(|base| {
+        let asset = |n: &str, size: usize| {
+            format!(r#"{{"name":"{n}","browser_download_url":"{base}/{n}","size":{size}}}"#)
+        };
+        let latest = format!(
+            r#"{{"tag_name":"v9.9.9","name":"","draft":false,"prerelease":false,"published_at":"","body":"","assets":[{},{},{}]}}"#,
+            asset("Ulanzi_Deck-9.9.9-x86_64.AppImage", 11),
+            asset("SHA256SUMS", SUMS.len()),
+            asset("SHA256SUMS.minisig", SIG.len()),
+        );
+        vec![
+            reply("/latest", 200, latest.as_bytes()),
+            reply("/Ulanzi_Deck-9.9.9-x86_64.AppImage", 200, b"asset bytes"),
+            reply("/SHA256SUMS", 200, SUMS.as_bytes()),
+            reply("/SHA256SUMS.minisig", 200, SIG.as_bytes()),
+        ]
+    });
+    // Nothing else in this test program asks about updates.
+    unsafe {
+        std::env::set_var("ULANZI_RELEASES_URL", format!("{base}/latest"));
+        std::env::set_var("ULANZI_TEST_RELEASE_KEY", KEY);
+        std::env::set_var("APPIMAGE", &appimage);
+    }
+    let json: String = p.call("UpdateCheck", &()).await.expect("check");
+    let status: ulanzi_core::update::UpdateStatus = serde_json::from_str(&json).expect("status");
+    assert!(status.can_install, "{json}");
+    let file: String = p.call("UpdateDownload", &()).await.expect("download");
+    p.call::<_, _, ()>("UpdateApply", &(file.as_str(),))
+        .await
+        .expect("apply");
+    assert_eq!(std::fs::read(&appimage).expect("read"), b"asset bytes");
+    let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("snapshots");
+    assert!(snaps.iter().any(|s| s.2 == "before-9-9-9"), "{snaps:?}");
+    let refused = p.call::<_, _, ()>("UpdateApply", &("/etc/passwd",)).await;
+    assert!(refused.is_err(), "only a downloaded update is accepted");
+}

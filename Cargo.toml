@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/ulanzi-proto", "crates/ulanzi-core", "crates/ulanzi-plugin", "crates/ulanzi-deckd", "crates/ulanzictl", "crates/ulanzi-deck", "examples/plugins/hello", "crates/ulanzi-deckd/tests/plugins/probe", "crates/ulanzi-deckd/tests/plugins/legacy"]
 
 [workspace.package]
-version = "2.1.0"
+version = "2.1.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux"

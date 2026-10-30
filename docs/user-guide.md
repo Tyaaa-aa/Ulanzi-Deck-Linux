@@ -17,6 +17,7 @@ profiles, plugins and backups. For problems, see [Troubleshooting](troubleshooti
 - [OBS Studio](#obs-studio)
 - [Templates, sharing and backups](#templates-sharing-and-backups)
 - [Preferences](#preferences)
+- [Updates](#updates)
 - [Tray icon](#tray-icon)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 
@@ -258,6 +259,42 @@ Open Preferences from the main menu or with Ctrl+,.
 | Device | Brightness, sleep timeout and dim level, Show Volume Changes, label style (visibility, position, colour) |
 | Integrations | Whether keyboard shortcut and text typing actions are allowed; a link to the plugin manager |
 | Backups | Create a backup, restore a backup, open the backup folder |
+
+## Updates
+
+Ulanzi Deck asks GitHub once a day whether a new version is out. To turn this off, open
+**Preferences → General → Updates** and switch off **Check for Updates**. **Check Now** asks straight
+away.
+
+When a new version is out, a banner appears at the top of the window. **See What's New** shows the
+release notes, with any important note first.
+
+| Button | What it does |
+|---|---|
+| Update | Downloads the new version, checks its signature, backs up your profiles, installs it and restarts the app |
+| Not Now | Hides the banner until the next start |
+| Skip This Version | Hides the banner until a newer version is out |
+| View on GitHub | Opens the release page |
+
+**Update** works differently depending on how the app was installed:
+
+| Installed from | What happens |
+|---|---|
+| AppImage | The AppImage file is replaced. Its file name stays the same. |
+| Arch, Debian/Ubuntu, Fedora or openSUSE package | The package manager installs it. You're asked for your password. |
+| Tarball, for one user | The new tarball's `install.sh` runs. |
+| Tarball with `--system`, or anything else | No **Update** button. Download the new version from GitHub. |
+
+The backup is listed in **Preferences → Backups** as "Before updating to *version*".
+
+### Files from a newer version
+
+A profile or `.ulanzideck` file from a newer version opens with everything this version understands.
+A key it doesn't understand is kept unchanged and shows a **⚠**. Select it to see which version it
+needs. **Clear Key** removes it; otherwise it works again once the app is updated.
+
+A profile too new to read at all is listed in the sidebar as "Needs a newer version". Its file isn't
+changed.
 
 ## Tray icon
 

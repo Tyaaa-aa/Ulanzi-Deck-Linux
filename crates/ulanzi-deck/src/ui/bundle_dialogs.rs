@@ -399,7 +399,12 @@ pub fn reason_words(reason: &str) -> String {
         "before-migration" => "Before importing the old setup".into(),
         "daily" => "Daily backup".into(),
         "manual" => "Backed up by you".into(),
-        other => other.to_string(),
+        other => match other.strip_prefix("before-") {
+            Some(v) if v.starts_with(|c: char| c.is_ascii_digit()) => {
+                format!("Before updating to {}", v.replace('-', "."))
+            }
+            _ => other.to_string(),
+        },
     }
 }
 
@@ -416,6 +421,13 @@ pub fn list(state: &State, done: impl FnOnce(Vec<Snapshot>) + 'static) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_backup_before_an_update_says_so() {
+        assert_eq!(reason_words("before-2-1-2"), "Before updating to 2.1.2");
+        assert_eq!(reason_words("before-import"), "Before import");
+        assert_eq!(reason_words("before-something"), "before-something");
+    }
 
     #[test]
     fn reasons_in_words() {

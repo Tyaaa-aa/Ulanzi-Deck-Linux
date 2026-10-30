@@ -117,6 +117,10 @@ Start some music or a video in any player (browser tab is fine).
 - [ ] 7.4 Preferences → **Backups** → **Back Up Now**, change a key, then **Restore…** that backup.
   → The key goes back.
 
+- [ ] 7.5 Run `scripts/fake-release.sh`, then start `scripts/sandbox.sh --demo` with the two values
+  it prints. Preferences → **Check Now**. → What's New shows 9.9.9 with its important note. **Skip
+  This Version** hides it. With `--tamper`, **Update** says the download could not be verified.
+
 ## 8. Unplug and sleep (2 min)
 
 - [ ] 8.1 Unplug the deck. → The header says it's not connected. Plug it back in. → Within a few seconds

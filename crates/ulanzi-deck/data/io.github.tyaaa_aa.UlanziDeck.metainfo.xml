@@ -49,6 +49,11 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.1.1" date="2026-10-31">
+      <description>
+        <p>Update checks, What's New and self-update. Keys from newer versions are kept instead of failing the profile. The image picker opens at once.</p>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-10-30">
       <description>
         <p>Plugins: a plugin store with signed, sandboxed plugins (OBS Studio and Home Assistant to

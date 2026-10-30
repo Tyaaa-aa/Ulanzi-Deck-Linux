@@ -11,6 +11,7 @@ Find the symptom below and work through the steps in order. If the problem remai
 - [Keyboard Shortcut or Type Text does nothing](#keyboard-shortcut-or-type-text-does-nothing)
 - [Auto-switch doesn't work](#auto-switch-doesnt-work)
 - [A plugin does not install](#a-plugin-does-not-install)
+- [An update does not install](#an-update-does-not-install)
 - [OBS does not connect](#obs-does-not-connect)
 - [Now Playing is empty](#now-playing-is-empty)
 - [Weather is unavailable](#weather-is-unavailable)
@@ -82,6 +83,21 @@ coloured dot.
 | The signature does not match | The package was modified or was not signed by the plugin store. Download it again from the store. |
 | Needs Ulanzi Deck *version* or newer | The plugin requires a newer version of the app. Update Ulanzi Deck. |
 | Turn on Developer Mode to install unverified plugins | The file has no valid signature. Enable **Developer Mode** in the plugin manager only for plugins you trust. |
+
+## An update does not install
+
+| Message | Cause and fix |
+|---|---|
+| Can't reach GitHub | No network connection, or GitHub is unreachable. Try again later. |
+| This download could not be verified | The file was damaged or changed on the way, so it was deleted and nothing was installed. Select **Try Again**. If it keeps happening, [report it](../SECURITY.md). |
+| Ulanzi Deck can't replace its AppImage in this folder | The folder is read-only. Move the AppImage somewhere you can write to, run it with `--install`, and try again. |
+| There isn't enough disk space | Free some space and select **Try Again**. |
+
+If the package manager reports an error, the first line is shown under the buttons. **View on
+GitHub** gets you the release to install by hand.
+
+A key with a **⚠** that says it needs a newer version comes from a newer Ulanzi Deck. Update the app,
+or select the key and choose **Clear Key**.
 
 ## OBS does not connect
 

@@ -3,6 +3,34 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **Update check.** The app checks GitHub once a day and shows a banner when a new version is out.
+  The check can be turned off in **Preferences → General → Updates**.
+- **What's New.** Shows the release notes and any important note, and opens once after an update.
+- **Self-update.** Downloads the new version, checks its signature, backs up, installs it for the
+  way the app was installed (AppImage, Arch, Debian, Fedora, openSUSE or a tarball for one user) and
+  restarts.
+- `ulanzictl update` and `ulanzictl update check`.
+- `ulanzictl probe gif`: checks whether the deck plays GIFs by itself.
+
+### Changed
+
+- The image picker opens at once: tabs are built when first shown, pictures load in the background,
+  and icons are kept between openings.
+- Release files are signed. `SHA256SUMS.minisig` sits next to `SHA256SUMS`.
+
+### Fixed
+
+- A profile from a newer version no longer fails as a whole. Keys this version doesn't understand
+  are kept unchanged and show a ⚠ with the version they need.
+- A profile too new to read stays in place and is listed as "Needs a newer version". It used to be
+  renamed and disappear.
+- Settings from a newer version no longer stop the service from starting.
+- Importing a `.ulanzideck` file reports which keys need a newer version.
+
 ## [2.1.0] - 2026-10-30
 
 This release adds a plugin system and a plugin store, and moves OBS Studio support into a plugin.
