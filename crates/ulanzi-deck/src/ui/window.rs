@@ -537,13 +537,15 @@ pub fn refresh_plugins(state: &State) {
             let manifests = c.plugin_manifests().await?;
             // An older service has no such call: nothing shows as verified then.
             let verified = c.plugin_verified().await.unwrap_or_default();
-            Ok::<_, crate::client::ClientError>((list, manifests, verified))
+            let official = c.plugin_official().await.unwrap_or_default();
+            Ok::<_, crate::client::ClientError>((list, manifests, verified, official))
         },
         move |r| match r {
-            Ok((list, manifests, verified)) => {
+            Ok((list, manifests, verified, official)) => {
                 // An older fetch, or one from before the service went away, is dropped.
                 if s.plugins_fetched(generation, list, manifests) {
                     s.plugins.borrow_mut().verified = verified;
+                    s.plugins.borrow_mut().official = official;
                     s.notify(Change::Plugins);
                 }
             }
@@ -640,6 +642,12 @@ fn follow_events(state: &State, c: &Client) {
                     state.notify(Change::Plugins);
                 }
                 ClientEvent::PluginsChanged => refresh_plugins(&state),
+                ClientEvent::InstallProgress {
+                    id,
+                    stage,
+                    done,
+                    total,
+                } => crate::ui::plugins_window::install_progress(&id, &stage, done, total),
                 ClientEvent::Reconnected => {
                     refresh_plugins(&state);
                     let s = state.clone();

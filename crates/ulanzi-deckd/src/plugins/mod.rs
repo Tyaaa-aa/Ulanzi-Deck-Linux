@@ -113,6 +113,34 @@ pub struct PluginInfo {
     pub status: PluginStatus,
 }
 
+/// How far an install from the store is, for a progress bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallStage {
+    /// Reading the store's list.
+    Preparing,
+    /// Bytes of the package so far, of `total` (from the signed list).
+    Downloading { done: u64, total: u64 },
+    /// Checking the signature and hash, and compiling the plugin.
+    Checking,
+    /// Putting it in place and starting it.
+    Installing,
+}
+
+impl InstallStage {
+    /// The stage's name on D-Bus.
+    pub fn id(&self) -> &'static str {
+        match self {
+            InstallStage::Preparing => "preparing",
+            InstallStage::Downloading { .. } => "downloading",
+            InstallStage::Checking => "checking",
+            InstallStage::Installing => "installing",
+        }
+    }
+}
+
+/// Told every step of a store install.
+pub type Progress = Arc<dyn Fn(InstallStage) + Send + Sync>;
+
 /// The daemon's plugins: loads them, starts and supervises their instances, runs their actions
 /// and installs or removes them. Cheap to clone; safe to use from several tasks at once.
 #[derive(Clone)]
@@ -194,8 +222,13 @@ impl PluginHost {
 
     /// Download plugin `id` from the store, check it and install it (no Developer mode needed:
     /// store packages are signed).
-    pub async fn store_install(&self, id: &str) -> Result<String, PluginError> {
-        self.inner.store_install(id).await
+    pub async fn store_install(&self, id: &str, progress: Progress) -> Result<String, PluginError> {
+        self.inner.store_install(id, progress).await
+    }
+
+    /// Installed plugins the store lists as made by the Ulanzi Deck project.
+    pub fn official(&self) -> Vec<String> {
+        self.inner.official()
     }
 
     /// Installed plugins whose package was signed with a trusted key.

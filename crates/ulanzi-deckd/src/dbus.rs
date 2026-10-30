@@ -742,11 +742,48 @@ impl DeckService {
         serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
-    /// Install plugin `id` from the store (signed: no Developer mode needed); returns its id.
-    async fn plugin_store_install(&self, id: String) -> Result<String> {
-        let id = self.plugins()?.store_install(&id).await.map_err(plugin_err)?;
+    /// Install plugin `id` from the store (signed: no Developer mode needed); returns its id. Sends
+    /// `PluginInstallProgress` as it goes.
+    async fn plugin_store_install(
+        &self,
+        id: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<String> {
+        let host = self.plugins()?;
+        let (tx, mut rx) = mpsc::unbounded_channel::<crate::plugins::InstallStage>();
+        // At most ten download updates a second; every change of stage.
+        let last = std::sync::Mutex::new((std::time::Instant::now(), ""));
+        let progress: crate::plugins::Progress = std::sync::Arc::new(move |stage| {
+            let Ok(mut last) = last.lock() else { return };
+            let now = std::time::Instant::now();
+            if last.1 == stage.id() && now.duration_since(last.0) < std::time::Duration::from_millis(100) {
+                return;
+            }
+            *last = (now, stage.id());
+            let _ = tx.send(stage);
+        });
+        let install = host.store_install(&id, progress);
+        tokio::pin!(install);
+        let installed = loop {
+            tokio::select! {
+                r = &mut install => break r,
+                Some(stage) = rx.recv() => {
+                    let (done, total) = match stage {
+                        crate::plugins::InstallStage::Downloading { done, total } => (done, total),
+                        _ => (0, 0),
+                    };
+                    let _ = DeckService::plugin_install_progress(&emitter, &id, stage.id(), done, total).await;
+                }
+            }
+        };
+        let id = installed.map_err(plugin_err)?;
         self.adopt_secrets().await;
         Ok(id)
+    }
+
+    /// Installed plugins the plugin store lists as official (made by the Ulanzi Deck project).
+    async fn plugin_official(&self) -> Result<Vec<String>> {
+        Ok(self.plugins()?.official())
     }
 
     /// Installed plugins whose package was signed with a key the app trusts.
@@ -911,6 +948,17 @@ impl DeckService {
     /// Settings changed outside the app (tray, deck keys): read them again.
     #[zbus(signal)]
     async fn settings_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
+
+    /// How far `PluginStoreInstall` of `id` is: `stage` is preparing, downloading (`done` of
+    /// `total` bytes), checking or installing.
+    #[zbus(signal)]
+    async fn plugin_install_progress(
+        e: &SignalEmitter<'_>,
+        id: &str,
+        stage: &str,
+        done: u64,
+        total: u64,
+    ) -> zbus::Result<()>;
 
     #[zbus(signal)]
     async fn action_failed(e: &SignalEmitter<'_>, control: &str, message: &str) -> zbus::Result<()>;

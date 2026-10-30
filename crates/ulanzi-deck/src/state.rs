@@ -175,11 +175,13 @@ impl AppState {
         // Fresh keys get the plugins' action icons.
         ulanzi_core::catalog::set_plugin_looks(manifests.values());
         let verified = std::mem::take(&mut self.plugins.borrow_mut().verified);
+        let official = std::mem::take(&mut self.plugins.borrow_mut().official);
         *self.plugins.borrow_mut() = crate::plugins::Plugins {
             loaded: true,
             list,
             manifests,
             verified,
+            official,
         };
         true
     }

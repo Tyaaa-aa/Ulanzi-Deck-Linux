@@ -18,6 +18,10 @@ pub struct Manifest {
     pub name: String,
     pub version: String,
     pub contract: String,
+    /// Who makes the plugin, as the app shows it ("by …"). Being official is not claimed here:
+    /// only the plugin store's signed list marks a plugin official.
+    #[serde(default)]
+    pub author: Option<String>,
     /// The oldest Ulanzi Deck that can run the plugin (`MAJOR.MINOR.PATCH`); newer apps only.
     #[serde(default)]
     pub min_app: Option<String>,

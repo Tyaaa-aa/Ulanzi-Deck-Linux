@@ -140,12 +140,24 @@ fn swap_in(dir: &Path, id: &str) -> Result<(), PluginError> {
     Ok(())
 }
 
+/// How far an installed plugin is trusted (written by the host into its folder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trust {
+    Unverified,
+    /// Signed with a trusted key.
+    Verified,
+    /// Signed, and listed by the store as made by the Ulanzi Deck project.
+    Official,
+}
+
 /// A checked package: its unpacked folder (removed when dropped), the plugin and whether a trusted
 /// key signed it.
 pub(super) struct Unpacked {
     pub tmp: tempfile::TempDir,
     pub loaded: LoadedPlugin,
     pub verified: bool,
+    /// From the store, which lists it as made by the Ulanzi Deck project.
+    pub official: bool,
 }
 
 /// The signature next to a package file (`<file>.minisig`), if there is one.
@@ -219,6 +231,7 @@ pub(super) fn unpack_bytes(
         tmp,
         loaded,
         verified,
+        official: false,
     })
 }
 
@@ -261,7 +274,7 @@ impl Host {
             let src = src.clone();
             blocking(move || validate(&src, &engine)).await?
         };
-        self.install_checked(src, loaded, false).await
+        self.install_checked(src, loaded, Trust::Unverified).await
     }
 
     pub(super) async fn store_index(&self, refresh: bool) -> Result<super::store::Listing, PluginError> {
@@ -269,8 +282,13 @@ impl Host {
         blocking(move || super::store::fetch_index(&dir, refresh)).await
     }
 
-    pub(super) async fn store_install(&self, id: &str) -> Result<String, PluginError> {
+    pub(super) async fn store_install(
+        &self,
+        id: &str,
+        progress: super::Progress,
+    ) -> Result<String, PluginError> {
         let engine = self.engine.clone().map_err(PluginError::Load)?;
+        progress(super::InstallStage::Preparing);
         // Fresh: an install should get the version the store offers now.
         let listing = self.store_index(true).await?;
         let entry = listing
@@ -280,12 +298,32 @@ impl Host {
             .find(|p| p.id == id)
             .ok_or_else(|| PluginError::Invalid(format!("The plugin store has no plugin \"{id}\"")))?;
         let dir = self.dir.clone();
+        let total = entry.package.size;
+        let official = entry.official;
+        let p = progress.clone();
         let u = blocking(move || {
-            let (bytes, sig) = super::store::download(&entry)?;
+            p(super::InstallStage::Downloading { done: 0, total });
+            let (bytes, sig) = super::store::download(&entry, &|done| {
+                p(super::InstallStage::Downloading { done, total })
+            })?;
+            p(super::InstallStage::Checking);
             unpack_bytes(&bytes, Some(&sig), &dir, &engine)
         })
         .await?;
-        self.install_unpacked(u, false).await
+        progress(super::InstallStage::Installing);
+        self.install_unpacked(Unpacked { official, ..u }, false).await
+    }
+
+    /// Installed plugins the store listed as official (signed ones only).
+    pub(super) fn official(&self) -> Vec<String> {
+        self.list()
+            .into_iter()
+            .filter(|p| {
+                fs::read_to_string(self.dir.join(&p.id).join(signature::VERIFIED_MARKER))
+                    .is_ok_and(|t| t.lines().any(|l| l == "official"))
+            })
+            .map(|p| p.id)
+            .collect()
     }
 
     pub(super) fn verified(&self) -> Vec<String> {
@@ -321,9 +359,15 @@ impl Host {
             tmp,
             loaded,
             verified,
+            official,
         } = u;
+        let trust = match (verified, official) {
+            (true, true) => Trust::Official,
+            (true, false) => Trust::Verified,
+            _ => Trust::Unverified,
+        };
         let installed = self
-            .install_checked(tmp.path().to_path_buf(), loaded, verified)
+            .install_checked(tmp.path().to_path_buf(), loaded, trust)
             .await;
         // Removing the unpacked copy may take a moment; keep it off the async runtime.
         let _ = blocking(move || {
@@ -339,7 +383,7 @@ impl Host {
         &self,
         src: PathBuf,
         loaded: LoadedPlugin,
-        verified: bool,
+        trust: Trust,
     ) -> Result<String, PluginError> {
         let id = loaded.manifest.id.clone();
 
@@ -366,8 +410,15 @@ impl Host {
         }
         // Says the package was signed; written by the host, never taken from a package.
         let marker = self.dir.join(&id).join(signature::VERIFIED_MARKER);
-        let _ = if verified {
-            fs::write(&marker, "signed with a key Ulanzi Deck trusts\n")
+        let _ = if trust != Trust::Unverified {
+            fs::write(
+                &marker,
+                if trust == Trust::Official {
+                    "signed with a key Ulanzi Deck trusts\nofficial\n"
+                } else {
+                    "signed with a key Ulanzi Deck trusts\n"
+                },
+            )
         } else {
             fs::remove_file(&marker).or_else(|e| {
                 if e.kind() == io::ErrorKind::NotFound {
@@ -378,7 +429,7 @@ impl Host {
             })
         }
         .inspect_err(|e| tracing::warn!(plugin = %id, "cannot record whether it is signed: {e}"));
-        tracing::info!(plugin = %id, verified, "installed");
+        tracing::info!(plugin = %id, ?trust, "installed");
         self.installed(loaded);
         Ok(id)
     }

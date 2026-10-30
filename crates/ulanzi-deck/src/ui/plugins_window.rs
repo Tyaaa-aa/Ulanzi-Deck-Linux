@@ -46,6 +46,36 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, show: Option<&str>) {
     dialog.present(Some(parent));
 }
 
+thread_local! {
+    /// Open Discover pages, told how installs are going.
+    static OPEN: RefCell<Vec<Weak<Discover>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The service says how far installing `id` is: the open Discover pages show it on its card.
+pub fn install_progress(id: &str, stage: &str, done: u64, total: u64) {
+    OPEN.with(|o| {
+        o.borrow_mut().retain(|d| d.upgrade().is_some());
+        for d in o.borrow().iter().filter_map(Weak::upgrade) {
+            d.show_progress(id, stage, done, total);
+        }
+    });
+}
+
+/// What a card under install says and how full its bar is (`None`: an animated bar).
+pub fn progress_words(stage: &str, done: u64, total: u64) -> (String, Option<f64>) {
+    let mb = |b: u64| b as f64 / 1_000_000.0;
+    match stage {
+        "downloading" if total > 0 => (
+            format!("Downloading · {:.1} of {:.1} MB", mb(done), mb(total)),
+            Some((done as f64 / total as f64).clamp(0.0, 1.0)),
+        ),
+        "downloading" => ("Downloading…".into(), None),
+        "checking" => ("Checking that it is safe…".into(), None),
+        "installing" => ("Installing…".into(), None),
+        _ => ("Getting ready…".into(), None),
+    }
+}
+
 /// The Discover page and what it shows now.
 struct Discover {
     state: State,
@@ -61,6 +91,10 @@ struct Discover {
     category: RefCell<String>,
     /// Plugins being installed now.
     busy: RefCell<BTreeSet<String>>,
+    /// The progress bar and words on each card under install.
+    bars: RefCell<std::collections::HashMap<String, (gtk::ProgressBar, gtk::Label)>>,
+    /// The last progress per plugin, so a redrawn card shows it straight away.
+    last: RefCell<std::collections::HashMap<String, (String, u64, u64)>>,
 }
 
 fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::PreferencesPage {
@@ -145,7 +179,10 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         listing: RefCell::default(),
         category: RefCell::default(),
         busy: RefCell::default(),
+        bars: RefCell::default(),
+        last: RefCell::default(),
     });
+    OPEN.with(|o| o.borrow_mut().push(Rc::downgrade(&d)));
     {
         let weak = Rc::downgrade(&d);
         search.connect_search_changed(move |_| {
@@ -290,6 +327,7 @@ impl Discover {
         while let Some(c) = self.grid.first_child() {
             self.grid.remove(&c);
         }
+        self.bars.borrow_mut().clear();
         self.note.set_visible(listing.offline);
         self.note
             .set_label("The plugin store can’t be reached right now: this is the list from last time.");
@@ -332,7 +370,18 @@ impl Discover {
                 .css_classes(["heading"])
                 .build(),
         );
-        let mut line = format!("Version {}", e.version);
+        let maker = if e.official {
+            "Ulanzi Deck Linux".to_string()
+        } else {
+            format!(
+                "by {}",
+                e.author
+                    .as_deref()
+                    .filter(|a| !a.trim().is_empty())
+                    .unwrap_or("an unnamed author")
+            )
+        };
+        let mut line = format!("{maker} · Version {}", e.version);
         if let Some(v) = installed.filter(|v| *v != e.version) {
             line.push_str(&format!(" · you have {v}"));
         }
@@ -364,13 +413,10 @@ impl Discover {
             b.append(&gtk::Label::builder().label(text).css_classes(["caption"]).build());
             b
         };
-        let signed = badge(
-            "object-select-symbolic",
-            "Verified",
-            "Signed by the Ulanzi Deck plugin store; checked before it installs",
-        );
-        signed.add_css_class("success");
-        bottom.append(&signed);
+        // Everything in the store is signed; official ones say who made them.
+        if let Some(t) = trust_badge(e.official, true) {
+            bottom.append(&t);
+        }
         if !e.tested_on_hardware {
             let untested = badge(
                 "dialog-information-symbolic",
@@ -381,7 +427,12 @@ impl Discover {
             bottom.append(&untested);
         }
         let offer = e.offer(installed);
-        let (text, acts) = button_text(&offer, self.busy.borrow().contains(&e.id));
+        if self.busy.borrow().contains(&e.id) {
+            card.append(&bottom);
+            card.append(&self.progress_box(&e.id));
+            return card.upcast();
+        }
+        let (text, acts) = button_text(&offer, false);
         let button = gtk::Button::builder()
             .label(&text)
             .sensitive(acts)
@@ -408,6 +459,52 @@ impl Discover {
         card.upcast()
     }
 
+    /// The bar and words a card shows while its plugin installs.
+    fn progress_box(&self, id: &str) -> gtk::Box {
+        let b = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .build();
+        let bar = gtk::ProgressBar::builder().pulse_step(0.08).build();
+        let words = gtk::Label::builder()
+            .xalign(0.0)
+            .css_classes(["caption", "dim-label"])
+            .build();
+        b.append(&bar);
+        b.append(&words);
+        self.bars
+            .borrow_mut()
+            .insert(id.to_string(), (bar.clone(), words.clone()));
+        let (stage, done, total) = self
+            .last
+            .borrow()
+            .get(id)
+            .cloned()
+            .unwrap_or(("preparing".into(), 0, 0));
+        set_progress(&bar, &words, &stage, done, total);
+        // Animated while there is no number to show.
+        let weak = bar.downgrade();
+        glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            let Some(bar) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if bar.widget_name() == "pulse" {
+                bar.pulse();
+            }
+            glib::ControlFlow::Continue
+        });
+        b
+    }
+
+    fn show_progress(&self, id: &str, stage: &str, done: u64, total: u64) {
+        self.last
+            .borrow_mut()
+            .insert(id.to_string(), (stage.to_string(), done, total));
+        if let Some((bar, words)) = self.bars.borrow().get(id) {
+            set_progress(bar, words, stage, done, total);
+        }
+    }
+
     fn open_plugin(&self, id: &str) {
         if let Some(dialog) = self.dialog.upgrade() {
             dialog.push_subpage(&integrations::subpage(&self.state, &dialog, id));
@@ -425,6 +522,7 @@ impl Discover {
         runtime::run(async move { c.plugin_store_install(&wanted).await }, move |r| {
             let Some(d) = weak.upgrade() else { return };
             d.busy.borrow_mut().remove(&id);
+            d.last.borrow_mut().remove(&id);
             crate::ui::window::refresh_plugins(&d.state);
             d.render();
             let Some(dialog) = d.dialog.upgrade() else { return };
@@ -455,6 +553,44 @@ impl Discover {
             }
         });
     }
+}
+
+fn set_progress(bar: &gtk::ProgressBar, words: &gtk::Label, stage: &str, done: u64, total: u64) {
+    let (text, fraction) = progress_words(stage, done, total);
+    words.set_label(&text);
+    match fraction {
+        Some(f) => {
+            bar.set_widget_name("");
+            bar.set_fraction(f);
+        }
+        None => bar.set_widget_name("pulse"),
+    }
+}
+
+/// The small pill that says how far a plugin is trusted: **Official** (made by the Ulanzi Deck
+/// project, as the signed store list says) or **Verified** (signed); nothing for unsigned ones.
+pub fn trust_badge(official: bool, verified: bool) -> Option<gtk::Label> {
+    let (text, css, tip) = match (official, verified) {
+        (true, true) => (
+            "Official",
+            "official",
+            "Made by the Ulanzi Deck project. Signed, and checked before it installs.",
+        ),
+        (_, true) => (
+            "Verified",
+            "verified",
+            "From the plugin store. Signed, and checked before it installs.",
+        ),
+        _ => return None,
+    };
+    Some(
+        gtk::Label::builder()
+            .label(text)
+            .tooltip_text(tip)
+            .valign(gtk::Align::Center)
+            .css_classes(["trust-badge", css])
+            .build(),
+    )
 }
 
 /// A store plugin's icon from the copy the service keeps, `size` px; the add-on icon until then.
@@ -507,6 +643,17 @@ mod tests {
         assert!(!shown(&ha, "streaming", ""));
         assert!(!shown(&ha, "", "obs"));
         assert_eq!(category_title("smart-home"), "Smart home");
+    }
+
+    #[test]
+    fn install_progress_reads_plainly() {
+        assert_eq!(
+            progress_words("downloading", 1_200_000, 3_400_000),
+            ("Downloading · 1.2 of 3.4 MB".to_string(), Some(1.2 / 3.4))
+        );
+        assert_eq!(progress_words("checking", 0, 0).1, None, "no number: animated");
+        assert_eq!(progress_words("installing", 0, 0).0, "Installing…");
+        assert_eq!(progress_words("preparing", 0, 0).0, "Getting ready…");
     }
 
     #[test]

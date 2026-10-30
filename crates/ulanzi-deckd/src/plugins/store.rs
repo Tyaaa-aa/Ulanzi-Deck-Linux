@@ -32,6 +32,12 @@ fn net_err(what: &str) -> impl Fn(String) -> PluginError + '_ {
 
 /// `url` (https only), at most `max` bytes.
 fn get(url: &str, max: u64) -> Result<Vec<u8>, String> {
+    get_with(url, max, &|_| {})
+}
+
+/// [`get`], telling `progress` how many bytes have arrived as they do.
+fn get_with(url: &str, max: u64, progress: &dyn Fn(u64)) -> Result<Vec<u8>, String> {
+    use std::io::Read;
     if !url.starts_with("https://") {
         return Err(format!("{url} is not an https address"));
     }
@@ -39,18 +45,28 @@ fn get(url: &str, max: u64) -> Result<Vec<u8>, String> {
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .into();
-    agent
+    let mut reader = agent
         .get(url)
         .call()
         .map_err(|e| match e {
             ureq::Error::StatusCode(c) => format!("the server said {c}"),
             _ => "no connection".to_string(),
         })?
-        .body_mut()
-        .with_config()
+        .into_body()
+        .into_with_config()
         .limit(max)
-        .read_to_vec()
-        .map_err(|_| "the download was cut short or too large".to_string())
+        .reader();
+    let cut = |_| "the download was cut short or too large".to_string();
+    let mut out = Vec::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(cut)?;
+        if n == 0 {
+            return Ok(out);
+        }
+        out.extend_from_slice(&buf[..n]);
+        progress(out.len() as u64);
+    }
 }
 
 /// Parse and check an index and its signature.
@@ -175,10 +191,11 @@ fn icons(
     out
 }
 
-/// Download `entry`'s package and signature and check the package against the index's hash.
-pub fn download(entry: &StoreEntry) -> Result<(Vec<u8>, String), PluginError> {
+/// Download `entry`'s package (telling `progress` the bytes so far; the index gives the total) and
+/// signature, and check the package against the index's hash.
+pub fn download(entry: &StoreEntry, progress: &dyn Fn(u64)) -> Result<(Vec<u8>, String), PluginError> {
     let p = &entry.package;
-    let bytes = get(&p.url, MAX_PACKAGE_BYTES).map_err(net_err("download"))?;
+    let bytes = get_with(&p.url, MAX_PACKAGE_BYTES, progress).map_err(net_err("download"))?;
     if !hex_sha256(&bytes).eq_ignore_ascii_case(&p.sha256) {
         return Err(PluginError::Invalid(format!(
             "The download of {} does not match the plugin store's list; try again",

@@ -135,19 +135,32 @@ fn restart(state: &State, dialog: &adw::PreferencesDialog, id: &str) {
 
 fn plugin_row(state: &State, dialog: &adw::PreferencesDialog, p: &PluginRow) -> adw::ActionRow {
     let w = status_words(p);
+    let (official, verified, author) = {
+        let plugins = state.plugins.borrow();
+        (
+            plugins.official.contains(&p.id),
+            plugins.verified.contains(&p.id),
+            plugins.manifests.get(&p.id).and_then(|m| m.author.clone()),
+        )
+    };
+    let mut subtitle = status_line(&w);
+    // Who made it: official ones say so with the badge; others name their author.
+    if let Some(a) = author.filter(|a| !official && !a.trim().is_empty()) {
+        subtitle.push_str(&format!(" · by {a}"));
+    }
     let row = adw::ActionRow::builder()
         .title(escape(p.display_name()))
-        .subtitle(escape(&status_line(&w)))
+        .subtitle(escape(&subtitle))
         .activatable(true)
         .build();
     row.add_prefix(&crate::ui::plugin_logo(state, &p.id, 32));
-    if state.plugins.borrow().verified.contains(&p.id) {
-        let v = gtk::Image::from_icon_name("object-select-symbolic");
-        v.set_tooltip_text(Some("Verified: signed by the Ulanzi Deck plugin store"));
-        v.add_css_class("success");
-        row.add_suffix(&v);
+    if let Some(b) = crate::ui::plugins_window::trust_badge(official, verified) {
+        row.add_suffix(&b);
     }
-    row.add_suffix(&status_icon(&w));
+    // A plugin that runs fine needs no icon: its status says so.
+    if w.css != "success" {
+        row.add_suffix(&status_icon(&w));
+    }
     let switch = gtk::Switch::builder()
         .active(p.status != "off")
         .valign(gtk::Align::Center)

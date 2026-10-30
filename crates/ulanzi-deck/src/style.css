@@ -316,3 +316,21 @@ row.drop-target {
 .store-card {
   padding: 14px;
 }
+
+/* How far a plugin is trusted: Official (the project's own) or Verified (signed) */
+.trust-badge {
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.8em;
+  font-weight: bold;
+}
+
+.trust-badge.official {
+  background-color: alpha(@accent_bg_color, 0.2);
+  color: @accent_color;
+}
+
+.trust-badge.verified {
+  background-color: alpha(@success_color, 0.15);
+  color: @success_color;
+}

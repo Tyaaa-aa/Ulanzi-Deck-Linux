@@ -23,6 +23,12 @@ pub struct StoreEntry {
     pub min_app: Option<String>,
     #[serde(default)]
     pub tested_on_hardware: bool,
+    /// Who makes it, from its manifest.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Made by the Ulanzi Deck project: set by the store (its own list), never by a plugin.
+    #[serde(default)]
+    pub official: bool,
     #[serde(default)]
     pub icon: Option<String>,
     #[serde(default)]

@@ -127,6 +127,14 @@ pub enum ClientEvent {
     SettingsChanged,
     /// The plugin list or a plugin's status changed: fetch the list again.
     PluginsChanged,
+    /// How far installing `id` from the store is: `stage` is preparing, downloading (`done` of
+    /// `total` bytes), checking or installing.
+    InstallProgress {
+        id: String,
+        stage: String,
+        done: u64,
+        total: u64,
+    },
     /// The service went away; edits are kept and sent when it returns.
     Disconnected,
     Reconnected,
@@ -510,6 +518,11 @@ impl Client {
         Ok(self.inner.proxy.call("PluginStoreInstall", &(id,)).await?)
     }
 
+    /// Installed plugins the plugin store lists as official.
+    pub async fn plugin_official(&self) -> Result<Vec<String>> {
+        Ok(self.inner.proxy.call("PluginOfficial", &()).await?)
+    }
+
     /// Installed plugins whose package was signed with a key the app trusts.
     pub async fn plugin_verified(&self) -> Result<Vec<String>> {
         Ok(self.inner.proxy.call("PluginVerified", &()).await?)
@@ -723,29 +736,38 @@ impl Client {
         while let Some(m) = signals.next().await {
             let member = m.header().member().map(|m| m.to_string()).unwrap_or_default();
             let body = m.body();
-            let event = match member.as_str() {
-                "DeviceStateChanged" => body
-                    .deserialize::<(String, String)>()
-                    .ok()
-                    .map(|(state, detail)| ClientEvent::State { state, detail }),
-                "InputEvent" => body
-                    .deserialize::<(String, String)>()
-                    .ok()
-                    .map(|(control, kind)| ClientEvent::Input { control, kind }),
-                "ActionFailed" => body
-                    .deserialize::<(String, String)>()
-                    .ok()
-                    .map(|(control, message)| ClientEvent::ActionFailed { control, message }),
-                "PageChanged" => body.deserialize::<(String, u32)>().ok().and_then(|(p, page)| {
-                    Uuid::parse_str(&p)
+            let event =
+                match member.as_str() {
+                    "DeviceStateChanged" => body
+                        .deserialize::<(String, String)>()
                         .ok()
-                        .map(|profile| ClientEvent::Page { profile, page })
-                }),
-                "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
-                "SettingsChanged" => Some(ClientEvent::SettingsChanged),
-                "PluginsChanged" => Some(ClientEvent::PluginsChanged),
-                _ => None,
-            };
+                        .map(|(state, detail)| ClientEvent::State { state, detail }),
+                    "InputEvent" => body
+                        .deserialize::<(String, String)>()
+                        .ok()
+                        .map(|(control, kind)| ClientEvent::Input { control, kind }),
+                    "ActionFailed" => body
+                        .deserialize::<(String, String)>()
+                        .ok()
+                        .map(|(control, message)| ClientEvent::ActionFailed { control, message }),
+                    "PageChanged" => body.deserialize::<(String, u32)>().ok().and_then(|(p, page)| {
+                        Uuid::parse_str(&p)
+                            .ok()
+                            .map(|profile| ClientEvent::Page { profile, page })
+                    }),
+                    "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
+                    "SettingsChanged" => Some(ClientEvent::SettingsChanged),
+                    "PluginsChanged" => Some(ClientEvent::PluginsChanged),
+                    "PluginInstallProgress" => body.deserialize::<(String, String, u64, u64)>().ok().map(
+                        |(id, stage, done, total)| ClientEvent::InstallProgress {
+                            id,
+                            stage,
+                            done,
+                            total,
+                        },
+                    ),
+                    _ => None,
+                };
             if let Some(e) = event {
                 self.emit(e);
             }

@@ -39,6 +39,8 @@ pub struct Plugins {
     pub manifests: BTreeMap<String, Manifest>,
     /// Installed plugins whose package was signed with a trusted key.
     pub verified: Vec<String>,
+    /// Installed plugins the store lists as made by the Ulanzi Deck project.
+    pub official: Vec<String>,
 }
 
 impl Plugins {
@@ -721,6 +723,7 @@ mod tests {
             list: vec![row(status, detail)],
             manifests: [("obs".to_string(), obs_manifest())].into_iter().collect(),
             verified: Vec::new(),
+            official: Vec::new(),
         }
     }
 
@@ -1004,6 +1007,7 @@ mod tests {
             .map(|m| (m.id.clone(), m))
             .collect(),
             verified: Vec::new(),
+            official: Vec::new(),
         }
     }
 
