@@ -4,10 +4,8 @@
 
 # Ulanzi Deck
 
-**Set up the Ulanzi D200 and D200X stream decks on Linux.**
-
-Drag actions onto keys, put live widgets on the wide screen, control OBS Studio,
-and let your profiles follow the app you're using.
+A Linux app for the Ulanzi D200 and D200X stream decks: assign actions to keys and dials, show
+widgets on the wide screen, and switch profiles with the app in focus.
 
 [![Latest release](https://img.shields.io/github/v/release/Tyaaa-aa/Ulanzi-Deck-Linux?label=release&color=orange)](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases/latest)
 [![CI](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/actions/workflows/ci.yml/badge.svg)](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/actions/workflows/ci.yml)
@@ -30,42 +28,22 @@ and let your profiles follow the app you're using.
 
 </div>
 
-## Highlights
+## Features
 
-<table>
-<tr>
-<td width="50%" valign="top">
+- All 13 keys, the 3 dials, the 2 small buttons and the wide screen, each with a press and a hold
+  action. Edits are sent to the deck immediately.
+- Actions for media playback and seeking, volume per output, app or microphone, output switching,
+  keyboard shortcuts, typing text, running commands, opening apps and websites, playing sounds,
+  multi-step sequences, and keys that cycle through several actions.
+- Wide-screen widgets: clocks, system graphs, Now Playing, a Pomodoro timer, weather, command output,
+  images and OBS status, plus a volume bar while you change the volume.
+- Profiles that switch with the focused app on KDE Plasma, GNOME, Hyprland, Sway and X11.
+- A plugin store with signed, sandboxed plugins, starting with OBS Studio and Home Assistant. Plugin
+  keys show live state, such as the scene on air, recording time, or whether a light is on.
+- Templates, `.ulanzideck` files for sharing setups, and daily automatic backups.
+- A background service and tray icon, so the deck keeps working with the window closed.
 
-**🎛️ Every control, live**
-13 keys, 3 dials, 2 small buttons and the wide screen, each with a tap and a hold action.
-Changes reach the deck as you make them.
-
-**⚡ Plenty of actions**
-Media and seeking, volume for any output, app or microphone, output switching, shortcuts,
-typing, commands, apps, websites, sounds and multi-step actions.
-
-**🧩 Plugins**
-OBS Studio, Home Assistant and more from the built-in plugin store, signed and sandboxed.
-Keys follow what they control: what's on air, REC and LIVE times, lights on, the aircon cooling.
-
-</td>
-<td width="50%" valign="top">
-
-**🖥️ A living wide screen**
-Clocks, system graphs, Now Playing, a Pomodoro timer, weather, command output, pictures and
-OBS status, with a volume bar when you turn the volume.
-
-**🔀 Profiles that follow you**
-Your editing keys appear when the editor is in front, your streaming keys when OBS is
-(KDE Plasma, GNOME, Hyprland, Sway, X11).
-
-**🧩 Share and keep**
-Templates, `.ulanzideck` files to share setups, and automatic daily backups.
-A tray icon and a background service keep the deck working with the window closed.
-
-</td>
-</tr>
-</table>
+## Screenshots
 
 <table>
   <tr>
@@ -73,16 +51,16 @@ A tray icon and a background service keep the deck working with the window close
     <td><img src="docs/screenshots/key-light.png" alt="Editing a key"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Widgets for the wide screen, previewed live</sub></td>
-    <td align="center"><sub>Tap and hold actions, look and live state</sub></td>
+    <td align="center"><sub>Wide-screen widgets with a live preview</sub></td>
+    <td align="center"><sub>Key editor</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/plugins-light.png" alt="The plugin store"></td>
+    <td><img src="docs/screenshots/discover-light.png" alt="The plugin store"></td>
     <td><img src="docs/screenshots/templates-dark.png" alt="Starting from a template"></td>
   </tr>
   <tr>
-    <td align="center"><sub>Plugins: OBS Studio, Home Assistant and more, signed and sandboxed</sub></td>
-    <td align="center"><sub>Start from a template, or save your own</sub></td>
+    <td align="center"><sub>Plugin store</sub></td>
+    <td align="center"><sub>Templates</sub></td>
   </tr>
 </table>
 
@@ -92,64 +70,68 @@ A tray icon and a background service keep the deck working with the window close
 
 ## Install
 
-Get the file for your system from the [latest release](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases/latest).
-Ulanzi Deck needs **GTK 4.16** and **libadwaita 1.6** or newer: Arch and its derivatives, Fedora 41+,
-Ubuntu 25.04+, Debian 13, openSUSE Tumbleweed.
+Download the package for your distribution from the
+[latest release](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases/latest). Ulanzi Deck requires
+GTK 4.16 and libadwaita 1.6 or newer, which ship with Arch and its derivatives, Fedora 41 and later,
+Ubuntu 25.04 and later, Debian 13 and openSUSE Tumbleweed.
 
-| Your system | Download | Install with |
+| Distribution | File | Command |
 |---|---|---|
-| **Arch**, CachyOS, EndeavourOS, Manjaro | `ulanzi-deck-*.pkg.tar.zst` | `sudo pacman -U ulanzi-deck-*.pkg.tar.zst` |
-| **Debian**, **Ubuntu**, Mint, Pop!_OS | `ulanzi-deck_*.deb` | `sudo apt install ./ulanzi-deck_*.deb` |
-| **Fedora**, openSUSE | `ulanzi-deck-*.rpm` | `sudo dnf install ./ulanzi-deck-*.rpm` |
-| **Any system**, no install | `Ulanzi_Deck-*.AppImage` | `chmod +x Ulanzi_Deck-*.AppImage`, run it; `--install` adds it to the menu |
-| **Any system** | `ulanzi-deck-*-x86_64.tar.gz` | unpack, then `./install.sh` (just you) or `./install.sh --system` |
+| Arch, CachyOS, EndeavourOS, Manjaro | `ulanzi-deck-*.pkg.tar.zst` | `sudo pacman -U ulanzi-deck-*.pkg.tar.zst` |
+| Debian, Ubuntu, Mint, Pop!_OS | `ulanzi-deck_*.deb` | `sudo apt install ./ulanzi-deck_*.deb` |
+| Fedora, openSUSE | `ulanzi-deck-*.rpm` | `sudo dnf install ./ulanzi-deck-*.rpm` |
+| Any (portable) | `Ulanzi_Deck-*.AppImage` | `chmod +x Ulanzi_Deck-*.AppImage`, then run it. `--install` adds a menu entry. |
+| Any | `ulanzi-deck-*-x86_64.tar.gz` | Extract, then run `./install.sh` (current user) or `./install.sh --system` |
 
-Then open **Ulanzi Deck** from your app menu. A short setup finds the deck, asks once for permission
-to use it, can bring over your setup from version 1, and starts the background service.
-After installing a `.deb`, `.rpm` or Arch package, start the service for your user once
-(the setup offers it too):
+On first launch, the setup assistant detects the deck, requests USB access, offers to import a
+version 1 configuration, and starts the background service. With the .deb, .rpm and Arch packages,
+you can also enable the service yourself:
 
 ```sh
 systemctl --user enable --now ulanzi-deckd
 ```
 
-Building it yourself is a `cargo build --release` away; see the [technical guide](docs/technical.md#building).
+To build from source, see [Building](docs/technical.md#building) in the technical guide.
 
 ## Documentation
 
-| | |
-|---|---|
-| 📘 [**User guide**](docs/user-guide.md) | Everything in the app, step by step: keys, actions, dials, widgets, profiles, OBS, backups |
-| 🩺 [**Troubleshooting**](docs/troubleshooting.md) | The deck isn't found, OBS won't connect, auto-switch, and more |
-| 🛠️ [**Technical guide**](docs/technical.md) | Architecture, files on disk, profile format, D-Bus API, CLI, building, testing, packaging |
-| 🧩 [**Writing plugins**](docs/plugins.md) | The plugin contract, permissions, limits and a worked example |
-| 🔌 [**Hardware notes**](docs/hardware-notes.md) | The deck's USB protocol, measured on real hardware |
-| 🧪 [**Testing before a release**](TESTING.md) | The hands-on checklist |
+- [User guide](docs/user-guide.md): keys, actions, dials, widgets, profiles, plugins and backups
+- [Troubleshooting](docs/troubleshooting.md): device detection, OBS, profile switching and more
+- [Technical guide](docs/technical.md): architecture, file formats, D-Bus API, CLI, building and packaging
+- [Writing plugins](docs/plugins.md): the plugin contract, manifest, permissions and an example
+- [Hardware notes](docs/hardware-notes.md): the USB protocol, as measured on the device
+- [Release testing](TESTING.md): the manual checklist used before each release
 
 ## Templates
 
-Any profile can become a template: right-click it → **Save as Template**. Templates are plain
-`.ulanzideck` files, so a layout for your editor, design tool, DAW or game is easy to keep and to
-share. Show yours in [Discussions](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/discussions).
+Right-click a profile and choose **Save as Template** to turn it into a template. Templates are
+`.ulanzideck` files and can be shared like any other file. Share yours in
+[Discussions](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/discussions).
+
+## Plugins
+
+Plugins are installed from the store in the app's Plugins window. They live in a separate repository,
+[Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins), where new plugins can be
+submitted as pull requests. See [Writing plugins](docs/plugins.md) to build one.
 
 ## Command line
 
-`ulanzictl` drives the service: `status`, `profile`, `page`, `brightness`, `import`, `export`,
-`snapshots`, `restore`, `validate`, `monitor` (presses as they happen) and `diagnostics`
-(everything a bug report needs).
+`ulanzictl` controls the service from a terminal. Its commands include `status`, `profile`, `page`,
+`brightness`, `plugin`, `import`, `export`, `snapshots`, `restore`, `validate`, `monitor` (prints
+input events as they happen) and `diagnostics` (collects the details a bug report needs).
 
 ## Contributing
 
-Bug reports, ideas, templates and code are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how
-to report a problem well and how to send a change. Found a security problem? See [SECURITY.md](SECURITY.md).
+Bug reports, feature requests, templates and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md). To report a security issue, follow [SECURITY.md](SECURITY.md).
 
 ## Credits
 
-- The USB protocol builds on the research in [racerxdl/ulanzi-d200-linux](https://github.com/racerxdl/ulanzi-d200-linux),
+- The USB protocol work builds on [racerxdl/ulanzi-d200-linux](https://github.com/racerxdl/ulanzi-d200-linux),
   [mariovalney/ulanzi-d200-linux](https://github.com/mariovalney/ulanzi-d200-linux) and
   [fkras/homedeck](https://github.com/fkras/homedeck).
 - Icons: [Lucide](https://lucide.dev) (ISC). Brand logos: [Simple Icons](https://simpleicons.org) (CC0);
   brand names and logos are trademarks of their owners. Weather: [Open-Meteo](https://open-meteo.com).
-- Version 1 (Python) lives on the [`python-legacy`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/tree/python-legacy) branch.
+- Version 1, written in Python, is on the [`python-legacy`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/tree/python-legacy) branch.
 
-<sub>Ulanzi Deck is an independent project, not affiliated with Ulanzi. [MIT License](LICENSE) · [Changelog](CHANGELOG.md)</sub>
+<sub>Ulanzi Deck is an independent project and is not affiliated with Ulanzi. [MIT License](LICENSE) · [Changelog](CHANGELOG.md)</sub>

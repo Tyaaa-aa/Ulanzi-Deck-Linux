@@ -5,125 +5,126 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [2.1.0] - 2026-10-30
 
-**Ulanzi Deck 2.1 is needed for plugins, live keys and the profiles it saves.** It reads 2.0's profiles
-and settings and saves them in a new format (2) that 2.0 cannot open; the 2.0 files are kept once in
+This release adds a plugin system and a plugin store, and moves OBS Studio support into a plugin.
+Profiles and settings are saved in file format 2, which Ulanzi Deck 2.0 cannot read. Existing 2.0
+files are upgraded automatically, and the originals are copied once to
 `~/.config/ulanzi-deck/before-2.1/`.
 
-### Removed
-- The built-in OBS Studio integration. OBS is the OBS Studio plugin now (install it from Plugins →
-  Discover): keys from 2.0 move to it by themselves, `{obs_scene}`, `{obs_rec_time}` and
-  `{obs_stream_time}` keep working, and the OBS password moves into the plugin's secret store. Find OBS
-  Settings (reading the port and password from OBS) is gone for now: copy them from OBS's Show Connect
-  Info.
-
 ### Added
-- Plugins: sandboxed WebAssembly programs that add actions to keys. They can use timers, secrets (system
-  keyring), status, WebSocket, TCP/TLS and HTTP connections limited to the hosts and local-network access
-  they declare, and show live values on key labels as `{<plugin>.<key>}`. A plugin that crashes is
-  restarted once, then left off. The deck starts without waiting for plugins, and the keyring is asked
-  only when a plugin first needs its secrets. Manage them with `ulanzictl plugin
-  list|install|remove|enable|disable|restart|dev-mode` and the matching D-Bus methods. Includes the
-  plugin SDK (`ulanzi-plugin`), a hello example and the [plugin guide](docs/plugins.md).
-- Plugin contract 1.1: `list-items` and `[[pickers]]`, so plugins offer lists to pick from (entries with
-  label, subtitle, group, icon and live state, bounded by the service). Plugins built for 1.0 keep
-  working; a 1.0 manifest's `[[pickers]]` tables are still accepted and ignored. `ulanzictl plugin items <id> <picker> [query] [--group G]` and the D-Bus method
-  `PluginListItems` show a list from the command line.
-- Plugins as one file: `<id>-<version>.ulanziplugin`, a ZIP with `plugin.toml`, `plugin.wasm` and optional
-  `assets/`. `scripts/package-plugin.sh <plugin-dir>` builds one, `ulanzictl plugin install` takes a file
-  or a folder, and the D-Bus methods `PluginInspectFile` and `PluginInstallFile` unpack it with strict
-  limits and no links. Signed packages (a valid `.minisig` from the plugin store) install without
-  Developer Mode and show as verified; unsigned ones need it; a bad signature is always refused.
-- The plugin store: `ulanzictl plugin store` lists the plugins in the signed store index and `ulanzictl
-  plugin get <id>` installs or updates one (D-Bus `PluginStoreIndex`, `PluginStoreInstall`,
-  `PluginVerified`). Nothing comes preinstalled: you add only the plugins you want.
-- The Plugins window (the puzzle button in the header): **Discover** is the plugin store (search,
-  category chips, cards with Install, Update or Open) and **Installed** lists your plugins. Each plugin
-  has a page, built from its manifest, with its status, on/off,
-  Restart and Remove…. Passwords and tokens go straight into its secret store. **Install Plugin…**
-  installs a `.ulanziplugin` file and shows what the plugin may do, with an "Unverified plugin"
-  warning; with Developer Mode on, **Install from Folder (developers)…** does the same for a folder.
-- Plugin actions in the key editor, listed by plugin, with rows for their parameters. A parameter that
-  picks something opens the plugin's list (search, group filter, live state, ticks for several), keeps
-  showing a stored value the list lacks, and offers typing by hand only when the plugin can't list.
-  Such rows show the names the plugin gives (Kitchen, not `light.kitchen`), asked in the background.
-  Keys show a warning when their plugin is missing, turned off, stopped working or can't be loaded.
-- Home Assistant plugin (in [Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins)): toggle, run, set level and call any action (service), with live
-  entity state on key labels (`{ha.light.desk}`, `{ha.sensor.temp.unit}`) and a list to pick entities
-  from. Settings are in `[plugins.ha.settings]`; the token moves to the secret store.
-- OBS Studio plugin (in Ulanzi-Deck-Plugins, like every plugin): the built-in OBS actions and live state (`{obs.scene}`,
-  `{obs.rec_time}`, ...) as a sandboxed plugin, with lists for scenes, inputs, sources, filters,
-  collections and profiles, and the live looks the built-in integration had. Settings are in
-  `[plugins.obs.settings]`.
 
-- Plugin icons: a plugin brings a full-colour `icon`, a one-colour `symbolic_icon`, a `color` and an
-  icon per action, all from its own `assets/` folder, so lists, the Plugins window and fresh keys show
-  them. Keys can show a plugin's icon (`source = { kind = "plugin", … }`), drawn in the key's colour.
-  Installing checks that every icon the manifest names is in the plugin.
-- Ready-made keys (`[[key_sets]]`): pick items from a plugin's list and get keys that fit each one, on
-  this page or a new one, with live state. The Home Assistant plugin makes keys for lights, fans, air
-  conditioners, covers, media players, scripts, scenes, buttons and switches; the OBS plugin one key per
-  scene.
-- Home Assistant `climate` action: turn an air conditioner or heater on or off (by its tracked state,
-  so integrations whose `climate.toggle` doesn't turn off still work), make it warmer or cooler in the
-  device's own steps, set a temperature or a mode.
-
-- Live looks: keys can change icon, colour and label with a live value (`[[look.states]]`); plugins
-  declare them per action (`states`), with label values to pick by name (`labels`, the key editor's
-  Label Shows menu) and the settings to follow (`track`, added for you as keys use the action). The
-  Home Assistant keys use them: lights yellow when on, air conditioners blue with a snowflake while
-  cooling, orange while heating.
-- Play Sound keys have their own **Volume** and a **Play** button to hear them in the editor; Preferences
-  → General → **Sound Volume** sets the volume they all share.
-- Installing from the store shows its progress: getting ready, downloading (with a bar and the size),
-  checking, installing.
-- Plugins name their author ("by …"); the project's own plugins show **Official**, which only the signed
-  store list can grant.
-- **Cycle Through Actions**: each press runs the next step, and each step has its own image, colour
-  and label. The key shows the step that ran (the default) or the step the next press runs.
+- Plugins: sandboxed WebAssembly components that add actions to keys. Plugins can use timers,
+  secrets (stored in the system keyring), status reporting, and WebSocket, TCP/TLS and HTTP
+  connections limited to the hosts and local-network access they declare. Values they publish are
+  available in key labels as `{<plugin>.<key>}`. A plugin that crashes is restarted once and then
+  disabled. The deck starts without waiting for plugins, and the keyring is only contacted when a
+  plugin first needs its secrets. Includes the plugin SDK (`ulanzi-plugin`), a hello example and the
+  [plugin guide](docs/plugins.md).
+- `ulanzictl plugin list|install|remove|enable|disable|restart|dev-mode` and matching D-Bus methods.
+- Plugin contract 1.1: `list-items` and `[[pickers]]` let plugins provide lists to pick from, with
+  label, subtitle, group, icon and live state for each entry. Plugins built for 1.0 continue to work.
+  `ulanzictl plugin items` and the `PluginListItems` D-Bus method query a list.
+- Plugin contract 1.2 (manifest only): plugin and action icons, ready-made keys, live looks, label
+  values, `show_if`, `author` and `min_app`.
+- Plugin packages: `<id>-<version>.ulanziplugin`, a ZIP archive with `plugin.toml`, `plugin.wasm` and
+  an optional `assets/` folder. `scripts/package-plugin.sh` builds one; `ulanzictl plugin install`
+  and the `PluginInspectFile` and `PluginInstallFile` D-Bus methods install one, with strict size
+  limits and no links. Packages with a valid store signature install without Developer Mode and are
+  shown as verified. Unsigned packages require Developer Mode. Invalid signatures are always
+  rejected.
+- Plugin store: `ulanzictl plugin store` lists the plugins in the signed store index, and
+  `ulanzictl plugin get <id>` installs or updates one (D-Bus `PluginStoreIndex`,
+  `PluginStoreInstall`, `PluginVerified`, `PluginOfficial`). No plugins are installed by default.
+- Plugin manager window, opened from the header bar. **Discover** shows the store with search,
+  category filters and Install, Update or Open buttons. **Installed** lists installed plugins. Each
+  plugin has a settings page generated from its manifest, with status, an on/off switch, Restart and
+  Remove. Passwords and tokens are written directly to the plugin's secret store. **Install
+  Plugin…** installs a `.ulanziplugin` file after showing its permissions; with Developer Mode on,
+  **Install from Folder (developers)…** installs a plugin folder.
+- Store installs report progress: preparing, downloading (with a progress bar and size), verifying
+  and installing.
+- Plugins show their author. Plugins maintained by the project are marked **Official**; only the
+  signed store index can grant this.
+- Plugin actions in the key editor, grouped by plugin, with a row for each parameter. Parameters that
+  refer to an item open the plugin's list, with search, a group filter, live state and multiple
+  selection. Stored values missing from the list are still shown, and manual entry is offered only
+  when the plugin cannot provide a list. Rows display the plugin's names for items (for example
+  "Kitchen" rather than `light.kitchen`). Keys show a warning when their plugin is missing, disabled,
+  failed or incompatible.
+- Plugin icons: a full-colour `icon`, a one-colour `symbolic_icon`, a `color` and per-action icons,
+  all from the plugin's `assets/` folder. Keys can display a plugin icon
+  (`source = { kind = "plugin", … }`), drawn in the key's icon colour. Installation checks that
+  every icon named in the manifest is present.
+- Ready-made keys (`[[key_sets]]`): pick items from a plugin's list to create matching keys, with live
+  state, on the current page or a new one.
+- Live looks: keys can change icon, colour and label based on a live value (`[[look.states]]`).
+  Plugins declare looks per action (`states`), selectable label values (`labels`, shown in the key
+  editor's **Label Shows** menu) and the settings to track (`track`, added automatically as keys use
+  the action).
+- **Cycle Through Actions**: each press runs the next step. Each step has its own image, colour and
+  label. The key shows either the step that last ran (the default) or the next step.
+- **Play Sound** has a per-key volume and a **Play** button to preview the sound.
+  **Preferences → General → Sound Volume** sets the overall volume.
+- Home Assistant plugin, published in
+  [Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins): toggle entities, run
+  scripts, set levels and call any action, with live entity state in labels (`{ha.light.desk}`,
+  `{ha.sensor.temp.unit}`) and an entity picker. Ready-made keys for lights, fans, air conditioners,
+  covers, media players, scripts, scenes, buttons and switches. Settings are stored in
+  `[plugins.ha.settings]`, and the access token is moved to the secret store.
+- Home Assistant `climate` action: turn an air conditioner or heater on or off based on its tracked
+  state (so integrations whose `climate.toggle` does not turn the device off still work), step the
+  target temperature in the device's own increments, or set a temperature or mode.
+- OBS Studio plugin, published in Ulanzi-Deck-Plugins: all previous OBS actions and live values
+  (`{obs.scene}`, `{obs.rec_time}` and others) in a sandboxed plugin, with lists for scenes, inputs,
+  sources, filters, scene collections and profiles, and one ready-made key per scene. Settings are
+  stored in `[plugins.obs.settings]`.
 
 ### Changed
-- Plugin lists match every word of a search in any order, so "bedroom aircon" finds "Bedroom Aircon".
-- Function keys are written f1 to f24; zero-padded names such as f01 are no longer accepted.
-- The action list (the side panel with nothing selected, and the key editor's Choose / Change list) is
-  easier to use with many plugins. One search field finds actions by name, category or plugin name. A
-  category menu next to it (All, the built-in categories, then one per plugin with its logo) shows one
-  category at a time and is remembered while the app runs. Sections fold away and list their actions A to Z. Plugin
-  actions show their plugin's icon and name and can be dragged from the side panel. Searching inside a
-  category offers "Show N more in All" when other categories match.
-- The top bar's Actions button is gone. A key's editor has a × at the top of the panel, and Escape does
-  the same when you are not typing: the key is deselected and the action list comes back. Ctrl+L puts
-  the cursor in the action search (not while a dialog or menu is open). With a key selected, the list
-  then gives way to the key's editor again when you click an action (it goes to the key), pick another
-  key, or press the × ("Back to the key") or Escape.
-- The key editor is one page in the order you set a key up: **Press**, **Label**, **When Held** and
-  **Look**, with When Held and Look folded into one row each until opened (remembered while the app
-  runs), so one key needs no switching between sections. Show Label is now **Hidden** in Label
-  Position. A dial's four slots are one list of rows that open to their settings. Clear Key and Use
-  This Dial on Every Page stay in sight under the page.
-- Menu items no longer end in "…" (Rename, Delete, Export, Import, Set Up Deck and the like). The
-  guides use the same names.
+
+- The key editor is a single page, in setup order: **Press**, **Label**, **When Held** and
+  **Look**. When Held and Look are collapsed until opened, and stay open while the app runs. Show
+  Label is replaced by a **Hidden** option in Label Position. A dial's four actions are shown as one
+  list of expandable rows. Clear Key and Use This Dial on Every Page stay visible below the editor.
+- The action list (the side panel with nothing selected, and the key editor's Choose and Change
+  lists) has one search field that matches action names, categories and plugin names. A category
+  menu next to it (All, the built-in categories, then one entry per plugin) shows one category at a
+  time and is remembered while the app runs. Sections can be collapsed and are sorted
+  alphabetically. Searching within a category offers "Show N more in All" when other categories
+  match.
+- The Actions button in the header bar is removed. The key editor has a close button, and Escape
+  closes it when no text field has focus. Ctrl+L focuses the action search. With a key selected, the
+  editor returns after you pick an action, select another key, or press the close button or Escape.
+- Plugin list searches match every word in any order, so "bedroom aircon" finds "Bedroom Aircon".
+- Function keys are written `f1` to `f24`; zero-padded names such as `f01` are no longer accepted.
+- Menu items no longer end in an ellipsis (Rename, Delete, Export, Import, Set Up Deck and others).
+  The documentation uses the same names.
+
+### Removed
+
+- Built-in OBS Studio support, replaced by the OBS Studio plugin. Install it from **Plugins →
+  Discover**. Keys from 2.0 are converted automatically, `{obs_scene}`, `{obs_rec_time}` and
+  `{obs_stream_time}` still work, and the OBS password is moved to the plugin's secret store. The
+  Find OBS Settings button, which read the port and password from OBS, is not available in this
+  release; copy them from **Show Connect Info** in OBS.
 
 ### Fixed
-- The shortcut recorder captures Super (Meta) and any combination: Super alone, Super+X, Ctrl+Super and
-  so on. Press and release modifiers alone to record just them; Escape still cancels. While it listens,
-  the desktop's own shortcuts are paused on the window so KDE and GNOME don't swallow Super, and they
-  come back as soon as recording ends. The app's own shortcuts are off too, so any combination can be
-  recorded. Caps Lock, Pause and keypad keys now work in shortcuts. A key the deck can't send (for
-  example `<` or `ü` on some layouts) is no longer saved: the row says "This key can’t be sent" and
-  keeps listening.
-- Text fields keep their own shortcuts: Ctrl+A, copy, paste, undo, redo and Delete edit the text while
-  you type, instead of selecting, copying or clearing keys on the deck. An open dialog or menu keeps its
-  Escape. The deck shortcuts work as before when no text field has the focus.
-- The sandbox script keeps the app's own icons visible: your real data folder is added to
-  `XDG_DATA_DIRS`, so they no longer show as broken images.
-- OBS Studio plugin: an OBS that accepts the connection but refuses its version or scene list is retried
-  after 1 s, 2 s, 4 s and so on up to every 10 s instead of every second, and the refusal is logged
-  once. Volume up on an input at 0 % no longer jumps to full volume. Clearer labels for studio mode and
-  "Mute or unmute".
-- Home Assistant plugin: service calls get 30 s to answer before "didn't answer" is logged, since
-  scripts and slow devices took longer than the 5 s other requests get. A key with no entity chosen
-  says "Choose an entity for this key first". "Call a service" is now "Call an action (service)", as
-  Home Assistant names them, and a new Set level key starts at 100 %.
+
+- The shortcut recorder captures Super and any key combination, including Super alone, Super+X and
+  Ctrl+Super. Pressing and releasing a modifier on its own records it; Escape cancels. While
+  recording, desktop and app shortcuts are suspended for the window so KDE and GNOME do not
+  intercept Super. Caps Lock, Pause and keypad keys are now supported. Keys the deck cannot send (such
+  as `<` or `ü` on some layouts) are rejected with "This key can’t be sent".
+- Text fields keep their own shortcuts. Ctrl+A, copy, paste, undo, redo and Delete edit the text
+  instead of acting on deck keys, and an open dialog or menu handles Escape first.
+- The sandbox script adds the real data directory to `XDG_DATA_DIRS`, so the app's icons are no
+  longer shown as broken images.
+- OBS Studio plugin: when OBS accepts the connection but rejects the protocol version or scene
+  request, the plugin retries with backoff (1 s, doubling to 10 s) instead of every second, and logs
+  the error once. Volume up on an input at 0 % no longer jumps to full volume. Clearer labels for
+  studio mode and "Mute or unmute".
+- Home Assistant plugin: service calls have 30 seconds to respond before a timeout is logged,
+  instead of the 5 seconds used for other requests. A key without an entity reports "Choose an
+  entity for this key first". "Call a service" is renamed "Call an action (service)", matching Home
+  Assistant, and a new Set level key defaults to 100 %.
 
 ## [2.0.0] - 2026-10-23
 

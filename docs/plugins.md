@@ -1,30 +1,31 @@
 # Writing plugins
 
-A plugin adds actions to Ulanzi Deck without changing the app: a counter, a chat bot, a smart-home
-bridge. It is a small WebAssembly program that the service (`ulanzi-deckd`) runs in a sandbox. It can do
-only what its manifest asks for and you allow. For how the rest of the app is built, see the
-[technical guide](technical.md).
+Plugins extend Ulanzi Deck with new actions and integrations. A plugin is a WebAssembly component
+that the service (`ulanzi-deckd`) runs in a sandbox, with access limited to the permissions declared
+in its manifest. This document describes the plugin contract, the manifest format, the Rust SDK and
+the tooling for building, testing and publishing plugins. For the architecture of the app itself,
+see the [technical guide](technical.md).
 
-**Contents**
-[What a plugin is](#what-a-plugin-is) ·
-[The contract](#the-contract) ·
-[The manifest](#the-manifest) ·
-[Permissions](#permissions) ·
-[The SDK](#the-sdk) ·
-[Limits](#limits) ·
-[Secrets](#secrets) ·
-[Building and installing](#building-and-installing) ·
-[Example: hello](#example-hello) ·
-[The OBS Studio plugin](#the-obs-studio-plugin) ·
-[The Home Assistant plugin](#the-home-assistant-plugin) ·
-[Managing plugins](#managing-plugins) ·
-[Later contract versions](#later-contract-versions)
+## Contents
 
----
+- [Plugin structure](#plugin-structure)
+- [The contract](#the-contract)
+- [The manifest](#the-manifest)
+- [Permissions](#permissions)
+- [The SDK](#the-sdk)
+- [Limits](#limits)
+- [Secrets](#secrets)
+- [Building and installing](#building-and-installing)
+- [Example: hello](#example-hello)
+- [The plugin store](#the-plugin-store)
+- [Publishing a plugin](#publishing-a-plugin)
+- [Reference plugins](#reference-plugins)
+- [Managing plugins](#managing-plugins)
+- [Contract versions](#contract-versions)
 
-## What a plugin is
+## Plugin structure
 
-A folder with three things:
+A plugin is a folder containing:
 
 ```text
 plugin.toml     name, version, permissions and the actions it provides
@@ -32,30 +33,32 @@ plugin.wasm     the program (a WebAssembly component)
 assets/         optional: pictures and other files for the plugin
 ```
 
-Installed plugins live in `~/.local/share/ulanzi-deck/plugins/<id>/` (it follows `XDG_DATA_HOME`).
-The service compiles each `plugin.wasm` once and keeps the result in `~/.cache/ulanzi-deck/plugins/`.
+Installed plugins are stored in `~/.local/share/ulanzi-deck/plugins/<id>/` (following
+`XDG_DATA_HOME`). The service compiles each `plugin.wasm` once and caches the result in
+`~/.cache/ulanzi-deck/plugins/`.
 
-The sandbox is strict:
+Sandbox rules:
 
-- No files, an empty environment (no variables are set), no `wasi:sockets`, no `wasi:http`. Standard output and error go to the
-  service log. Clocks and random numbers work.
-- Every connection goes through the service, which checks it against the plugin's permissions first.
-- The plugin gets 64 MiB of memory and 500 ms for each call. It cannot run in the background between calls
-  except through timers and sockets the service owns.
-- A plugin that crashes, runs out of memory or takes too long is stopped. The deck and other plugins
-  keep working.
+- No file system access, an empty environment, and no `wasi:sockets` or `wasi:http`. Standard output
+  and standard error go to the service log. Clocks and random numbers are available.
+- All network connections go through the service, which checks them against the plugin's
+  permissions.
+- Each plugin has 64 MiB of memory and 500 ms per call. Between calls, a plugin runs only in response
+  to timers and sockets owned by the service.
+- A plugin that crashes, runs out of memory or exceeds its time limit is stopped. The deck and other
+  plugins are not affected.
 
-A plugin starts the first time one of its actions is pressed, or when the daemon starts if a profile
-uses it or its manifest says `background = true`. The deck never waits for plugins: they load in the
-background after it starts, and a plugin key pressed before that reports "plugins are still starting".
+A plugin starts when one of its actions is first used, or when the service starts if a profile uses
+it or its manifest sets `background = true`. Plugins load in the background after the deck is ready;
+a plugin key pressed before then reports "plugins are still starting".
 
 ## The contract
 
 The interface between plugin and service is written in WIT:
 [`crates/ulanzi-plugin/wit/plugin.wit`](../crates/ulanzi-plugin/wit/plugin.wit), package
-`ulanzi:plugin@1.1.0`. The SDK wraps it, so most plugins never touch it directly.
+`ulanzi:plugin@1.1.0`. Most plugins use it through the SDK rather than directly.
 
-What the service calls in your plugin (the exports):
+Exports (called by the service):
 
 | Export | When |
 |---|---|
@@ -68,7 +71,7 @@ What the service calls in your plugin (the exports):
 | `on-timer(timer)` | A timer fired. |
 | `list-items(picker, query, group)` | Contract 1.1. The user opened one of your [pickers](#pickers). Return its entries that match `query` (what the user typed, `""` for all), only those in `group` unless it is `""`. An error (for example "not connected") is shown with Retry and "Enter manually…". |
 
-What your plugin can call (the imports):
+Imports (called by the plugin):
 
 | Interface | Function | Does |
 |---|---|---|
@@ -82,15 +85,15 @@ What your plugin can call (the imports):
 | `net` | `send(socket, data)`, `close(socket)` | Write to or close a socket |
 | `net` | `fetch(request)` | An HTTP request |
 
-Calls never wait. `ws-open`, `tcp-open` and `fetch` return an id at once; the answer comes later as an
-event (`on-open`, `on-closed`, `on-http`). Events for one plugin arrive one at a time, in order.
-A dial turn is an ordinary `on-action` for the action assigned to that direction (left, right, press
-or hold).
+All imports are non-blocking. `ws-open`, `tcp-open` and `fetch` return an id immediately, and the
+result arrives later as an event (`on-open`, `on-closed`, `on-http`). A plugin receives its events
+one at a time, in order. A dial turn is delivered as an `on-action` for the action assigned to that
+direction (left, right, press or hold).
 
 ### Pickers
 
-Contract 1.1 adds `list-items`, so the user picks a scene or an entity from a list instead of typing
-its name. Declare each list in the manifest and point `item` fields at it:
+Contract 1.1 adds `list-items`, which lets users pick a scene or entity from a list instead of
+typing its name. Declare each list in the manifest and reference it from `item` fields:
 
 ```toml
 contract = "1.1"
@@ -111,16 +114,16 @@ Each entry (`item` in the WIT, `Item` in the SDK) has an `id` (what is stored), 
 sees) and optionally a `subtitle`, a `group`, an `icon` (an icon name or short text) and a `state` (live
 state shown dimmed next to it, for example "on").
 
-Answer `list-items` from what the plugin already knows (the scenes it got when it connected, the entity
-states it keeps up to date). Never wait for the network in it: it has the same 500 ms budget as every
-call, and the app waits for the answer. The service starts a plugin that is not running yet when its
+Answer `list-items` from data the plugin already holds, such as the scenes received on connect or
+the entity states it keeps current. Do not wait for the network: the call has the same 500 ms
+budget as any other, and the app waits for the result. The service starts a plugin that is not running yet when its
 picker opens. It keeps at most 5000 entries and drops entries whose id is empty or longer than 1024
 bytes. It cuts `label`, `subtitle`, `group` and `state` to 256 bytes, `icon` to 128 and an error text to
 4096. A picker the manifest does not declare is refused before the plugin is asked. A plugin built for
 1.0 has no `list-items`: its pickers answer "<name> has no list to pick from".
 
-To offer different lists to different actions (say lights for Toggle and scripts for Run), declare one
-picker for each.
+To offer different lists to different actions (for example lights for Toggle and scripts for Run),
+declare a separate picker for each.
 
 ### Showing state on keys
 
@@ -164,7 +167,9 @@ params = [{ key = "name", kind = "text", label = "Name" }]
 | Field | Meaning |
 |---|---|
 | `id`, `name`, `version`, `contract` | Required. The folder name must equal the id. |
-| `description`, `categories`, `tested_on_hardware` | Optional, for the app's lists. |
+| `description`, `categories`, `tested_on_hardware` | Optional, shown in the plugin manager and the store. |
+| `author` | Optional. Shown as "by *author*" in the plugin manager and the store. |
+| `min_app` | Optional. The oldest Ulanzi Deck version the plugin supports; see below. |
 | `icon`, `symbolic_icon`, `color` | Optional, the plugin's look; see [Icons](#icons). |
 | `background` | Optional, default `false`. |
 | `[permissions]` | Optional, see below. Nothing is allowed that is not listed. |
@@ -185,10 +190,10 @@ params = { name = "Ana" }
 
 Values in `params` and in `[plugins.<id>.settings]` that have no JSON form (dates and times) reach the plugin as strings.
 
-**Contract versions.** `contract = "1.0"` loads if the major version equals the service's (1) and the
-minor version is not newer than the service's (2 today). A plugin that asks for more shows as
-`incompatible` and the message "needs a newer Ulanzi Deck". Minor versions only add things, so a plugin
-written for 1.0 keeps working on every later 1.x.
+**Contract versions.** A plugin loads if its contract's major version equals the service's (1) and
+its minor version is not newer than the service's (currently 2). Otherwise it is listed as
+`incompatible` with the message "needs a newer Ulanzi Deck". Minor versions are additive, so a
+plugin written for 1.0 works with every later 1.x release.
 
 The manifest may also contain tables this version does not read yet (key faces, widgets, variables,
 detection, sign-in). They are accepted and ignored. From contract 1.1 on, a manifest is refused when a
@@ -198,15 +203,15 @@ param uses a `multi` picker. A `contract = "1.0"` manifest keeps the 1.0 rules: 
 entries. In the same way a manifest older than 1.2 keeps its fields but the 1.2 ones (`symbolic_icon`,
 `color`, `[[key_sets]]`, an action's `states`, `labels` and `track`, a field's `show_if`) are ignored.
 
-**Oldest app.** `min_app = "2.1.0"` names the oldest Ulanzi Deck the plugin runs on. A newer one than
-the app installs nothing and shows "<name> needs Ulanzi Deck 2.x.y or newer", in the app and in
-`ulanzictl plugin list`. Contract versions say which features a plugin uses; `min_app` also covers app
-fixes a plugin relies on. Set both.
+**Minimum app version.** `min_app = "2.1.0"` sets the oldest Ulanzi Deck release the plugin
+supports. Older releases refuse to install it and report "<name> needs Ulanzi Deck 2.x.y or newer"
+in the app and in `ulanzictl plugin list`. The contract version covers the features a plugin uses;
+`min_app` also covers bug fixes it depends on. Set both.
 
 ### Icons
 
-Every plugin brings its own icons in `assets/`, so the app, the plugin store and the deck show it the
-same way without anything built into the app:
+Plugins ship their own icons in `assets/`, so the app, the plugin store and the deck display them
+consistently without any icons built into the app:
 
 | Field | File | Used for |
 |---|---|---|
@@ -236,11 +241,12 @@ icon = "assets/actions/toggle.svg"
 
 ### Ready-made keys
 
-A `[[key_sets]]` entry lets the user set up many keys at once: they pick items from a multi picker (the
-app's action list shows the key set at the top of the plugin's section), and each item gets the keys of
-the first variant whose `groups` hold the item's group (a variant without `groups` takes any item). The
-app shortens names that start the same ("Bedroom Lamp", "Bedroom Fan" → "Lamp", "Fan"), asks whether
-the keys go on this page or a new one, and keeps each item's keys together on one page.
+A `[[key_sets]]` entry lets users create many keys at once. The key set appears at the top of the
+plugin's section in the action list. The user picks items from a multi picker, and each item gets
+the keys of the first variant whose `groups` contain the item's group (a variant without `groups`
+matches any item). The app removes a shared prefix from names ("Bedroom Lamp" and "Bedroom Fan"
+become "Lamp" and "Fan"), asks whether to place the keys on the current page or a new one, and keeps
+each item's keys together on one page.
 
 | Field | Meaning |
 |---|---|
@@ -273,8 +279,9 @@ missing).
 
 ### Live looks and label values
 
-An action can say how its keys look in live states and which live values they can show, so the user
-picks "Room temperature" from a menu instead of typing `{ha.climate.ac.attr.current_temperature}`:
+An action can define how its keys look in each live state and which live values they can display.
+Users then pick a value such as "Room temperature" from a menu instead of typing
+`{ha.climate.ac.attr.current_temperature}`:
 
 | Field of `[[actions]]` | Meaning |
 |---|---|
@@ -299,8 +306,8 @@ states = [
 ]
 ```
 
-Picker searches should match every word of the query anywhere in the name, id or group, in any order;
-`ulanzi_plugin::matches_query` does exactly that.
+Picker searches should match every word of the query anywhere in the name, id or group, in any
+order. `ulanzi_plugin::matches_query` implements this.
 
 ### Settings and parameters
 
@@ -334,7 +341,8 @@ choice of a `choice`, else the number a spin row falls back to (0 within `min` a
 
 ## Permissions
 
-Without permissions a plugin can compute, keep state, use timers and secrets, and nothing else.
+Without permissions, a plugin can compute, keep state, and use timers and secrets. Everything else
+requires a permission.
 
 | Permission | Allows |
 |---|---|
@@ -345,7 +353,7 @@ Local ranges are loopback (`127.0.0.0/8`, `::1`), private IPv4 (`10.0.0.0/8`, `1
 `192.168.0.0/16`), link-local (`169.254.0.0/16`, `fe80::/10`) and IPv6 unique-local (`fc00::/7`).
 An IPv4 address written as IPv6 (`::ffff:192.168.1.5`) is judged as the IPv4 address.
 
-How the checks work:
+Enforcement:
 
 - The service checks a name before connecting. For `lan`, it resolves the name once and connects to
   exactly the addresses it checked, so a name cannot answer "local" for the check and "public" for the
@@ -358,8 +366,8 @@ How the checks work:
 `browser`, `dbus` and `programs` are accepted in the manifest and have no effect yet; they arrive with
 the contract versions that use them.
 
-Permissions are granted by installing. Before it installs a package or a folder, the app shows the
-plugin's permissions with an "Unverified plugin" warning, and you choose whether to go on.
+Permissions are granted at installation. Before installing, the app lists the plugin's permissions
+and asks for confirmation; unsigned plugins are labelled "Unverified plugin".
 
 ## The SDK
 
@@ -384,20 +392,21 @@ Only `action` is required. Build entries with `Item::new(id, label)` and, as nee
 `.subtitle(…)`, `.group(…)`, `.icon(…)` and `.state(…)`. `Value` and `json!` are re-exported from `serde_json`. Call
 `ulanzi_plugin::export_plugin!(MyPlugin);` once in the crate root.
 
-`Cx` is your handle to the host: `set_timer`, `cancel_timer`, `set_state`, `secret`, `set_secret`,
+`Cx` is the handle to the host: `set_timer`, `cancel_timer`, `set_state`, `secret`, `set_secret`,
 `delete_secret`, `set_status`, `log`, `ws_open`, `tcp_open`, `send`, `close` and `fetch`. It holds no
 data; every call goes straight to the host.
 
 ### Testing without a deck
 
-On your own machine (not WebAssembly) the same calls go to a fake host, so plugin logic runs as an
-ordinary `cargo test`. `ulanzi_plugin::testing::Harness` drives your plugin and shows what it did:
+When compiled for the host platform instead of WebAssembly, the same calls go to a mock host, so
+plugin logic can be tested with `cargo test`. `ulanzi_plugin::testing::Harness` drives the plugin
+and records its effects:
 
-- Drive it: `init`, `action`, `list_items`, `open`, `message`, `closed`, `http`, `fire` (a timer).
-- Look at the result: `state`, `status`, `logs`, `timers`, `opened` (sockets the plugin opened),
-  `sent` (what it wrote to a socket), `fetched` (requests it made) and `secrets` (read or preload them).
+- Input: `init`, `action`, `list_items`, `open`, `message`, `closed`, `http`, `fire` (a timer).
+- Inspection: `state`, `status`, `logs`, `timers`, `opened` (sockets opened), `sent` (data written
+  to sockets), `fetched` (HTTP requests) and `secrets` (read or preloaded).
 
-The Harness does not enforce permissions or limits; try the plugin in the real service for those.
+The harness does not enforce permissions or limits. Test those in the real service.
 
 ## Limits
 
@@ -433,9 +442,10 @@ installing or enabling the plugin later brings the key back.
 
 ## Secrets
 
-Use `secret-set` for passwords, tokens and keys, never `set-state` or a settings value. Secrets are
-stored for you in the system keyring (Secret Service: KWallet, GNOME Keyring), which the service
-first asks when a plugin starts. If it does not answer within 3 seconds, they go to
+Store passwords, tokens and keys with `secret-set`, never with `set-state` or in settings. Secrets
+are kept in the system keyring through the Secret Service API (KWallet or GNOME Keyring), which the
+service contacts when a plugin starts. If the keyring does not respond within 3 seconds, secrets are
+stored in
 `~/.config/ulanzi-deck/plugin-secrets.toml` (mode 0600) instead. They are never logged, never sent from the service over D-Bus (the app sends them in with `PluginSetSecret`) and not part of profile exports or
 backups. Removing a plugin deletes its secrets; reinstalling it keeps them.
 
@@ -447,8 +457,8 @@ value writes it straight into the plugin's secret store, removes the same key fr
 plugin with the new value; a plugin that is turned off or stopped working is not started. Over D-Bus, `GetSettings` shows a secret setting's value as `••••`, and
 settings exports leave it out.
 
-Without the app, a plugin can still take a secret from its settings table, as the OBS and Home Assistant
-plugins do: `init` finds `password` or `token` in `[plugins.<id>.settings]`, saves it with `set_secret`
+For configuration without the app, a plugin can also accept a secret from its settings table, as
+the OBS and Home Assistant plugins do: `init` finds `password` or `token` in `[plugins.<id>.settings]`, saves it with `set_secret`
 and logs a warning until the line is deleted. Until then it sits in plain text in `settings.toml`.
 
 ## Building and installing
@@ -478,10 +488,10 @@ ulanzictl plugin list
 ```
 
 Installing from a folder is refused with "Turn on Developer mode to install plugins from a folder"
-until developer mode is on. The installer checks `plugin.toml` and compiles `plugin.wasm` before
-copying. The source folder can have any name: the plugin is installed in a folder named after the `id`
-in its `plugin.toml`. The service tells you in `plugin list` if anything is wrong. A broken plugin never stops the others:
-it is listed as `incompatible` with the reason.
+until developer mode is on. The installer validates `plugin.toml` and compiles `plugin.wasm` before copying.
+The source folder can have any name; the plugin is installed in a folder named after its `id`.
+Problems are reported by `plugin list`. A plugin that fails to load is listed as `incompatible` with
+the reason, and does not affect other plugins.
 
 ### Packages (`.ulanziplugin`)
 
@@ -502,14 +512,14 @@ scripts/package-plugin.sh examples/plugins/hello   # dist/plugins/hello-1.0.0.ul
 ulanzictl plugin install dist/plugins/hello-1.0.0.ulanziplugin
 ```
 
-A package from the plugin store comes with a signature, `<file>.minisig` next to it. When that
-signature checks out against the key built into the app and names this plugin's id and version, the
-package installs without Developer mode and shows as "Verified plugin"; a signature that does not check
-out is refused, even in Developer mode. Packages without a signature need Developer mode, like
-installing from a folder ("Turn on Developer mode to install unverified plugins"). Inspecting one (the check an installer
-shows before it asks) works without. The service unpacks the file into a hidden temporary folder next
-to the installed plugins, checks it like a plugin folder and installs it; the temporary folder is
-removed whatever the outcome. A package is refused, with the reason, when:
+Packages from the plugin store come with a minisign signature (`<file>.minisig`). If the signature
+verifies against the key built into the app and its signed comment names the package's id and
+version, the package installs without Developer Mode and is shown as "Verified plugin". A signature
+that fails verification is rejected, even in Developer Mode. Unsigned packages require Developer
+Mode, as folder installs do ("Turn on Developer mode to install unverified plugins"); inspecting a
+package does not. The service unpacks the file into a hidden temporary folder next to the installed
+plugins, validates it like a plugin folder and installs it. The temporary folder is always removed.
+A package is rejected, with the reason, when:
 
 - the file is larger than 64 MiB, holds more than 1000 entries or unpacks to more than 64 MiB (the
   size is counted while unpacking, not read from the file's headers);
@@ -572,25 +582,33 @@ Walk-through:
 
 ## The plugin store
 
-The store is the plugins repo's signed `index.json` (on its `index` release). The service checks the
-index's signature against the built-in key before using it, keeps the last good copy for offline use,
-and installs a plugin only when its download matches the SHA-256 the index lists and its own signature
-checks out. `PluginStoreIndex`, `PluginStoreInstall` and `PluginVerified` on D-Bus do the same as
-`ulanzictl plugin store` and `get`. The app trusts one key today; the list allows a new key to be added
-in an update before the old one is retired.
+The store is a signed `index.json` published on the `index` release of
+[Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins). The service:
 
-## Where plugins live
+- verifies the index signature against the built-in key before using it;
+- keeps the last valid copy, so the store can be browsed offline;
+- installs a plugin only if the download matches the SHA-256 listed in the index and the package's
+  own signature verifies.
 
-Every plugin, the OBS and Home Assistant ones included, lives in
-[Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins). Its CI tests each plugin in the
-real plugin host, and on `main` signs and releases every new version and the index the app reads.
-Only the hello example and the host's own test plugins stay in this repo. To add a plugin, open a pull
-request there.
+`PluginStoreIndex`, `PluginStoreInstall` and `PluginVerified` on D-Bus correspond to
+`ulanzictl plugin store` and `ulanzictl plugin get`. The app holds a list of trusted keys, so a
+replacement key can be shipped in an update before the current one is retired.
 
-## The OBS Studio plugin
+## Publishing a plugin
 
-[`plugins/obs`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/obs/README.md) is a larger, real-world plugin: the OBS integration as a sandboxed
-plugin. It shows what the small hello example leaves out:
+All published plugins, including OBS Studio and Home Assistant, are maintained in
+[Ulanzi-Deck-Plugins](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins). Its CI tests each plugin in
+the real plugin host and, on `main`, signs and releases each new version and rebuilds the index. This
+repository only contains the hello example and the host's test plugins. To publish a plugin, open a
+pull request in the plugins repository.
+
+## Reference plugins
+
+### OBS Studio
+
+[`plugins/obs`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/obs/README.md)
+implements the OBS integration as a sandboxed plugin. It covers several things the hello example
+does not:
 
 - A WebSocket client (`network = ["127.0.0.1", "localhost"]`) that signs in with obs-websocket 5 and
   never blocks: every handler sends and returns, answers arrive as events.
@@ -605,13 +623,13 @@ plugin. It shows what the small hello example leaves out:
 - Bursts of scene or input events are coalesced into one reload per tick, so they cannot flood the host's
   event queue; a send that fails on a live socket is treated as a lost connection.
 
-Its tests ([`plugins/obs/tests/plugin.rs`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/obs/tests/plugin.rs)) are a model for `Harness` tests of a
-plugin with a network connection: they open and close sockets, deliver messages and fire timers by hand,
-with no real OBS and no waiting.
+Its [tests](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/obs/tests/plugin.rs)
+show how to test a networked plugin with `Harness`: they open and close sockets, deliver messages
+and fire timers directly, without a running OBS instance.
 
-## The Home Assistant plugin
+### Home Assistant
 
-[`plugins/ha`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/ha/README.md) is the second real plugin. It talks to Home Assistant over one WebSocket
+[`plugins/ha`](https://github.com/Tyaaa-aa/Ulanzi-Deck-Plugins/blob/main/plugins/ha/README.md) talks to Home Assistant over one WebSocket
 with a filtered `subscribe_entities`, so only the entities listed in its settings are sent (never the whole
 install), and shows them as `{ha.<entity_id>}` labels. The access token goes into the secret store like the OBS
 password, and `lan = true` limits it to Home Assistant on the local network. Its "Keys for your devices" key
@@ -620,25 +638,31 @@ cooler, warmer, with the `climate` action), covers, media players, scripts, scen
 
 ## Managing plugins
 
-In the app: the Plugins window (the puzzle button in the header) has two pages. **Discover** is the
-plugin store (search, category chips, a card per plugin with Install, Update or Open, and "Needs Ulanzi
-Deck x.y.z" when the app is too old). **Installed** lists the installed plugins with their status, an
-on/off switch and a check mark for verified ones.
-Each plugin's page shows its status (with a banner and Restart when it needs attention or stopped
-working), Turned On, Restart, its settings from `[[settings]]`, and Remove… (which also deletes its
-secrets; keys that use it keep their settings and show "Needs the “<id>” plugin"). Install Plugin… opens a
-`.ulanziplugin` file and shows what the plugin is and what it may do: "Verified plugin" for a signed
-package, else an "Unverified plugin" warning, and then its Install button works only with Developer
-Mode on (the dialog says so). With
-Developer Mode on, Install from Folder (developers)… does the same for a folder that contains
-`plugin.toml`. Plugin actions appear in the action list (the side panel and the key editor's action
-picker) under a category of their own (the menu next to the search field) and a section per plugin, A–Z,
-with the plugin's logo and each action's own icon (see [Icons](#icons)); a plugin's key sets head its
-section in the side panel. The key
-editor shows rows for their `params` (an `item` param opens the plugin's list; see [Pickers](#pickers)); keys whose plugin
-is missing, turned off, stopped working or cannot be loaded show a warning badge.
+### In the app
 
-From the command line:
+The **Plugins** button in the header bar opens the plugin manager, which has two pages:
+
+- **Discover** shows the plugin store: search, category filters, and a card for each plugin with
+  Install, Update or Open. Plugins that need a newer app show "Needs Ulanzi Deck x.y.z".
+- **Installed** lists installed plugins with their status and an on/off switch. Verified plugins
+  have a check mark.
+
+A plugin's page shows its status (with a banner and a Restart button when it needs attention), an
+on/off switch, its `[[settings]]` fields, and **Remove…**. Removing a plugin also deletes its
+secrets. Keys that use it keep their configuration and show "Needs the “<id>” plugin".
+
+**Install Plugin…** opens a `.ulanziplugin` file and shows the plugin's details and permissions,
+marked "Verified plugin" for a signed package or "Unverified plugin" otherwise. Unverified plugins
+can only be installed with Developer Mode on, which also enables **Install from Folder
+(developers)…** for a folder containing `plugin.toml`.
+
+Plugin actions appear in the action list under their own category, with one section per plugin in
+alphabetical order, showing the plugin's logo and each action's icon (see [Icons](#icons)). Key sets
+appear at the top of the plugin's section. The key editor shows a row for each of the action's
+`params`; `item` params open the plugin's list (see [Pickers](#pickers)). Keys whose plugin is
+missing, turned off, failed or incompatible show a warning badge.
+
+### From the command line
 
 ```text
 ulanzictl plugin list                 id, name, version, status and the reason when there is one
@@ -668,19 +692,20 @@ enabled = true
 start = 10        # whatever the plugin reads in init()
 ```
 
-## Later contract versions
+## Contract versions
 
-Contract 1.0 is the base: timers, state, secrets, status, logging, WebSockets, TCP/TLS and HTTP.
-Contract 1.1 adds `list-items` and `[[pickers]]`. A component built against 1.0 still loads (its
-`ulanzi:plugin/core@1.0.0` imports are served by 1.1), it just has no lists. Contract 1.2 changes no
-interface, only the manifest: plugin icons and colour, ready-made keys (`[[key_sets]]`), live looks and
-label values (`states`, `labels`, `track`), `show_if` and `min_app`. More arrives as minor versions
-(1.3, …) when the features that need them are built, and they only add, so older plugins keep working:
+| Version | Adds |
+|---|---|
+| 1.0 | Timers, state, secrets, status, logging, WebSockets, TCP/TLS and HTTP. |
+| 1.1 | `list-items` and `[[pickers]]`. Components built against 1.0 still load (their `ulanzi:plugin/core@1.0.0` imports are served by 1.1) but have no lists. |
+| 1.2 | Manifest only, no interface changes: plugin icons and colour, ready-made keys (`[[key_sets]]`), live looks and label values (`states`, `labels`, `track`), `show_if`, `author` and `min_app`. |
 
-- Interfaces for discovering devices on the network, sign-in flows, listening for connections, D-Bus
-  and running programs.
+Future features will arrive as additive minor versions (1.3 and later), so existing plugins keep
+working. Planned:
+
+- Interfaces for network device discovery, sign-in flows, listening sockets, D-Bus and running
+  programs.
 - New exports: `widget-data` and `render` (widgets and key faces), `on-auth`, `on-discovered` and
   `on-context`.
-- State-driven key faces in the app.
-- Signed packages, a marketplace and a `cargo generate` starter. Until then, plugins are installed from
-  a `.ulanziplugin` file or a folder, both in Developer mode.
+- State-driven key faces.
+- A `cargo generate` template for new plugins.

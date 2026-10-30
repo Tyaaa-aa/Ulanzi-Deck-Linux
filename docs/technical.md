@@ -1,24 +1,23 @@
 # Technical guide
 
-How Ulanzi Deck is put together, where it keeps things, and how to build, test and package it.
-For using the app, see the [user guide](user-guide.md).
+This document covers the architecture of Ulanzi Deck, where it stores data, its D-Bus API, and how
+to build, test and package it. For end-user documentation, see the [user guide](user-guide.md).
 
-**Contents**
-[Architecture](#architecture) ·
-[Crates](#crates) ·
-[Files on disk](#files-on-disk) ·
-[Profile format](#profile-format) ·
-[D-Bus API](#d-bus-api) ·
-[Plugins](#plugins) ·
-[Command line](#command-line) ·
-[Environment variables](#environment-variables) ·
-[Logs](#logs) ·
-[Building](#building) ·
-[Testing](#testing) ·
-[Packaging and releases](#packaging-and-releases) ·
-[The deck's protocol](#the-decks-protocol)
+## Contents
 
----
+- [Architecture](#architecture)
+- [Crates](#crates)
+- [Files on disk](#files-on-disk)
+- [Profile format](#profile-format)
+- [D-Bus API](#d-bus-api)
+- [Plugins](#plugins)
+- [Command line](#command-line)
+- [Environment variables](#environment-variables)
+- [Logs](#logs)
+- [Building](#building)
+- [Testing](#testing)
+- [Packaging and releases](#packaging-and-releases)
+- [Device protocol](#device-protocol)
 
 ## Architecture
 
@@ -53,62 +52,66 @@ flowchart LR
     Act -->|MPRIS, wpctl/pactl, uinput| session
 ```
 
-- **`ulanzi-deckd`** is the only program that talks to the deck. It runs as a systemd user service
-  (D-Bus activated on demand), so keys work with the window closed.
-- **The deck actor** owns the connection: it turns key/dial reports into actions, draws keys and the
-  wide screen, and uploads only what changed (partial updates, at most one upload per 500 ms).
-- **The app** is a client: it edits a profile locally (with undo) and sends it with `ApplyProfile`.
-  A revision number per profile stops two clients from overwriting each other.
-- Everything that can run without I/O (protocol, rendering, models, matching, OBS messages) is pure
-  code with unit tests; I/O sits at the edges.
+- `ulanzi-deckd` is the only process that communicates with the deck. It runs as a systemd user
+  service (also D-Bus activated), so keys work while the window is closed.
+- The deck actor owns the device connection. It maps key and dial reports to actions, renders keys
+  and the wide screen, and uploads only what changed (partial updates, at most one upload every
+  500 ms).
+- The GUI is a client. It edits a profile locally, with undo, and sends it with `ApplyProfile`. A
+  per-profile revision number prevents concurrent clients from overwriting each other.
+- Logic that does not need I/O (protocol, rendering, data model, window matching, file upgrades) is
+  kept free of side effects and unit tested; I/O is confined to the edges.
 
 ## Crates
 
 | Crate | Kind | Responsibility |
 |---|---|---|
 | `ulanzi-proto` | lib | The deck's USB protocol: report framing, commands, input parsing, the ZIP the deck expects |
-| `ulanzi-core` | lib | Profile and settings model, storage, key and wide-screen rendering, icons, catalog of actions, bundles, templates, backups, migration from version 1 |
-| `ulanzi-plugin` | lib | The plugin SDK and the contract (`wit/plugin.wit`, package `ulanzi:plugin@1.1.0`); plugins build to WebAssembly, and a test harness runs them natively |
-| `ulanzi-deckd` | bin + lib | The service: device I/O and hot-plug, deck actor, actions, OBS client, plugin host, widgets data, focus tracking, tray, D-Bus API |
-| `ulanzictl` | bin | Command-line client (including `plugin`), plus `probe` for talking to the deck directly |
+| `ulanzi-core` | lib | Profile and settings model, storage, key and wide-screen rendering, icons, action catalog, bundles, templates, backups, file format upgrades, migration from version 1, plugin manifests and store index |
+| `ulanzi-plugin` | lib | Plugin SDK and contract (`wit/plugin.wit`, package `ulanzi:plugin@1.1.0`). Plugins compile to WebAssembly; a test harness runs them natively |
+| `ulanzi-deckd` | bin + lib | The service: device I/O and hot-plug, deck actor, actions, plugin host and store client, widget data, focus tracking, tray, D-Bus API |
+| `ulanzictl` | bin | Command-line client, including plugin management and `probe` for direct device access |
 | `ulanzi-deck` | bin + lib | The GTK app |
 
-Rust edition 2024, toolchain pinned in `rust-toolchain.toml`. Examples live in `examples/plugins/`
-(`hello`). Main dependencies: gtk4-rs/libadwaita,
-zbus (D-Bus), tokio, wasmtime (plugins), oo7 (plugin secrets), resvg/tiny-skia and cosmic-text (drawing), tokio-tungstenite (OBS), ureq (weather,
-album art), ksni (tray), x11rb (X11 focus), evdev (virtual keyboard).
+The workspace uses Rust edition 2024, with the toolchain pinned in `rust-toolchain.toml`. The example
+plugin is in `examples/plugins/hello`. Main dependencies: gtk4-rs and libadwaita, zbus (D-Bus),
+tokio, wasmtime (plugin host), oo7 (plugin secrets), minisign-verify and sha2 (plugin signatures),
+resvg, tiny-skia and cosmic-text (rendering), tokio-tungstenite (plugin WebSockets), ureq (weather,
+album art, plugin store), ksni (tray), x11rb (X11 focus) and evdev (virtual keyboard).
 
 ## Files on disk
 
 | Path | What |
 |---|---|
-| `~/.config/ulanzi-deck/settings.toml` | Settings (mode 0600; plugin passwords found in it move to the plugin's secret store) |
+| `~/.config/ulanzi-deck/settings.toml` | Settings (mode 0600). Plugin passwords found here are moved to the plugin's secret store |
+| `~/.config/ulanzi-deck/before-2.1/` | Copies of 2.0 configuration files, made once before they are upgraded to file format 2 |
 | `~/.config/ulanzi-deck/profiles/<uuid>/profile.toml` | One profile |
 | `~/.config/ulanzi-deck/profiles/<uuid>/icons/` | Pictures used by that profile |
 | `~/.local/state/ulanzi-deck/snapshots/` | Backups (`YYYYmmdd-HHMMSS-NNN-reason.ulanzideck`, newest 20 kept) |
-| `~/.local/state/ulanzi-deck/onboarded` | Set when the first-run setup was finished |
+| `~/.local/state/ulanzi-deck/onboarded` | Created when first-run setup completes |
 | `~/.local/state/ulanzi-deck/kwin-focus.js` | The KWin script used for auto-switch on Plasma |
 | `~/.config/ulanzi-deck/plugin-secrets.toml` | Plugin secrets when no system keyring answers (mode 0600) |
-| `~/.local/share/ulanzi-deck/plugins/<id>/` | An installed plugin: `plugin.toml`, `plugin.wasm`, optional `assets/` |
+| `~/.local/share/ulanzi-deck/plugins/<id>/` | An installed plugin: `plugin.toml`, `plugin.wasm`, optional `assets/`, and a `.verified` marker for signed installs |
+| `~/.local/share/ulanzi-deck/plugins/.store-index.json`, `.store-icons/` | Cached plugin store index (with its signature) and icons |
 | `~/.cache/ulanzi-deck/plugins/` | Compiled plugins (safe to delete) |
 | `~/.cache/ulanzi-deck/art/` | Album art (downloaded or copied from players; newest 100 kept) |
-| `~/.local/share/ulanzi-deck/templates/` | Your own templates (`.ulanzideck`) |
-| `/etc/udev/rules.d/70-ulanzi-deck.rules` (or `/usr/lib/udev/rules.d/`) | Lets the logged-in user open the deck and `/dev/uinput` |
+| `~/.local/share/ulanzi-deck/templates/` | User templates (`.ulanzideck`) |
+| `/etc/udev/rules.d/70-ulanzi-deck.rules` (or `/usr/lib/udev/rules.d/`) | Grants the logged-in user access to the deck and `/dev/uinput` |
 
 All paths follow `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `XDG_DATA_HOME`.
-A profile file that doesn't parse is moved aside as `profile.toml.invalid-<time>` and reported, never
-silently dropped.
+A profile file that fails to parse is renamed to `profile.toml.invalid-<time>` and reported; it is
+never discarded silently.
 
-A **`.ulanzideck` bundle** is a ZIP with `manifest.toml`, optionally `settings.toml` (never with plugin
-passwords) and `profiles/<uuid>/{profile.toml, icons/…}`. Imports check every path, cap the total
-size at 50 MB and decode every image before accepting it.
+A `.ulanzideck` bundle is a ZIP archive containing `manifest.toml`, optionally `settings.toml`
+(without plugin secrets), and `profiles/<uuid>/{profile.toml, icons/…}`. Imports validate every
+path, limit the total size to 50 MB and decode every image before accepting it.
 
 ## Profile format
 
-A shortened `profile.toml`:
+An abbreviated `profile.toml`:
 
 ```toml
-version = 1
+version = 2
 id = "5a6bf8b2-cfa3-4a80-a8fc-f365e7234fd8"
 name = "Media Desk"
 model = "D200X"
@@ -141,12 +144,15 @@ type = "media"
 control = "play_pause"
 ```
 
-`ulanzictl validate [file]` checks profile files and prints what is wrong, with line numbers.
+`ulanzictl validate [file]` checks profile files and reports errors with line numbers.
+
+Files written by Ulanzi Deck 2.0 (format version 1) are upgraded when read: built-in OBS actions
+become `plugin = "obs"` actions, and the `[obs]` settings table moves to `[plugins.obs.settings]`.
 
 ## D-Bus API
 
 Bus name `io.github.tyaaa_aa.UlanziDeck.Service`, object `/io/github/tyaaa_aa/UlanziDeck`,
-interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). Explore it with
+interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). To inspect it, run
 `busctl --user introspect io.github.tyaaa_aa.UlanziDeck.Service /io/github/tyaaa_aa/UlanziDeck`.
 
 | Group | Methods |
@@ -155,29 +161,39 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). Explore it with
 | Settings | `GetSettings`, `ApplySettings` (TOML; plugin secrets are never sent back, a placeholder keeps them) |
 | Sharing and backups | `PreviewBundle`, `BundleCommands`, `ImportBundle`, `ExportBundle`, `ListSnapshots`, `TakeSnapshot`, `RestoreSnapshot`, `Migrate` |
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
-| Widgets | `NowPlaying`, `WeatherPlaces`, `WeatherNow` |
+| Widgets and sound | `NowPlaying`, `WeatherPlaces`, `WeatherNow`, `PlaySound` (path, device, volume) |
+| Plugin store | `PluginStoreIndex` (refresh; the signed index as JSON, from cache when recent), `PluginStoreInstall` (id; reports `PluginInstallProgress`), `PluginVerified` and `PluginOfficial` (ids of installed plugins that are signed, and signed as official) |
 | Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginInstallFile` / `PluginInspectFile` (the same for a `.ulanziplugin` package: an absolute path; installing needs Developer mode, inspecting does not; the package is unpacked into a hidden `.unpack-*` folder inside the plugins folder, limits 64 MiB file, 1000 entries, 64 MiB unpacked), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
 
 Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
-`ActionFailed`, `PluginsChanged`.
+`ActionFailed`, `PluginsChanged`, and `PluginInstallProgress` (id, stage, bytes done, bytes total;
+stage is `preparing`, `downloading`, `checking` or `installing`).
 
 ## Plugins
 
-Plugins are WebAssembly components run by wasmtime inside `ulanzi-deckd`, one instance each, with
-64 MiB of memory, 500 ms per call and no access to files or sockets except through the host, which
-checks every connection against the plugin's permissions. A crash restarts the plugin once; a second
-one within 5 minutes leaves it `failed`. The deck starts first; the plugins are loaded and compiled
-in the background (a plugin key pressed meanwhile reports "plugins are still starting", and the D-Bus
-plugin methods "plugins are not running yet"), and the keyring is asked only when a plugin first needs
-its secrets. The contract, permissions and limits are in the
-[plugin guide](plugins.md). Each plugin has `[plugins.<id>]` in `settings.toml` (`enabled`, plus a `[plugins.<id>.settings]` subtable passed to the plugin); a plugin's state
-reaches key labels as `{<id>.<key>}`.
+Plugins are WebAssembly components run by wasmtime inside `ulanzi-deckd`, one instance per plugin.
+Each has 64 MiB of memory and 500 ms per call, and can reach files or the network only through the
+host, which checks every connection against the plugin's permissions. A plugin that crashes is
+restarted once; a second crash within 5 minutes marks it `failed`.
 
-Two paths go through the host besides actions. A `.ulanziplugin` file (a ZIP) is unpacked into a hidden
-temporary folder in the plugins folder, with its limits counted while unpacking, then checked and
-installed like a folder (`plugins/package.rs`, `PluginInspectFile`, `PluginInstallFile`). A picker
-opens with `PluginListItems`: the host starts the plugin if it is not running, sends it a `list-items`
-event with the 500 ms budget, and bounds the answer (5000 entries, cut text) before the app sees it.
+The deck starts before any plugin. Plugins are loaded and compiled in the background; until then, a
+plugin key reports "plugins are still starting" and the D-Bus plugin methods return "plugins are not
+running yet". The keyring is contacted only when a plugin first needs its secrets.
+
+Each plugin has a `[plugins.<id>]` table in `settings.toml` with `enabled` and a
+`[plugins.<id>.settings]` subtable that is passed to the plugin. Values a plugin publishes are
+available in key labels as `{<id>.<key>}`. The contract, permissions and limits are documented in
+the [plugin guide](plugins.md).
+
+Besides actions, two other paths go through the host:
+
+- Package installs. A `.ulanziplugin` file (a ZIP archive) is unpacked into a hidden temporary
+  folder inside the plugins folder, with size limits enforced during extraction, then validated and
+  installed like a folder (`plugins/package.rs`, `PluginInspectFile`, `PluginInstallFile`). Store
+  installs additionally check the SHA-256 from the signed index and the package's minisign
+  signature (`plugins/store.rs`, `plugins/signature.rs`).
+- Pickers. `PluginListItems` starts the plugin if needed, sends a `list-items` event with the
+  500 ms budget, and truncates the result (5000 entries, bounded text) before returning it.
 
 ## Command line
 
@@ -189,8 +205,9 @@ ulanzictl brightness <0-100>
 ulanzictl export <file> [--profile <name>]   ulanzictl import <file> [--skip|--replace]
 ulanzictl snapshots              ulanzictl restore <name>
 ulanzictl validate [file]        check profile files
-ulanzictl plugin list|install <file|folder>|remove|enable|disable|restart|dev-mode on|off
-ulanzictl plugin items <id> <picker> [query] [--group G]   list what a plugin offers for a picker
+ulanzictl plugin list|store|get <id>   installed plugins, the store, install or update from the store
+ulanzictl plugin install <file|folder>|remove|enable|disable|restart <id>|dev-mode on|off
+ulanzictl plugin items <id> <picker> [query] [--group G]   list a plugin's picker entries
 ulanzictl monitor                print presses, page changes and action errors live
 ulanzictl diagnostics            versions, session, device and recent logs (for bug reports)
 ulanzictl migrate                import version 1's ~/.config/ulanzi/config.yaml
@@ -202,20 +219,21 @@ ulanzictl probe …                talk to the deck directly (stop the service f
 | Variable | Effect |
 |---|---|
 | `ULANZI_LOG` | Log filter for the service, e.g. `debug` or `ulanzi_deckd::plugins=debug` |
-| `ULANZI_DEMO=1` | The service uses a pretend deck: nothing touches the hardware (screenshots, tests) |
-| `ULANZI_BIN` | `scripts/sandbox.sh`: which folder's binaries to run |
+| `ULANZI_DEMO=1` | The service uses a simulated deck and does not access hardware (screenshots, tests) |
+| `ULANZI_BIN` | `scripts/sandbox.sh`: directory of the binaries to run |
+| `ULANZI_PLUGINS_REPO` | `scripts/screenshots.sh`: path to a Ulanzi-Deck-Plugins checkout (default `../Ulanzi-Deck-Plugins`) |
 
 ## Logs
 
 - Under systemd: `journalctl --user -u ulanzi-deckd -f`
-- Started by hand: a daily file in `~/.local/state/ulanzi-deck/` (`daemon.*.log`, three kept)
-- `ULANZI_LOG=debug systemctl --user restart ulanzi-deckd` is not enough (systemd drops the
-  variable); use `systemctl --user edit ulanzi-deckd` and add `Environment=ULANZI_LOG=debug`.
+- Started manually: a daily file in `~/.local/state/ulanzi-deck/` (`daemon.*.log`, three kept).
+- To enable debug logging for the service, run `systemctl --user edit ulanzi-deckd` and add
+  `Environment=ULANZI_LOG=debug`. Setting the variable on the `systemctl` command line has no effect.
 
 ## Building
 
-Requirements: Rust (the version in `rust-toolchain.toml`, installed automatically by rustup), GTK 4.16+
-and libadwaita 1.6+ development files, pkg-config.
+Requirements: Rust (the version in `rust-toolchain.toml`; rustup installs it automatically),
+development files for GTK 4.16 or later and libadwaita 1.6 or later, and pkg-config.
 
 ```sh
 # Arch:   sudo pacman -S --needed gtk4 libadwaita pkgconf
@@ -232,30 +250,31 @@ scripts/dev-uninstall.sh
 scripts/test.sh            # format, clippy (warnings are errors), every test, file validation,
                            # and an end-to-end run of the service, CLI and app on a private bus
 scripts/test.sh --quick    # without the end-to-end part
-scripts/sandbox.sh --demo  # the app with a pretend deck and throwaway profiles
-scripts/sandbox.sh --showcase   # the real deck on throwaway profiles (your service pauses)
+scripts/sandbox.sh --demo  # the app with a simulated deck and temporary profiles
+scripts/sandbox.sh --showcase   # the real deck with temporary profiles (pauses your service)
 ```
 
-Tests never touch your configuration. Plugins are tested in the plugins repo, in the real plugin host
-against mock OBS and Home Assistant servers; the deck actor against a mock transport with a paused clock.
-[TESTING.md](../TESTING.md) is the hands-on checklist before a release.
+Tests never modify your configuration. The deck actor is tested against a mock transport with a
+paused clock. Plugins are tested in the plugins repository, in the real plugin host against mock OBS
+and Home Assistant servers. [TESTING.md](../TESTING.md) is the manual checklist used before each
+release.
 
 ## Packaging and releases
 
 | Script | Does |
 |---|---|
-| `scripts/stage.sh PREFIX DESTDIR` | Lays out the installed tree for any prefix (used by every package) |
-| `scripts/release.sh` | Builds the tarball (with `install.sh`/`uninstall.sh`), `.deb`, `.rpm`, Arch package (`PKGBUILD` + `.SRCINFO`), AppImage, source tarball and `SHA256SUMS` into `dist/` |
+| `scripts/stage.sh PREFIX DESTDIR` | Stages the installed file tree for a given prefix (used by every package format) |
+| `scripts/release.sh` | Builds the tarball (with `install.sh` and `uninstall.sh`), `.deb`, `.rpm`, Arch package (`PKGBUILD` and `.SRCINFO`), AppImage, source tarball and `SHA256SUMS` in `dist/` |
 | `scripts/publish.sh` | Dry run by default; `--go` pushes, tags `v<version>` and creates the GitHub release |
-| `scripts/screenshots.sh` | README screenshots from the showcase profiles in a sandbox |
+| `scripts/screenshots.sh` | Captures the README screenshots from the showcase profiles in a sandbox, with the OBS and Home Assistant plugins built from the plugins repository |
 
 Packaging files: `packaging/systemd` (user unit, `@BINDIR@` filled in at install),
 `packaging/dbus` (activation file), `packaging/udev`, `packaging/arch/PKGBUILD`,
 `packaging/appimage/AppRun` (`--install`, `--service`, `--ctl`), `packaging/tarball`,
-`packaging/gnome-extension`. The `.deb` and `.rpm` metadata live in `crates/ulanzi-deck/Cargo.toml`
+`packaging/gnome-extension`. The `.deb` and `.rpm` metadata are in `crates/ulanzi-deck/Cargo.toml`
 (cargo-deb, cargo-generate-rpm).
 
-## The deck's protocol
+## Device protocol
 
-[hardware-notes.md](hardware-notes.md) has everything measured on real hardware: input indices,
-the upload format, partial updates, locking and the keep-alive.
+[hardware-notes.md](hardware-notes.md) documents the protocol as observed on real hardware: input
+indices, the upload format, partial updates, locking and the keep-alive.

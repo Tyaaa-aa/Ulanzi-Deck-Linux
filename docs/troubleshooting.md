@@ -1,105 +1,121 @@
 # Troubleshooting
 
-Find the symptom, try the steps in order. Still stuck? [Open an issue](../CONTRIBUTING.md#reporting-a-bug)
-and include the output of `ulanzictl diagnostics`.
+Find the symptom below and work through the steps in order. If the problem remains,
+[open an issue](../CONTRIBUTING.md#reporting-a-bug) and include the output of `ulanzictl diagnostics`.
 
-**Contents**
-[The deck isn't found](#the-deck-isnt-found) ·
-[The window says the service isn't running](#the-window-says-the-service-isnt-running) ·
-[Keys don't react](#keys-dont-react) ·
-[Shortcuts or Type Text do nothing](#shortcuts-or-type-text-do-nothing) ·
-[Auto-switch doesn't work](#auto-switch-doesnt-work) ·
-[OBS won't connect](#obs-wont-connect) ·
-[Now Playing shows nothing](#now-playing-shows-nothing) ·
-[Weather says unavailable](#weather-says-unavailable) ·
-[No tray icon](#no-tray-icon) ·
-[Starting over](#starting-over)
+## Contents
 
----
+- [The deck is not detected](#the-deck-is-not-detected)
+- [The service is not running](#the-service-is-not-running)
+- [Keys do not respond](#keys-do-not-respond)
+- [Keyboard Shortcut or Type Text does nothing](#keyboard-shortcut-or-type-text-does-nothing)
+- [Auto-switch doesn't work](#auto-switch-doesnt-work)
+- [A plugin does not install](#a-plugin-does-not-install)
+- [OBS does not connect](#obs-does-not-connect)
+- [Now Playing is empty](#now-playing-is-empty)
+- [Weather is unavailable](#weather-is-unavailable)
+- [No tray icon](#no-tray-icon)
+- [Resetting the configuration](#resetting-the-configuration)
 
-## The deck isn't found
+## The deck is not detected
 
-1. Unplug the deck, wait two seconds, plug it in again (directly, not through a hub, if you can).
-2. *This computer needs permission to use the deck*: press **Fix…** on that bar (or menu ☰ →
-   **Set Up Deck** → **Grant Access…**), type your password, then unplug and replug the deck.
-3. *Another program is using the deck*: close Ulanzi Studio (in Wine) or any other program using it.
-   `ulanzictl status` names it.
-4. Check that Linux sees it: `lsusb | grep -i 2207` should list a device `2207:0019`.
+1. Disconnect the deck, wait two seconds and reconnect it. Connect it directly rather than through a
+   hub if possible.
+2. If the window reports that the computer needs permission to use the deck, select **Fix…** (or
+   open the main menu, select **Set Up Deck**, then **Grant Access…**), enter your password, and
+   reconnect the deck.
+3. If the window reports that another program is using the deck, close it. This is usually Ulanzi
+   Studio running under Wine. `ulanzictl status` shows which program holds the device.
+4. Check that the system sees the device: `lsusb | grep -i 2207` should list `2207:0019`.
 
-## The window says the service isn't running
+## The service is not running
 
-On the bar *The Ulanzi Deck service is not running*, press **Start**, or run:
+Select **Start** on the warning bar, or run:
 
 ```sh
 systemctl --user enable --now ulanzi-deckd
 ```
 
-If it stops again, `journalctl --user -u ulanzi-deckd -n 50` shows why. Exit code 3 means another
-copy is already running (for example one started from an AppImage): quit that one from its tray icon.
+If the service stops again, `journalctl --user -u ulanzi-deckd -n 50` shows the reason. Exit code 3
+means another instance is already running, for example one started from an AppImage; quit it from
+its tray icon.
 
-## Keys don't react
+## Keys do not respond
 
-- The deck locks itself after about two minutes without contact; the service keeps it awake. If keys
-  stopped after the computer slept, unplug and replug the deck.
-- `ulanzictl monitor` prints every press. Nothing printed: see [The deck isn't found](#the-deck-isnt-found).
-  Presses printed but nothing happens: the key's action reports its error in the window (a message at
-  the bottom) and in `ulanzictl monitor`.
-- A key with a **⚠** badge can't work as set up; click it to see why.
+- The deck locks itself after about two minutes without a connection, and the service keeps it
+  awake. If the keys stopped responding after the computer resumed from sleep, reconnect the deck.
+- `ulanzictl monitor` prints every key press. If nothing is printed, see
+  [The deck is not detected](#the-deck-is-not-detected). If presses are printed but nothing
+  happens, the action's error is shown at the bottom of the main window and in `ulanzictl monitor`.
+- A key with a **⚠** badge cannot run as configured. Select it to see the reason.
 
-## Shortcuts or Type Text do nothing
+## Keyboard Shortcut or Type Text does nothing
 
-- These need permission to create a virtual keyboard (`/dev/uinput`). **Preferences → Integrations →
-  Shortcuts and Typing** says whether it's allowed; **Set Up Deck → Grant Access…** fixes it.
-- Type Text with letters a US keyboard lacks (é, ß, emoji…) pastes through the clipboard and needs
-  `wl-clipboard` (Wayland) or `xclip` (X11).
-- If your keyboard layout isn't US, Type Text may produce different symbols for punctuation. Letters
-  and digits work on most Latin layouts.
+- Both actions need access to `/dev/uinput` to create a virtual keyboard. **Preferences →
+  Integrations → Shortcuts and Typing** shows whether access is granted; **Set Up Deck → Grant
+  Access…** grants it.
+- Type Text pastes characters that are not on a US keyboard (accented letters, emoji) through the
+  clipboard, which requires `wl-clipboard` on Wayland or `xclip` on X11.
+- With a keyboard layout other than US, Type Text may produce different punctuation. Letters and
+  digits work on most Latin layouts.
 
 ## Auto-switch doesn't work
 
-Right-click a profile → **Auto-Switch**: the top line says what your desktop supports.
+Right-click a profile and select **Auto-Switch**. The first line of the dialog shows whether your
+desktop is supported.
 
-- **KDE Plasma**: built in. If it says *waiting*, switch windows once.
-- **GNOME**: enable the extension that comes with Ulanzi Deck, then log out and in:
-  ```sh
-  gnome-extensions enable ulanzi-deck-focus@tyaaa-aa.github.io
-  ```
-- **Hyprland, Sway, X11**: built in.
-- **COSMIC and other Wayland desktops**: not possible yet (they don't tell other apps which window is
-  in front).
-- Make sure **Auto-Switch** is on (top of the sidebar; the tray icon shows a coloured dot).
-
-## OBS won't connect
-
-OBS works through the OBS Studio plugin. Open **Plugins → OBS Studio**: its status says what's wrong.
-
-| It says | Do this |
+| Desktop | Support |
 |---|---|
-| Not installed | **Plugins → Discover → OBS Studio → Install** |
-| OBS is closed or its WebSocket server is off | Start OBS; in OBS: Tools → WebSocket Server Settings → Enable WebSocket server |
-| Password needed / rejected | OBS: Tools → WebSocket Server Settings → Show Connect Info; type the password in **Plugins → OBS Studio** |
-| Wrong port | Use the port Show Connect Info shows (4455 unless you changed it) |
-| OBS 28 or newer needed | Update OBS |
+| KDE Plasma | Supported. If the dialog says it is waiting, switch windows once. |
+| GNOME | Requires the bundled shell extension. Enable it, then log out and back in: `gnome-extensions enable ulanzi-deck-focus@tyaaa-aa.github.io` |
+| Hyprland, Sway, X11 | Supported. |
+| COSMIC and other Wayland compositors | Not supported. These compositors do not expose the focused window to other applications. |
 
-## Now Playing shows nothing
+Also check that **Auto-Switch** is on at the top of the sidebar. When it is, the tray icon shows a
+coloured dot.
 
-- Your player must support MPRIS (Spotify, VLC, most browsers, Elisa, Strawberry… do).
-  `busctl --user list | grep mpris` lists the players Linux sees.
-- Browser videos: KDE's *Plasma Browser Integration* extension gives the best titles and album art.
+## A plugin does not install
 
-## Weather says unavailable
+| Message | Cause and fix |
+|---|---|
+| Can't reach the plugin store | No network connection, or GitHub is unreachable. The Discover page keeps showing the last list it downloaded, but installs need a connection. |
+| The signature does not match | The package was modified or was not signed by the plugin store. Download it again from the store. |
+| Needs Ulanzi Deck *version* or newer | The plugin requires a newer version of the app. Update Ulanzi Deck. |
+| Turn on Developer Mode to install unverified plugins | The file has no valid signature. Enable **Developer Mode** in the plugin manager only for plugins you trust. |
 
-- It needs an internet connection; the forecast refreshes every 15 minutes.
-- *Can't find "…"*: open the widget and choose the place with **Place → Choose…** instead of typing it.
+## OBS does not connect
+
+Open **Plugins → Installed → OBS Studio**. The status line describes the problem.
+
+| Status | Fix |
+|---|---|
+| Not installed | Install it from **Plugins → Discover**. |
+| OBS is closed or its WebSocket server is off | Start OBS, then enable the server in **Tools → WebSocket Server Settings**. |
+| Password needed or rejected | In OBS, open **Tools → WebSocket Server Settings → Show Connect Info**, and enter the password in the plugin's settings. |
+| Wrong port | Use the port shown in **Show Connect Info** (4455 by default). |
+| OBS 28 or newer needed | Update OBS. |
+
+## Now Playing is empty
+
+- The player must support MPRIS. Spotify, VLC, Elisa, Strawberry and most browsers do.
+  `busctl --user list | grep mpris` lists the players the system can see.
+- For media playing in a browser, KDE's Plasma Browser Integration extension provides better titles
+  and album art.
+
+## Weather is unavailable
+
+- The widget needs an internet connection. The forecast refreshes every 15 minutes.
+- If the location cannot be found, open the widget settings and select it with **Place → Choose…**
+  instead of typing it.
 
 ## No tray icon
 
-- GNOME needs the *AppIndicator and KStatusNotifierItem Support* extension.
-- **Preferences → General → Tray Icon** must be on.
+- On GNOME, install the AppIndicator and KStatusNotifierItem Support extension.
+- Check that **Preferences → General → Tray Icon** is on.
 
-## Starting over
+## Resetting the configuration
 
-Your setup lives in `~/.config/ulanzi-deck`. To start fresh but keep a copy:
+The configuration is stored in `~/.config/ulanzi-deck`. To reset it while keeping a copy:
 
 ```sh
 ulanzictl export ~/ulanzi-before-reset.ulanzideck
@@ -108,5 +124,5 @@ mv ~/.config/ulanzi-deck ~/.config/ulanzi-deck.old
 systemctl --user start ulanzi-deckd
 ```
 
-Backups made by the app stay in `~/.local/state/ulanzi-deck/snapshots/` and can be restored from
+Automatic backups are kept in `~/.local/state/ulanzi-deck/snapshots/`. Restore one from
 **Preferences → Backups** or with `ulanzictl restore <name>`.

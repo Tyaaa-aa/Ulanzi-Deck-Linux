@@ -1,270 +1,283 @@
-# Ulanzi Deck user guide
+# User guide
 
-Everything you can do with Ulanzi Deck, from plugging the deck in to sharing your setup.
-No technical knowledge needed. If something doesn't work, see [Troubleshooting](troubleshooting.md).
+This guide covers setting up the deck, configuring keys, dials and the wide screen, and managing
+profiles, plugins and backups. For problems, see [Troubleshooting](troubleshooting.md).
 
-**Contents**
-[First start](#first-start) ·
-[The window](#the-window) ·
-[Keys](#keys) ·
-[Actions](#actions) ·
-[Dials and small buttons](#dials-and-small-buttons) ·
-[The wide screen](#the-wide-screen) ·
-[Profiles, pages and folders](#profiles-pages-and-folders) ·
-[Switching with the app in front](#switching-with-the-app-in-front) ·
-[OBS Studio](#obs-studio) ·
-[Templates, sharing and backups](#templates-sharing-and-backups) ·
-[Preferences](#preferences) ·
-[The tray icon](#the-tray-icon) ·
-[Keyboard shortcuts](#keyboard-shortcuts)
+## Contents
 
----
+- [First start](#first-start)
+- [The main window](#the-main-window)
+- [Keys](#keys)
+- [Actions](#actions)
+- [Dials and small buttons](#dials-and-small-buttons)
+- [The wide screen](#the-wide-screen)
+- [Profiles, pages and folders](#profiles-pages-and-folders)
+- [Auto-switch](#auto-switch)
+- [Plugins](#plugins)
+- [OBS Studio](#obs-studio)
+- [Templates, sharing and backups](#templates-sharing-and-backups)
+- [Preferences](#preferences)
+- [Tray icon](#tray-icon)
+- [Keyboard shortcuts](#keyboard-shortcuts)
 
 ## First start
 
-1. Install Ulanzi Deck (see the [README](../README.md#install)) and plug in your D200 or D200X.
-2. Open **Ulanzi Deck** from your app menu. The setup walks you through four short steps:
-   - **Connect**: it finds the deck and shows its model.
-   - **Permission**: Linux needs a one-time rule so your user can talk to the deck and press keys
-     for you. Press **Grant Access…** and type your password once. (Prefer the terminal? The page
-     shows the exact command.)
-   - **Bring your setup over**: if you used version 1 (the Python app), import its keys in one click,
-     or start empty, or start from a template.
-   - **Background service**: turn on **Start at Login** so the deck works without the window open.
-3. You're done. Changes reach the deck as you make them. There is no Save button.
+1. Install Ulanzi Deck (see the [README](../README.md#install)) and connect your D200 or D200X.
+2. Open Ulanzi Deck from the application menu. The setup assistant has four steps:
+   1. Connect: detects the deck and shows its model.
+   2. Permission: installs a udev rule so your user account can access the deck and send key
+      presses. Select **Grant Access…** and enter your password. The page also shows the equivalent
+      terminal command.
+   3. Import: imports keys from version 1 (the Python app), or starts with an empty profile or a
+      template.
+   4. Background service: enable **Start at Login** so the deck works while the window is closed.
 
-> [!TIP]
-> You can reopen the setup any time from the menu (☰) → **Set Up Deck**.
+Changes are applied to the deck immediately; there is no save step. To run the setup again, open
+the main menu (☰) and select **Set Up Deck**.
 
-## The window
+## The main window
 
-| Area | What it's for |
+| Area | Contents |
 |---|---|
-| **Left: sidebar** | The **Auto-Switch** toggle, your **profiles** and the current profile's **pages**. Brightness at the bottom. |
-| **Middle: the deck** | A drawing of your deck. Click a key, dial, small button or the wide screen to edit it. |
-| **Right: action list / key editor** | With nothing selected, the **action list** to drag from. Click a key to edit it; **×** at the top of the panel (or **Escape**) closes the editor and brings the list back. |
-| **Header** | Connection status, undo/redo, **Plugins** (the puzzle piece) and the main menu (☰). |
+| Sidebar (left) | The Auto-Switch toggle, profiles, the pages of the current profile, and brightness. |
+| Deck (centre) | A preview of the deck. Select a key, dial, small button or the wide screen to edit it. |
+| Side panel (right) | The action list when nothing is selected, or the editor for the selection. Close the editor with **×** or Escape. |
+| Header bar | Connection status, undo and redo, the **Plugins** button and the main menu. |
 
-Narrow window? The sidebar folds away; the button at the top left brings it back.
+In a narrow window the sidebar is hidden; the button at the top left shows it.
 
 ## Keys
 
-Click a key to edit it. The editor shows the key's preview at the top and, under it, buttons for
-its sections: **Look**, **Label**, **Press** and **Hold**. The section you pick stays open when you
-click another key. **Clear Key** at the bottom empties the key.
+Select a key to open its editor. The editor has four sections:
 
-A key's editor is one page, top to bottom: **Press** (what it does), **Label**, **When Held** and
-**Look**. When Held and Look are folded into one row each until you open them (they stay open while you
-click from key to key); picking an action already gives the key a matching icon and colours. Every key has:
+- **Press**: the action that runs when the key is pressed. Choosing an action also sets a matching
+  icon and colours.
+- **Label**: the text on the key, and its position (top, middle, bottom or hidden). Labels can
+  include live values such as `{cpu}`, `{ram}`, `{time}`, `{media_title}` and `{timer}`; insert
+  them with the **{ }** button. For plugin actions, **Label Shows** displays a value reported by
+  the plugin instead, such as an OBS scene name or a room temperature.
+- **When Held**: a second action that runs when the key is held for half a second. The hold time
+  is set in Preferences.
+- **Look**: image, background colour, icon colour and icon size. **Choose…** opens the image picker
+  with line icons, brand logos, installed application icons, emoji, Steam games and image files.
+  You can also drop an image file onto a key.
 
-- **Look**: an image, background colour, icon colour and icon size.
-  Press **Choose…** next to Image to pick from:
-  - **Icons** (thousands of clean line icons, searchable),
-  - **Brands** (logos of apps and services),
-  - **Apps** (the icons of apps on your computer),
-  - **Emoji**, **Steam** games, or a **File** of your own (or drag a picture onto a key).
-- **Label**: text on the key. It can show live values: insert `{cpu}`, `{ram}`, `{time}`,
-  `{media_title}`, `{timer}` and more with the **{ }** button. Plugin keys can show their own live
-  values (an OBS scene, a temperature): pick one in **Label Shows**.
-  **Label Position** moves it to the top, middle or bottom of that key, or hides it (**Hidden**).
-- **Show Live State** (in Look): lets the key change with what it controls. A play key turns into pause, a
-  recording key turns red and shows the time, a muted mic turns red.
-- **Press** and **When Held**: two actions per key. When Held runs when you keep the key down for half
-  a second (adjustable in Preferences).
+When Held and Look are collapsed until opened, and stay open as you move between keys. **Clear Key**
+removes everything from the key.
 
-**Keys that change**
-- **Show Live State** (in Look) lets plugin keys follow what they control: a Home Assistant light key
-  turns yellow when the light is on, an air conditioner key shows a blue snowflake while cooling.
-- With a plugin action, **Label Shows** picks a live value for the label (State, Level, Target
-  temperature, Room temperature) instead of text.
-- **Play Sound** has its own **Volume** (a share of Preferences → General → **Sound Volume**) and a
-  **Play** button next to the file, so you can hear it without pressing the key.
-- **Cycle Through Actions** (System) runs a different action on each press: add steps, and give each
-  its own image, colour and label. It starts over after the last one. **Key Shows** picks what the
-  key shows: the step that ran (what the key did, the default) or the next step.
+### Live state
 
-**Working faster**
-- Drag an action from the action list onto a key: the key gets a matching icon and colour. Type in
-  **Search actions** (Ctrl+L) to find one by name, category or plugin; the menu next to it (All,
-  Navigation, System, …, then one per plugin with its logo) shows one category at a time, and clicking
-  a section's name folds it away. Searching inside a category offers **Show … more in All** when other
-  categories have matches too. The key editor's **Choose** / **Change** list works the same way.
-  With a key selected, Ctrl+L shows the list in place of its editor: click an action to give it to
-  the key, or press the × (**Back to the key**) or Escape to return to the editor.
-- **Ctrl+click** several keys to change them all at once.
-- Right-click a key to copy, paste or clear it, or to copy just its style. Drag a key onto another to swap them.
-- **Ctrl+Z** / **Ctrl+Shift+Z** undo and redo anything.
+With **Show Live State** enabled (under Look), a key reflects the state of what it controls. A
+play key switches to pause, a recording key turns red and shows the elapsed time, and a muted
+microphone key turns red. Plugin keys work the same way: a Home Assistant light key turns yellow
+when the light is on, and an air conditioner key shows a blue snowflake while cooling.
 
-A key with a small **⚠** badge can't work as it is: its app isn't installed, its sound file is
-gone, its OBS scene doesn't exist… Click it: the top of the editor says what's wrong.
+### Cycle Through Actions
+
+**Cycle Through Actions** (in System) runs the next of several steps on each press and returns to
+the first step after the last. Each step can have its own image, colour and label. **Key Shows**
+controls whether the key displays the step that last ran (the default) or the step that will run
+next.
+
+### Play Sound
+
+**Play Sound** has its own volume, relative to **Sound Volume** in Preferences → General. Use the
+**Play** button next to the file to preview it.
+
+### Editing several keys
+
+- Drag an action from the action list onto a key. **Search actions** (Ctrl+L) filters by name,
+  category or plugin, and the category menu next to it limits the list to one category or plugin.
+  Select a category heading to collapse it.
+- With a key selected, Ctrl+L shows the action list in place of the editor. Select an action to
+  assign it, or press Escape to return to the editor.
+- Ctrl+click selects several keys, so you can change them together.
+- Right-click a key to copy, paste or clear it, or to copy only its style. Drag a key onto another
+  to swap them.
+- Ctrl+Z and Ctrl+Shift+Z undo and redo any change.
+
+A key with a **⚠** badge cannot run as configured, for example because the application is not
+installed, the sound file is missing or the OBS scene no longer exists. Select the key to see the
+reason at the top of the editor.
 
 ## Actions
 
-| Group | Actions |
+| Category | Actions |
 |---|---|
-| **Navigation** | Next / previous page, go to a page, open a folder, back, switch profile, turn auto-switch on/off |
-| **System** | Run a command (optionally in a terminal), launch an app, open a website or file, keyboard shortcut, type text, multi-step action |
-| **Media** | Play/pause, next, previous, stop, skip back, skip forward (choose a player or use the one playing) |
-| **Audio** | Volume up/down/set, mute, for the default output, the microphone, a specific output device or one app; switch the default output; play a sound |
-| **OBS Studio** | Switch scene, toggle two scenes, show/hide a source, record, stream, replay buffer, virtual camera, mute an input, input volume, filters, studio transition, scene collection, OBS profile, screenshot |
-| **Device** | Brightness up/down/set, sleep the deck, next widget on the wide screen |
-| **Timer** | Start/pause, reset, add minutes |
+| Navigation | Next or previous page, go to page, open folder, back, switch profile, toggle auto-switch |
+| System | Run command (optionally in a terminal), launch application, open website or file, keyboard shortcut, type text, multi action, cycle through actions |
+| Media | Play/pause, next, previous, stop, skip back, skip forward, for a specific player or whichever is playing |
+| Audio | Volume up, down or set, and mute, for the default output, the microphone, a specific device or a single application; switch default output; play sound |
+| Device | Brightness up, down or set, put the deck to sleep, next widget on the wide screen |
+| Timer | Start/pause, reset, add minutes |
 
-Notes:
-- **Keyboard Shortcut**: press **Record** and type the shortcut. Any combination works, Super
-  included; to record a modifier on its own (just Super, say), press and release it. Escape cancels.
-  While recording, the desktop's own shortcuts are paused for the window; GNOME may ask once whether
-  to allow that.
-- **Type Text** types anything a US keyboard can type. For other characters (é, ü, emoji…) it pastes
-  through the clipboard, which needs `wl-clipboard` (Wayland) or `xclip` (X11) installed.
-- **Plugin actions** (OBS Studio, Home Assistant and others you add) appear in the list under their
-  plugin's name. A field that picks something, such as an OBS scene or a Home Assistant light, shows
-  its current value; click it to open a list with a search field (and a group filter when the plugin
-  has one). Some lists let you tick several items, then press **Done**. If the list is empty or the
-  plugin is not connected, you can type the name by hand instead. To add a plugin, open **Preferences
-  → Integrations** and press **Install Plugin…**, then choose a `.ulanziplugin` file. Plugins are
-  unsigned, so this needs **Developer Mode** (on the same page); the dialog shows what the plugin may
-  do before you install.
-- **Multi Action** runs several actions in order, with optional pauses between them.
-- **App volume**: pick an installed app, or press the speaker button to choose from the apps
-  playing sound right now.
+Plugins add their own categories, such as OBS Studio and Home Assistant. See [Plugins](#plugins).
+
+Notes on specific actions:
+
+- **Keyboard Shortcut**: select **Record** and press the shortcut. Any combination works, including
+  Super. To record a single modifier, press and release it. Escape cancels. While recording, the
+  desktop's own shortcuts are suspended for the window; GNOME may ask for permission the first time.
+- **Type Text** types any character on a US keyboard layout directly. Other characters (accented
+  letters, emoji) are pasted through the clipboard, which requires `wl-clipboard` on Wayland or
+  `xclip` on X11.
+- **Multi Action** runs several actions in sequence, with optional delays between them.
+- **App volume**: select an installed application, or use the speaker button to choose from the
+  applications currently playing audio.
+- **Plugin actions**: fields that refer to an item, such as an OBS scene or a Home Assistant
+  entity, open a searchable list (with a group filter where the plugin provides one). Some lists
+  allow multiple selections; confirm with **Done**. If the list is empty or the plugin is not
+  connected, you can enter the name manually.
 
 ## Dials and small buttons
 
-Each **dial** has four slots, one row each in its editor: **Turn Left** and **Turn Right**, **Press**
-and **Hold**; open a row for its settings. Dials belong to the page, so each page can use them differently (**Use This
-Dial on Every Page**, under the slots, copies one to all pages).
-Good dial actions: volume, input volume in OBS, brightness, next/previous page, skip back/forward.
+Each dial has four actions: **Turn Left**, **Turn Right**, **Press** and **Hold**. Dials are
+configured per page; **Use This Dial on Every Page** copies a dial's configuration to all pages of
+the profile. Volume, OBS input volume, brightness, page navigation and media seeking work well on
+dials.
 
-The two **small buttons** beside the dials have one action each.
+The two small buttons next to the dials have one action each.
 
 ## The wide screen
 
-Click the wide screen in the drawing. Its editor has a **Display** section and, with Widgets, a
-**Press** section (**When Pressed**). **Display** offers:
+Select the wide screen in the deck preview to edit it. The **Display** section offers three modes:
 
-- **Clock styles** and **System Stats**: drawn by the deck itself.
-- **Widgets**: drawn by Ulanzi Deck, with a live preview in the window.
+- **Clock** styles and **System Stats**, rendered by the deck firmware.
+- **Widgets**, rendered by Ulanzi Deck, with a live preview in the window.
 
-**Widgets**
+### Widgets
 
 | Widget | Shows |
 |---|---|
-| Clock | Digital, analogue, minimal or split face; 12/24 hours, seconds, date |
-| Now Playing | Song, artist, album art, progress (optionally a blurred cover behind) |
-| System | CPU, memory, GPU, temperature, network, with graphs of the last minute |
-| Timer | A countdown or Pomodoro (focus, then a 5-minute break). Tap the screen to start or pause |
-| Weather | Temperature, conditions and today's high/low. **Place → Choose…** searches towns worldwide |
-| Command Output | The first two lines a command prints, refreshed every few seconds |
-| Pictures | A slideshow of your pictures |
-| OBS Studio | The scene on air, REC and LIVE times, frame rate and dropped frames |
+| Clock | Digital, analogue, minimal or split face; 12 or 24 hours, seconds, date |
+| Now Playing | Title, artist, album art and progress, optionally over a blurred cover |
+| System | CPU, memory, GPU, temperature and network, with one-minute graphs |
+| Timer | A countdown or Pomodoro timer (focus period, then a 5-minute break); tap to start or pause |
+| Weather | Temperature, conditions and the day's high and low; **Place → Choose…** searches locations |
+| Command Output | The first two lines of a command's output, refreshed every few seconds |
+| Pictures | A slideshow from a folder |
+| OBS Studio | Current scene, recording and streaming time, frame rate and dropped frames (requires the OBS Studio plugin) |
 
-- **Add Widget** adds one; the arrows reorder them; the star makes one the **default**, the widget
-  the screen starts on and comes back to.
-- **Rotation**: stay on the default, change every few seconds, or go to the next one when tapped.
-- **Now Playing While Music Plays**: music takes over the screen, and the widgets come back a few
-  seconds after it stops (you choose how many).
-- **Background**: dark, a colour, a gradient or a picture. **Accent Colour** colours hands, bars and graphs.
-- **When Pressed**: give the screen its own tap and hold actions. Without one, a tap plays/pauses
-  music, starts the timer or shows the next widget.
+Widget settings:
 
-Turning the volume (on a key or dial) shows a volume bar on the screen for a moment, with the app's
-or device's name. Turn it off in Preferences → Device → **Show Volume Changes**.
+- **Add Widget** adds a widget. Use the arrows to reorder them and the star to set the default
+  widget, which the screen starts on and returns to.
+- **Rotation**: stay on the default widget, rotate on a timer, or advance on tap.
+- **Now Playing While Music Plays**: shows Now Playing while music is playing and returns to the
+  other widgets a set number of seconds after it stops.
+- **Background**: dark, solid colour, gradient or image. **Accent Colour** sets the colour of
+  clock hands, bars and graphs.
+- **When Pressed**: tap and hold actions for the screen. Without them, a tap plays or pauses
+  media, starts the timer or shows the next widget, depending on the widget.
+
+Volume changes from a key or dial briefly show a volume bar on the screen with the device or
+application name. To turn this off, disable **Show Volume Changes** in Preferences → Device.
 
 ## Profiles, pages and folders
 
-- A **profile** is a complete setup. Make as many as you like (Streaming, Editing, Gaming…).
-  The **+** next to Profiles creates one, empty or from a template. Right-click a profile to rename
-  it, export it, save it as a template, set its auto-switch apps or delete it (a backup is taken
-  first). Drag profiles to reorder them; double-click to rename.
-- **Pages**: a profile can have several pages of keys. The small **‹ ›** buttons on the deck flip
-  through them, or use Next/Previous Page actions.
-- **Folders** are pages you open from a key (**Open Folder**) and leave with **Back**.
+- A **profile** is a complete configuration. Create one with **+** next to Profiles, either empty
+  or from a template. Right-click a profile to rename, export or delete it, save it as a template,
+  or set its auto-switch applications. A backup is made before a profile is deleted. Drag profiles
+  to reorder them, or double-click to rename.
+- A profile can have several **pages**. Switch pages with the **‹ ›** buttons on the deck or with
+  the Next Page and Previous Page actions.
+- A **folder** is a page opened from a key with **Open Folder** and closed with **Back**.
 
-## Switching with the app in front
+## Auto-switch
 
-Ulanzi Deck can change the profile when you switch apps: your editing keys appear when the editor
-is in front, your streaming keys when OBS is.
+Ulanzi Deck can switch profiles based on the focused application, for example to show editing
+controls while a video editor is focused and streaming controls while OBS is.
 
-1. Right-click a profile → **Auto-Switch** and add one or more apps.
+1. Right-click a profile, select **Auto-Switch** and add one or more applications.
 2. Make sure **Auto-Switch** at the top of the sidebar is on.
-3. When none of those apps is in front, the deck goes back to your default profile.
 
-The dialog's top line says whether it works on your desktop. KDE Plasma, Hyprland, Sway and X11
-work out of the box; GNOME needs the small extension that comes with Ulanzi Deck
-(see [Troubleshooting](troubleshooting.md#auto-switch-doesnt-work)).
-While auto-switch is on, the tray icon shows a coloured dot.
+When none of the assigned applications is focused, the deck returns to the default profile.
 
-## OBS Studio
-
-OBS Studio works through the **OBS Studio plugin**:
-
-1. **Plugins** (the puzzle piece) → **Discover** → **OBS Studio** → **Install**.
-2. In OBS (version 28 or newer): **Tools → WebSocket Server Settings → Enable WebSocket server**, then
-   **Show Connect Info** for the password.
-3. In **Plugins → OBS Studio**, type the password (and the port if it isn't 4455). Its status turns to
-   running once it is connected.
-4. Drag OBS actions onto keys and pick scenes, sources, inputs and filters from the lists.
-
-Keys show what's happening: the scene on air green, REC and LIVE with their times, a muted mic red,
-a hidden source dimmed, and every OBS key dimmed while OBS is closed. The plugin connects again by
-itself when OBS starts. Keys from Ulanzi Deck 2.0 move to the plugin by themselves; install the plugin
-and enter the password once.
-
-## Templates, sharing and backups
-
-- **Templates**: Profiles **+** → **From Template** starts from Streaming, Media Desk, Video Editing or
-  Productivity, or from one of your own (**Save as Template** on any profile). A layout for the apps
-  you use every day makes a great template.
-- **Sharing**: right-click a profile → **Export** saves a `.ulanzideck` file. Open one (double-click,
-  drag it onto the window, or menu → **Import**) to add it. If you already have a profile with that
-  name you choose: keep both, replace or skip. Your OBS password is never included.
-- **Backups**: Ulanzi Deck backs everything up once a day and before any import, delete or restore
-  (the newest 20 are kept). **Preferences → Backups** lists them; **Restore…** brings one back, and the
-  setup you had is backed up first.
-
-## Preferences
-
-Menu (☰) → **Preferences** (**Ctrl+,**):
-
-| Page | Settings |
-|---|---|
-| **General** | Light/dark style, **Start at Login**, tray icon, switch profiles by app, hold time |
-| **Device** | Brightness, sleep after inactivity and how dim, **Show Volume Changes**, label style (hide all, position, colour) |
-| **Integrations** | OBS Studio connection; whether keyboard shortcuts and typing are allowed; a link to **Plugins** |
-| **Backups** | Back up now, restore, open the backups folder |
+The dialog shows whether auto-switch is supported on your desktop. KDE Plasma, Hyprland, Sway and
+X11 are supported directly; GNOME requires the bundled shell extension (see
+[Troubleshooting](troubleshooting.md#auto-switch-doesnt-work)). While auto-switch is on, the tray
+icon shows a coloured dot.
 
 ## Plugins
 
-The puzzle piece in the header opens **Plugins**. Nothing comes preinstalled: add what you use.
+Plugins add actions, widgets and integrations with other software. None are installed by default.
+Open the plugin manager with the **Plugins** button in the header bar.
 
-- **Discover** is the plugin store: search, pick a category, and press **Install**. Store plugins are
-  signed and checked before they install (**Verified**). **Update** appears when a newer version is out;
-  a plugin made for a newer Ulanzi Deck says which version it needs.
-- **Installed** lists your plugins with their status, an on/off switch and a check mark for verified
-  ones. Click one for its settings (a password or token, an address), Restart and Remove.
-  **Install Plugin…** installs a `.ulanziplugin` file: signed ones right away, unsigned ones only with
-  **Developer Mode** on.
+- **Discover** lists the plugins in the plugin store. Search or filter by category, then select
+  **Install**. Store plugins are signed, and the signature is checked before installation. When a
+  newer version is available, **Update** appears. Plugins that need a newer version of Ulanzi Deck
+  state the required version.
+- **Installed** lists installed plugins with their status and an on/off switch; verified plugins
+  have a check mark. Select a plugin to change its settings (such as an address, password or
+  token), restart it or remove it.
+- **Install Plugin…** installs a `.ulanziplugin` file. Signed packages install directly; unsigned
+  packages require **Developer Mode**. The dialog lists the permissions the plugin requests before
+  you confirm.
 
-## The tray icon
+Plugins marked **Official** are maintained by the Ulanzi Deck project. Other plugins show their
+author's name.
 
-The tray icon works without the window: switch profiles, set the brightness, turn auto-switch on or
-off, open the window, or quit the background service. With auto-switch on, the icon shows a coloured dot.
+## OBS Studio
+
+OBS Studio support is provided by the OBS Studio plugin.
+
+1. Open **Plugins → Discover** and install **OBS Studio**.
+2. In OBS 28 or later, open **Tools → WebSocket Server Settings**, enable the WebSocket server,
+   and select **Show Connect Info** to get the password.
+3. In **Plugins → Installed → OBS Studio**, enter the password, and the port if it is not 4455. The
+   status changes to running once the plugin connects.
+4. Add OBS actions to keys and select scenes, sources, inputs and filters from the lists.
+
+With live state enabled, the active scene is shown in green, recording and streaming keys show
+their elapsed time, muted inputs are red, hidden sources are dimmed, and all OBS keys are dimmed
+while OBS is not running. The plugin reconnects automatically when OBS starts.
+
+Profiles from Ulanzi Deck 2.0 are converted to use the plugin automatically. Install the plugin and
+enter the OBS password once.
+
+## Templates, sharing and backups
+
+- **Templates**: under Profiles, select **+ → From Template** to start from Streaming, Media Desk,
+  Video Editing or Productivity, or from your own templates. **Save as Template** on any profile
+  creates one.
+- **Sharing**: right-click a profile and select **Export** to save a `.ulanzideck` file. To import
+  one, open it, drag it onto the window, or use **Import** in the main menu. If a profile with the
+  same name exists, you can keep both, replace it or skip the import. Passwords and tokens are
+  never exported.
+- **Backups**: Ulanzi Deck makes a backup once a day and before every import, deletion or restore,
+  and keeps the 20 most recent. **Preferences → Backups** lists them; **Restore…** restores one
+  after backing up the current configuration.
+
+## Preferences
+
+Open Preferences from the main menu or with Ctrl+,.
+
+| Page | Settings |
+|---|---|
+| General | Light or dark style, Start at Login, tray icon, auto-switch, hold time, sound volume |
+| Device | Brightness, sleep timeout and dim level, Show Volume Changes, label style (visibility, position, colour) |
+| Integrations | Whether keyboard shortcut and text typing actions are allowed; a link to the plugin manager |
+| Backups | Create a backup, restore a backup, open the backup folder |
+
+## Tray icon
+
+The tray icon works without the main window. From its menu you can switch profiles, change the
+brightness, toggle auto-switch, open the window or quit the background service.
 
 ## Keyboard shortcuts
 
-| Shortcut | Does |
+| Shortcut | Action |
 |---|---|
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+C / Ctrl+V | Copy / paste keys |
-| Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste only the style (colours, image, label) |
-| Ctrl+A / Escape | Select all keys / select nothing (closes the key editor) |
+| Ctrl+Shift+C / Ctrl+Shift+V | Copy / paste style only (colours, image, label) |
+| Ctrl+A / Escape | Select all keys / clear selection and close the editor |
 | Delete | Clear the selected keys |
-| Ctrl+L | Search the actions |
+| Ctrl+L | Search actions |
 | Ctrl+O / Ctrl+E | Import / export `.ulanzideck` files |
 | Ctrl+, | Preferences |
-| Ctrl+? | All shortcuts |
+| Ctrl+? | Show all shortcuts |
 
-While you type in a text field, the deck leaves Ctrl+A, copy, paste, undo, redo, the style shortcuts,
-Delete and Escape to the text field, so they never change the keys. Escape also closes an open
-dialog or menu first, and cancels shortcut recording, before it closes the key editor.
+While a text field has focus, Ctrl+A, copy, paste, undo, redo, the style shortcuts, Delete and
+Escape apply to the text field rather than to keys. Escape closes an open dialog or menu, or
+cancels shortcut recording, before it closes the key editor.
