@@ -232,6 +232,7 @@ fn general_page(state: &State) -> adw::PreferencesPage {
     sound.add_suffix(&value);
     keys.add(&sound);
     page.add(&keys);
+    page.add(&crate::ui::updates::preferences_group(state));
     page
 }
 
@@ -434,7 +435,6 @@ fn integrations_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Pre
     }
     input.add(&row);
     page.add(&input);
-    page.add(&crate::ui::updates::preferences_group(state));
     page
 }
 
