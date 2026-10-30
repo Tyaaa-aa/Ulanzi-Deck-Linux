@@ -531,3 +531,157 @@ fn pasting_a_style_onto_a_foreign_key_is_refused() {
     e.paste_style(&[3]);
     assert!(!e.profile().pages[0].keys.contains_key(&3));
 }
+
+fn macro_key(m: &Macro, own: bool) -> Editor {
+    let mut p = Profile::new_default("M", Model::D200X);
+    p.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(Action::Macro {
+                id: m.id,
+                own: own.then(|| Box::new(m.clone())),
+            }),
+            ..Key::default()
+        },
+    );
+    let mut e = Editor::new(p);
+    e.set_library(MacroLibrary {
+        macros: vec![m.clone()],
+    });
+    e
+}
+
+fn own_of(e: &Editor) -> Option<Macro> {
+    match &e.key(0).expect("key").tap {
+        Some(Action::Macro { own, .. }) => own.as_deref().cloned(),
+        _ => None,
+    }
+}
+
+fn linked(e: &Editor) -> uuid::Uuid {
+    match &e.key(0).expect("key").tap {
+        Some(Action::Macro { id, .. }) => *id,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn run_step(id: uuid::Uuid) -> MacroStep {
+    MacroStep {
+        event: MacroEvent::RunMacro { id },
+        delay_ms: 0,
+        look: LookOverride::default(),
+        part: SequencePart::Press,
+    }
+}
+
+#[test]
+fn editing_for_this_key_stops_following_the_library() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, false);
+    e.edit_for_this_key(Slot::Key(0));
+    assert_eq!(own_of(&e).map(|o| o.name), Some("Lib".to_string()));
+    let mut changed = m.clone();
+    changed.name = "Changed".into();
+    assert!(e.save_macro(changed));
+    assert_eq!(own_of(&e).map(|o| o.name), Some("Lib".to_string()));
+}
+
+#[test]
+fn save_as_new_links_the_key_and_undo_restores_both() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, true);
+    let id = e.own_to_new(Slot::Key(0), "Fresh").expect("new");
+    assert_ne!(id, m.id);
+    assert_eq!(linked(&e), id);
+    assert!(own_of(&e).is_none());
+    assert_eq!(e.library().get(id).map(|n| n.name.as_str()), Some("Fresh"));
+    assert!(e.undo());
+    assert!(own_of(&e).is_some());
+    assert_eq!(linked(&e), m.id);
+    assert!(e.library().get(id).is_none());
+}
+
+#[test]
+fn updating_the_library_links_the_key_and_undo_restores_the_old_version() {
+    let m = Macro::new("Lib");
+    let mut copy = m.clone();
+    copy.name = "Better".into();
+    let mut e = macro_key(&m, false);
+    e.set_key_actions(
+        0,
+        Some(Action::Macro {
+            id: m.id,
+            own: Some(Box::new(copy)),
+        }),
+        None,
+    );
+    e.own_to_library(Slot::Key(0));
+    assert!(own_of(&e).is_none());
+    assert_eq!(e.library().get(m.id).map(|n| n.name.as_str()), Some("Better"));
+    assert!(e.undo());
+    assert_eq!(e.library().get(m.id).map(|n| n.name.as_str()), Some("Lib"));
+    assert_eq!(own_of(&e).map(|o| o.name), Some("Better".to_string()));
+}
+
+#[test]
+fn use_library_drops_the_copy_and_undo_brings_it_back() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, true);
+    e.use_library(Slot::Key(0));
+    assert!(own_of(&e).is_none());
+    assert!(e.undo());
+    assert!(own_of(&e).is_some());
+}
+
+#[test]
+fn an_overwrite_keeps_the_previous_version() {
+    let m = Macro::new("One");
+    let mut e = macro_key(&m, false);
+    let mut two = m.clone();
+    two.name = "Two".into();
+    e.save_macro(two.clone());
+    let mut three = two.clone();
+    three.name = "Three".into();
+    e.save_macro(three);
+    let now = e.library().get(m.id).expect("macro");
+    let previous = now.previous.as_ref().expect("previous");
+    assert_eq!(previous.name, "Two");
+    assert!(previous.previous.is_none(), "one level only");
+}
+
+#[test]
+fn with_the_library_macro_deleted_the_copy_keeps_working() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, true);
+    e.delete_macro(m.id);
+    assert!(e.library().get(m.id).is_none());
+    assert!(own_of(&e).is_some());
+    e.use_library(Slot::Key(0));
+    assert!(own_of(&e).is_some(), "nothing to go back to");
+    e.own_to_library(Slot::Key(0));
+    assert!(e.library().get(m.id).is_some());
+    assert!(own_of(&e).is_none());
+}
+
+#[test]
+fn a_macro_cannot_run_itself() {
+    let (mut a, mut b) = (Macro::new("A"), Macro::new("B"));
+    let mut e = macro_key(&a, false);
+    b.steps = vec![run_step(a.id)];
+    assert!(e.save_macro(b.clone()));
+    a.steps = vec![run_step(a.id)];
+    assert!(!e.save_macro(a.clone()), "directly");
+    a.steps = vec![run_step(b.id)];
+    assert!(!e.save_macro(a), "through another macro");
+    assert!(e.library().get(b.id).is_some());
+}
+
+#[test]
+fn users_of_a_macro_are_found_on_every_page() {
+    let m = Macro::new("Lib");
+    let mut e = macro_key(&m, false);
+    e.add_page("Two");
+    e.set_page(1);
+    e.drop_action(Slot::Key(4), Action::Macro { id: m.id, own: None });
+    assert_eq!(e.macro_users(m.id).len(), 2);
+}

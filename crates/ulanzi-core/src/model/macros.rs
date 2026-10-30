@@ -226,6 +226,12 @@ impl MacroLibrary {
         self.macros.iter().find(|m| m.id == id)
     }
 
+    /// Whether saving `m` would make a macro run itself.
+    pub fn would_loop(&self, m: &Macro) -> bool {
+        let others = self.closure(m.runs().filter(|id| *id != m.id));
+        m.runs().any(|id| id == m.id) || others.macros.iter().any(|o| o.runs().any(|id| id == m.id))
+    }
+
     /// `ids` and every macro they run, however deep.
     pub fn closure(&self, ids: impl IntoIterator<Item = Uuid>) -> MacroLibrary {
         let mut seen = BTreeSet::new();

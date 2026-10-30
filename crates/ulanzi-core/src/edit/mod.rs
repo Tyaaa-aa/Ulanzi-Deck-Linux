@@ -18,6 +18,34 @@ fn global(slot: Slot) -> bool {
     matches!(slot, Slot::Small(_) | Slot::Screen)
 }
 
+/// The action in `slot` that can hold a macro: what a press runs.
+fn macro_slot(p: &mut Profile, page: usize, slot: Slot) -> Option<&mut Action> {
+    let a = match slot {
+        Slot::Key(i) => p.pages.get_mut(page)?.keys.get_mut(&i)?.tap.as_mut(),
+        Slot::Dial(i) => p.pages.get_mut(page)?.dials.get_mut(i as usize)?.press.as_mut(),
+        Slot::Small(0) => p.small_buttons.left.as_mut(),
+        Slot::Small(_) => p.small_buttons.right.as_mut(),
+        Slot::Screen => None,
+    };
+    a.filter(|a| matches!(a, Action::Macro { .. }))
+}
+
+/// Store `m`, keeping the version it replaces one level back.
+fn put_macro(library: &mut MacroLibrary, mut m: Macro) {
+    match library.macros.iter_mut().find(|l| l.id == m.id) {
+        Some(old) if old.same_as(&m) => {}
+        Some(old) => {
+            let mut before = std::mem::replace(old, m);
+            before.previous = None;
+            old.previous = Some(Box::new(before));
+        }
+        None => {
+            m.previous = None;
+            library.macros.push(m);
+        }
+    }
+}
+
 /// Whether `slot` holds something from a newer version, which edits must leave alone.
 fn taken(p: &Profile, page: usize, slot: Slot) -> bool {
     let id = if global(slot) {
@@ -90,8 +118,9 @@ enum Clip {
 pub struct Editor {
     profile: Profile,
     page: usize,
-    undo: Vec<Profile>,
-    redo: Vec<Profile>,
+    library: MacroLibrary,
+    undo: Vec<(Profile, MacroLibrary)>,
+    redo: Vec<(Profile, MacroLibrary)>,
     clipboard: Option<Clip>,
     /// Edits since the profile was last sent to the daemon.
     dirty: bool,
@@ -105,6 +134,7 @@ impl Editor {
         Editor {
             profile,
             page: 0,
+            library: MacroLibrary::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             clipboard: None,
@@ -161,9 +191,14 @@ impl Editor {
 
     /// Record the current profile as an undo step, then run `f` on it.
     fn edit(&mut self, f: impl FnOnce(&mut Profile, usize)) {
-        let before = self.profile.clone();
-        f(&mut self.profile, self.page);
-        if self.profile == before {
+        self.edit_with_library(|p, _, page| f(p, page));
+    }
+
+    /// Like [`Editor::edit`], for a change to the profile and the macro library as one step.
+    fn edit_with_library(&mut self, f: impl FnOnce(&mut Profile, &mut MacroLibrary, usize)) {
+        let before = (self.profile.clone(), self.library.clone());
+        f(&mut self.profile, &mut self.library, self.page);
+        if self.profile == before.0 && self.library == before.1 {
             return;
         }
         self.dirty = true;
@@ -184,9 +219,8 @@ impl Editor {
         let Some(prev) = self.undo.pop() else {
             return false;
         };
-        self.redo.push(std::mem::replace(&mut self.profile, prev));
-        self.page = self.page.min(self.profile.pages.len().saturating_sub(1));
-        self.dirty = true;
+        let now = self.restore(prev);
+        self.redo.push(now);
         true
     }
 
@@ -195,10 +229,108 @@ impl Editor {
         let Some(next) = self.redo.pop() else {
             return false;
         };
-        self.undo.push(std::mem::replace(&mut self.profile, next));
+        let now = self.restore(next);
+        self.undo.push(now);
+        true
+    }
+
+    /// Put `state` back and return what it replaced.
+    fn restore(&mut self, state: (Profile, MacroLibrary)) -> (Profile, MacroLibrary) {
+        let old = (
+            std::mem::replace(&mut self.profile, state.0),
+            std::mem::replace(&mut self.library, state.1),
+        );
         self.page = self.page.min(self.profile.pages.len().saturating_sub(1));
         self.dirty = true;
+        old
+    }
+
+    pub fn library(&self) -> &MacroLibrary {
+        &self.library
+    }
+
+    /// The library as the service has it. History is left alone.
+    pub fn set_library(&mut self, library: MacroLibrary) {
+        self.library = library;
+    }
+
+    /// Add `m` to the library or replace its older version, keeping that version one level back.
+    /// Refused, returning false, when it would make a macro run itself.
+    pub fn save_macro(&mut self, m: Macro) -> bool {
+        if self.library.would_loop(&m) {
+            return false;
+        }
+        self.edit_with_library(|_, library, _| put_macro(library, m));
         true
+    }
+
+    /// Remove a macro. Keys with their own copy keep it; linked keys show a problem.
+    pub fn delete_macro(&mut self, id: uuid::Uuid) {
+        self.edit_with_library(|_, library, _| library.macros.retain(|m| m.id != id));
+    }
+
+    /// The keys, on any page, that follow library macro `id`.
+    pub fn macro_users(&self, id: uuid::Uuid) -> Vec<Slot> {
+        self.profile
+            .pages
+            .iter()
+            .flat_map(|p| p.keys.iter())
+            .filter(|(_, k)| matches!(&k.tap, Some(Action::Macro { id: i, own: None }) if *i == id))
+            .map(|(i, _)| Slot::Key(*i))
+            .collect()
+    }
+
+    /// Give `slot` its own copy of its macro, so it stops following the library.
+    pub fn edit_for_this_key(&mut self, slot: Slot) {
+        self.edit_with_library(|p, library, page| {
+            if let Some(Action::Macro { id, own }) = macro_slot(p, page, slot)
+                && own.is_none()
+                && let Some(m) = library.get(*id)
+            {
+                *own = Some(Box::new(m.clone()));
+            }
+        });
+    }
+
+    /// Add `slot`'s own copy to the library under a new id and `name`, and link the key to it.
+    pub fn own_to_new(&mut self, slot: Slot, name: &str) -> Option<uuid::Uuid> {
+        let mut new_id = None;
+        self.edit_with_library(|p, library, page| {
+            if let Some(Action::Macro { id, own }) = macro_slot(p, page, slot)
+                && let Some(mut m) = own.take().map(|m| *m)
+            {
+                m.id = uuid::Uuid::new_v4();
+                m.name = name.to_string();
+                m.previous = None;
+                *id = m.id;
+                new_id = Some(m.id);
+                library.macros.push(m);
+            }
+        });
+        new_id
+    }
+
+    /// Replace the library macro with `slot`'s own copy (or add it back), and link the key to it.
+    pub fn own_to_library(&mut self, slot: Slot) {
+        self.edit_with_library(|p, library, page| {
+            if let Some(Action::Macro { own, .. }) = macro_slot(p, page, slot)
+                && let Some(m) = own.take()
+            {
+                put_macro(library, *m);
+            }
+        });
+    }
+
+    /// Drop `slot`'s own copy and follow the library again. With the macro gone from the library
+    /// the copy stays: it is all there is.
+    pub fn use_library(&mut self, slot: Slot) {
+        self.edit_with_library(|p, library, page| {
+            if let Some(Action::Macro { id, own }) = macro_slot(p, page, slot)
+                && library.get(*id).is_some()
+            {
+                *own = None;
+            }
+        });
     }
 
     fn keys(&self) -> &std::collections::BTreeMap<u8, Key> {
