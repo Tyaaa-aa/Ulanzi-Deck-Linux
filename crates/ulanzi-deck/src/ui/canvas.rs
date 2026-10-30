@@ -966,9 +966,17 @@ pub fn build(state: &State) -> Canvas {
                                 ulanzi_core::render::KEY_PX as i32,
                             )));
                             k.label.set_visible(false);
-                            k.warning.set_visible(false);
-                            k.button
-                                .set_tooltip_text(Some("Empty key: drop an action or an image here"));
+                            if e.is_foreign(Slot::Key(i as u8)) {
+                                let min_app = e.profile().min_app.clone();
+                                k.warning.set_visible(true);
+                                k.button.set_tooltip_text(Some(
+                                    &ulanzi_core::model::foreign::needs_sentence("key", min_app.as_deref()),
+                                ));
+                            } else {
+                                k.warning.set_visible(false);
+                                k.button
+                                    .set_tooltip_text(Some("Empty key: drop an action or an image here"));
+                            }
                         }
                     }
                 }

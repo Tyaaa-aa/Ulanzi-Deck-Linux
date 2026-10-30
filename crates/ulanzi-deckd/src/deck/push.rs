@@ -209,6 +209,18 @@ fn live_look(
     look
 }
 
+/// What a key from a newer version shows.
+fn foreign_look() -> KeyLook {
+    KeyLook {
+        source: ImageSource::Icon {
+            set: ulanzi_core::model::IconSet::Lucide,
+            name: "triangle-alert".into(),
+        },
+        foreground: ulanzi_core::Color::rgb(0xf6, 0xd3, 0x2d),
+        ..KeyLook::default()
+    }
+}
+
 /// Build all 14 manifest entries (keys 0-12 and the wide screen) for `page`.
 pub fn build_page(
     profile: &Profile,
@@ -259,6 +271,27 @@ pub fn build_page(
             }
             if !own_label && look.label.visible && !look.label.text.is_empty() {
                 entry.text = Some(resolve_vars(&look.label.text, &vars));
+            }
+            lh.hash(&mut h);
+            used.insert(lh);
+        }
+        if keys.is_none_or(|k| !k.contains_key(&i))
+            && profile
+                .foreign_at(page_id, ulanzi_core::model::Slot::Key(i))
+                .is_some()
+        {
+            let lh = look_hash(&foreign_look(), ctx.profile_dir);
+            let png = cache
+                .images
+                .entry(lh)
+                .or_insert_with(|| render_key(&foreign_look(), ctx).map(|r| r.png));
+            if let Some(png) = png {
+                let name = format!("k{i}_{lh:016x}_{:08x}.png", cache.generation);
+                entry.icon = Some(format!("icons/{name}"));
+                images.push(ButtonImage {
+                    name,
+                    png: png.clone(),
+                });
             }
             lh.hash(&mut h);
             used.insert(lh);

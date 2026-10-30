@@ -320,6 +320,12 @@ fn fill(ctx: &C, content: &gtk::Box) -> bool {
     let keys = ctx.state.selection.borrow().keys();
     let screen = ctx.state.editor.borrow().profile().screen.clone();
     let list = sections(&slots, &screen);
+    if let [slot] = slots.as_slice()
+        && ctx.state.editor.borrow().is_foreign(*slot)
+    {
+        foreign_view(ctx, content, *slot);
+        return true;
+    }
     let view = match slots.as_slice() {
         [] => return false,
         [Slot::Key(k)] => key_view(ctx, content, *k),
@@ -456,6 +462,33 @@ fn shown_look(state: &State, k: u8) -> KeyLook {
 
 // ---------------------------------------------------------------------------------------------
 // Single key
+
+/// A control from a newer version: what it needs, and the one thing that can be done to it.
+fn foreign_view(ctx: &C, content: &gtk::Box, slot: Slot) {
+    let what = match slot {
+        Slot::Key(_) => "key",
+        Slot::Dial(_) => "dial",
+        Slot::Small(_) => "button",
+        Slot::Screen => "screen",
+    };
+    let state = &ctx.state;
+    let min_app = state.editor.borrow().profile().min_app.clone();
+    let sentence = ulanzi_core::model::foreign::needs_sentence(what, min_app.as_deref());
+    content.append(&padded(title_block("Made With a Newer Version", &sentence)));
+    let clear = gtk::Button::builder()
+        .label(if what == "key" { "Clear Key" } else { "Clear" })
+        .halign(gtk::Align::Center)
+        .css_classes(["destructive-action", "pill"])
+        .build();
+    let st = state.clone();
+    clear.connect_clicked(move |_| {
+        st.edit(|e| match slot {
+            Slot::Key(k) => e.clear(&[k]),
+            other => e.clear_foreign(other),
+        });
+    });
+    content.append(&padded(clear));
+}
 
 fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
     let state = &ctx.state;

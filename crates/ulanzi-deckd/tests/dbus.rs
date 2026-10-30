@@ -283,7 +283,7 @@ async fn profile_revision_is_exposed() {
     assert_eq!(rev, 1);
 }
 
-type Imported = (Vec<String>, Vec<String>, String);
+type Imported = (Vec<String>, Vec<String>, String, Vec<String>);
 type Snapshots = Vec<(String, String, String, Vec<String>)>;
 
 #[tokio::test(flavor = "multi_thread")]
@@ -299,7 +299,7 @@ async fn export_then_import_round_trip() {
         p.call("PreviewBundle", &(path.as_str(),)).await.expect("preview");
     assert!(manifest.contains("Default"), "{manifest}");
     assert_eq!(conflicts, vec!["Default".to_string()]);
-    let (imported, _warnings, _undo): Imported = p
+    let (imported, _warnings, _undo, _notes): Imported = p
         .call("ImportBundle", &(path.as_str(), "keep_both", true, false, false))
         .await
         .expect("import");
@@ -317,7 +317,7 @@ async fn import_takes_snapshot_and_undo_restores() {
     p.call::<_, _, ()>("ExportBundle", &(path.as_str(), Vec::<String>::new(), false))
         .await
         .expect("export");
-    let (imported, _, undo): Imported = p
+    let (imported, _, undo, _): Imported = p
         .call("ImportBundle", &(path.as_str(), "keep_both", true, false, false))
         .await
         .expect("import");

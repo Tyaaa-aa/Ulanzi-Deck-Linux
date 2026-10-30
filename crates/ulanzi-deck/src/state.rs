@@ -62,6 +62,8 @@ pub struct AppState {
     pub selection: RefCell<Selection>,
     pub settings: RefCell<Settings>,
     pub profiles: RefCell<Vec<(Uuid, String)>>,
+    /// Profiles a newer version wrote, which this one lists but cannot open.
+    pub too_new: RefCell<Vec<String>>,
     pub status: RefCell<Status>,
     pub client: RefCell<Option<Client>>,
     /// True while showing built-in demo data (no service).
@@ -121,6 +123,7 @@ impl AppState {
             selection: RefCell::new(Selection::default()),
             settings: RefCell::new(Settings::default()),
             profiles: RefCell::new(Vec::new()),
+            too_new: RefCell::new(Vec::new()),
             status: RefCell::new(Status::Connecting),
             client: RefCell::new(None),
             demo: Cell::new(false),

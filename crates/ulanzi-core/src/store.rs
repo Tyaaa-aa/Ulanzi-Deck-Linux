@@ -208,6 +208,21 @@ impl Store {
 
     /// Every profile directory, valid or not. Invalid files are renamed to
     /// `profile.toml.invalid-<unix-ts>` and reported, never fatal.
+    /// The names of the profiles that need a newer version.
+    pub fn too_new_names(&self) -> Vec<String> {
+        self.list_profiles()
+            .into_iter()
+            .filter_map(|l| match l {
+                ProfileLoad::TooNew { path, .. } => {
+                    let text = fs::read_to_string(path).ok()?;
+                    let table: toml::Table = toml::from_str(&text).ok()?;
+                    table.get("name")?.as_str().map(String::from)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn list_profiles(&self) -> Vec<ProfileLoad> {
         let Ok(entries) = fs::read_dir(self.profiles_dir()) else {
             return Vec::new();

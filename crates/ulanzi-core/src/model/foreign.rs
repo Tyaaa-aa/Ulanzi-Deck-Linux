@@ -25,6 +25,19 @@ impl Profile {
     }
 }
 
+/// `2.2.0` as people say it: `2.2`.
+pub fn short_version(v: &str) -> &str {
+    v.strip_suffix(".0").unwrap_or(v)
+}
+
+/// The sentence for a control that needs a newer version; `what` is "key", "dial" and so on.
+pub fn needs_sentence(what: &str, min_app: Option<&str>) -> String {
+    match min_app {
+        Some(v) => format!("This {what} needs Ulanzi Deck {} or newer", short_version(v)),
+        None => format!("This {what} needs a newer version of Ulanzi Deck"),
+    }
+}
+
 fn parses<T: DeserializeOwned>(v: &toml::Value) -> bool {
     v.clone().try_into::<T>().is_ok()
 }

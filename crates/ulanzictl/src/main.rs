@@ -422,13 +422,13 @@ async fn run(cli: Cli) -> Result<(), String> {
             } else {
                 "keep_both"
             };
-            let (ids, warnings, undo): (Vec<String>, Vec<String>, String) = proxy()
+            let (ids, warnings, undo, notes): (Vec<String>, Vec<String>, String, Vec<String>) = proxy()
                 .await?
                 .call("ImportBundle", &(path.as_str(), conflict, true, false, switch))
                 .await
                 .map_err(not_running)?;
             println!("imported {} profile(s)", ids.len());
-            for w in warnings {
+            for w in warnings.iter().chain(&notes) {
                 println!("  warning: {w}");
             }
             println!("to undo: ulanzictl restore {undo}");

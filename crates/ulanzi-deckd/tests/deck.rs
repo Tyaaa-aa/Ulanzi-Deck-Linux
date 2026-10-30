@@ -111,9 +111,12 @@ async fn rig_with(settings: Settings) -> Rig {
 }
 
 async fn rig_full(settings: Settings, extra: Vec<Profile>) -> Rig {
+    rig_of(profile(), settings, extra).await
+}
+
+async fn rig_of(p: Profile, settings: Settings, extra: Vec<Profile>) -> Rig {
     let dir = tempfile::tempdir().expect("tmp");
     let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
-    let p = profile();
     store.save_profile(&p).expect("save");
     for x in &extra {
         store.save_profile(x).expect("save extra");
@@ -357,6 +360,29 @@ async fn dials_follow_the_page() {
     r.mock.inject.send(Ok(report(17, 2, 3))).await.expect("inject");
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(r.runner.ran(), vec![cmd("page-two-dial")]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pressing_a_foreign_key_reports_what_it_needs() {
+    let mut p = profile();
+    p.min_app = Some("2.2.0".into());
+    p.foreign.push(ForeignSlot {
+        page: Some(p.pages[0].id),
+        slot: Slot::Key(7),
+        raw: toml::Value::Table(toml::from_str("kind = \"new\"").expect("raw")),
+    });
+    let mut r = rig_of(p, Settings::default(), Vec::new()).await;
+    while r.events.try_recv().is_ok() {}
+    r.click(7).await;
+    let failed = std::iter::from_fn(|| r.events.try_recv().ok())
+        .find_map(|e| match e {
+            DeckEvent::ActionFailed { control, message } => Some((control, message)),
+            _ => None,
+        })
+        .expect("ActionFailed event");
+    assert_eq!(failed.0, "key:7");
+    assert_eq!(failed.1, "This key needs Ulanzi Deck 2.2 or newer");
+    assert!(r.runner.ran().is_empty());
 }
 
 #[tokio::test(start_paused = true)]

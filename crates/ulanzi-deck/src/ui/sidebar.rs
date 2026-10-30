@@ -279,6 +279,11 @@ pub fn build(state: &State) -> gtk::Box {
                         profiles.select_row(Some(&row));
                     }
                 }
+                for name in state.too_new.borrow().iter() {
+                    let row = profile_row(name, "Needs a newer version", false);
+                    row.set_sensitive(false);
+                    profiles.append(&row);
+                }
             }
             if matches!(c, Change::Profile | Change::Page) {
                 while let Some(row) = pages.row_at_index(0) {

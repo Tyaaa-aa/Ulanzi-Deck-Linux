@@ -228,12 +228,23 @@ fn import_dialog(state: &State, parent: &gtk::Widget, path: &Path, preview: crat
             runtime::run(
                 async move { c.import_bundle(&path, choice, keep, set, sw).await },
                 move |r| {
+                    let window = dialog.root();
                     dialog.close();
                     match r {
                         Ok(done) => {
                             reload_open_profile(&st);
                             for w in &done.warnings {
                                 crate::ui::toast(&st, w);
+                            }
+                            if !done.notes.is_empty()
+                                && let Some(window) = window.and_downcast::<gtk::Window>()
+                            {
+                                adw::AlertDialog::builder()
+                                    .heading("Some Keys Need a Newer Version")
+                                    .body(done.notes.join("\n"))
+                                    .close_response("ok")
+                                    .build()
+                                    .present(Some(&window));
                             }
                             let n = done.imported.len();
                             let st2 = st.clone();

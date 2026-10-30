@@ -325,7 +325,12 @@ impl DeckService {
             .store
             .load_profile(Self::id(&id)?)
             .map_err(|e| DeckError::NotFound(e.to_string()))?;
-        toml::to_string_pretty(&p).map_err(|e| DeckError::Invalid(e.to_string()))
+        ulanzi_core::store::profile_to_toml(&p).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
+    /// The names of profiles a newer version wrote that this one cannot read.
+    async fn too_new_profiles(&self) -> Result<Vec<String>> {
+        Ok(self.store.too_new_names())
     }
 
     /// Replace a profile. `revision` must be the one the client last saw (1 for a fresh daemon).
@@ -447,7 +452,7 @@ impl DeckService {
         settings: bool,
         switch_to: bool,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-    ) -> Result<(Vec<String>, Vec<String>, String)> {
+    ) -> Result<(Vec<String>, Vec<String>, String, Vec<String>)> {
         use ulanzi_core::bundle::{Conflict, ImportOptions};
         let b = Self::read_bundle(&path)?;
         let conflict = match conflict.as_str() {
@@ -475,7 +480,13 @@ impl DeckService {
             self.send(DeckMsg::SwitchProfile(*id)).await?;
         }
         let _ = Self::profiles_changed(&emitter).await;
-        Ok((touched.iter().map(Uuid::to_string).collect(), r.warnings, undo))
+        let notes = r.foreign.iter().map(|n| n.sentence()).collect();
+        Ok((
+            touched.iter().map(Uuid::to_string).collect(),
+            r.warnings,
+            undo,
+            notes,
+        ))
     }
 
     /// Write profiles (all when `ids` is empty) to a `.ulanzideck` file.

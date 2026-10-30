@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use ulanzi_core::model::{
-    Action, AudioTarget, BrightnessOp, ClockStyle, Model, Profile, ScreenConfig, Settings,
+    Action, AudioTarget, BrightnessOp, ClockStyle, Model, Profile, ScreenConfig, Settings, Slot,
 };
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
@@ -825,7 +825,29 @@ impl Deck {
         }
     }
 
+    /// The sentence for a control holding something from a newer version.
+    fn foreign_problem(&self, c: Control) -> Option<String> {
+        let p = self.profile();
+        let page = p.pages.get(self.nav.page).map(|pg| pg.id);
+        let (at, slot, what) = match c {
+            Control::Key(i) => (page, Slot::Key(i), "key"),
+            Control::Dial(i) => (page, Slot::Dial(i), "dial"),
+            Control::Small(i) => (None, Slot::Small(i), "button"),
+            Control::Screen => (None, Slot::Screen, "screen"),
+            Control::Unknown(_) => return None,
+        };
+        p.foreign_at(at, slot)
+            .map(|_| ulanzi_core::model::foreign::needs_sentence(what, p.min_app.as_deref()))
+    }
+
     async fn gesture(&mut self, c: Control, g: Gesture) {
+        if let Some(message) = self.foreign_problem(c) {
+            self.emit(DeckEvent::ActionFailed {
+                control: c.as_str(),
+                message,
+            });
+            return;
+        }
         let a = match g {
             Gesture::Tap => self.tap_action(c),
             Gesture::Hold => self.hold_action(c),

@@ -114,9 +114,33 @@ pub struct ImportReport {
     pub replaced: Vec<Uuid>,
     pub skipped: Vec<String>,
     pub warnings: Vec<String>,
-    /// Profiles with parts this version kept but cannot use: name, how many keys, the version
-    /// they need when the file says.
-    pub foreign: Vec<(String, u32, Option<String>)>,
+    /// Profiles with parts this version kept but cannot use.
+    pub foreign: Vec<ForeignNote>,
+}
+
+/// How much of an imported profile this version can use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignNote {
+    pub profile: String,
+    pub ready: u32,
+    pub kept: u32,
+    pub needs: Option<String>,
+}
+
+impl ForeignNote {
+    /// "Imported Streaming: 10 keys ready, 3 need Ulanzi Deck 2.2".
+    pub fn sentence(&self) -> String {
+        let plural = |n: u32| if n == 1 { "" } else { "s" };
+        let (ready, kept) = (self.ready, self.kept);
+        let start = format!("Imported {}: {ready} key{} ready, ", self.profile, plural(ready));
+        match &self.needs {
+            Some(v) => format!(
+                "{start}{kept} need Ulanzi Deck {}",
+                crate::model::foreign::short_version(v)
+            ),
+            None => format!("{start}{kept} need a newer version"),
+        }
+    }
 }
 
 fn all_profiles(store: &Store) -> Vec<Profile> {
@@ -459,14 +483,16 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
         write_profile(store, &p, &bp.icons)?;
         names.push(p.name.clone());
         if !p.foreign.is_empty() {
-            let keys = p
-                .foreign
-                .iter()
-                .filter(|f| matches!(f.slot, Slot::Key(_)))
-                .count();
-            report
-                .foreign
-                .push((p.name.clone(), keys as u32, p.min_app.clone()));
+            report.foreign.push(ForeignNote {
+                profile: p.name.clone(),
+                ready: p.pages.iter().map(|pg| pg.keys.len() as u32).sum(),
+                kept: p
+                    .foreign
+                    .iter()
+                    .filter(|f| matches!(f.slot, Slot::Key(_)))
+                    .count() as u32,
+                needs: p.min_app.clone(),
+            });
         }
         if clash && opts.conflict == Conflict::Replace {
             report.replaced.push(p.id);

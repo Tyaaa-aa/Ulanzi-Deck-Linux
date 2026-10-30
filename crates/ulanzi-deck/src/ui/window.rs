@@ -564,14 +564,16 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
             let profile = c.profile(hello.active_profile).await?;
             let profiles = c.profiles().await?;
             let settings = c.settings().await?;
-            Ok::<_, crate::client::ClientError>((c, hello, profile, profiles, settings))
+            let too_new = c.too_new_profiles().await.unwrap_or_default();
+            Ok::<_, crate::client::ClientError>((c, hello, profile, profiles, settings, too_new))
         },
         move |r| {
             match r {
-                Ok((c, hello, profile, profiles, settings)) => {
+                Ok((c, hello, profile, profiles, settings, too_new)) => {
                     follow_events(&state, &c);
                     *state.client.borrow_mut() = Some(c);
                     *state.profiles.borrow_mut() = profiles;
+                    *state.too_new.borrow_mut() = too_new;
                     *state.settings.borrow_mut() = settings;
                     *state.status.borrow_mut() = Status::Device {
                         state: hello.device_state,
@@ -680,12 +682,18 @@ fn follow_events(state: &State, c: &Client) {
                 ClientEvent::ProfilesChanged => {
                     let s = state.clone();
                     if let Some(c) = state.client.borrow().clone() {
-                        runtime::run(async move { c.profiles().await }, move |l| {
-                            if let Ok(l) = l {
-                                *s.profiles.borrow_mut() = l;
-                                s.notify(Change::Profiles);
-                            }
-                        });
+                        runtime::run(
+                            async move { (c.profiles().await, c.too_new_profiles().await) },
+                            move |(l, new)| {
+                                if let Ok(new) = new {
+                                    *s.too_new.borrow_mut() = new;
+                                }
+                                if let Ok(l) = l {
+                                    *s.profiles.borrow_mut() = l;
+                                    s.notify(Change::Profiles);
+                                }
+                            },
+                        );
                     }
                 }
                 ClientEvent::SettingsChanged => reload_settings_soon(&state),

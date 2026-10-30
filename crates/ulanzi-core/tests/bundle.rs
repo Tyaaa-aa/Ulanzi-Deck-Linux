@@ -322,9 +322,10 @@ fn import_reports_foreign_keys_and_keeps_them() {
         device: None,
     };
     let report = import(&other, &read(&bytes).expect("read"), &opts).expect("import");
+    assert_eq!(report.foreign.len(), 1);
     assert_eq!(
-        report.foreign,
-        vec![("Newer".to_string(), 1, Some("2.2.0".to_string()))]
+        report.foreign[0].sentence(),
+        "Imported Newer: 0 keys ready, 1 need Ulanzi Deck 2.2"
     );
     let back = other.load_profile(p.id).expect("load");
     assert_eq!(back.foreign, p.foreign);

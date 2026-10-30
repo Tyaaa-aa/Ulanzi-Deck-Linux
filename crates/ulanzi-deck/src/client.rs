@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use tokio::sync::{Notify, broadcast};
 use ulanzi_core::model::{Profile, Settings};
 use ulanzi_core::plugin::{Inspected, Manifest, PickItem};
-use ulanzi_core::store::parse_profile;
+use ulanzi_core::store::{parse_profile, profile_to_toml};
 use uuid::Uuid;
 use zbus::Connection;
 
@@ -39,6 +39,8 @@ pub struct ImportDone {
     pub warnings: Vec<String>,
     /// Restore this snapshot to undo the import.
     pub undo: String,
+    /// One sentence for each profile with keys that need a newer version.
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -240,6 +242,11 @@ impl Client {
             .collect())
     }
 
+    /// The names of profiles a newer version wrote that this one cannot read.
+    pub async fn too_new_profiles(&self) -> Result<Vec<String>> {
+        Ok(self.inner.proxy.call("TooNewProfiles", &()).await?)
+    }
+
     /// Load a profile and remember its revision for the next save.
     pub async fn profile(&self, id: Uuid) -> Result<Profile> {
         let text: String = self.inner.proxy.call("GetProfile", &(id.to_string(),)).await?;
@@ -333,7 +340,7 @@ impl Client {
             ImportChoice::Replace => "replace",
             ImportChoice::Skip => "skip",
         };
-        let (ids, warnings, undo): (Vec<String>, Vec<String>, String) = self
+        let (ids, warnings, undo, notes): (Vec<String>, Vec<String>, String, Vec<String>) = self
             .inner
             .proxy
             .call(
@@ -350,6 +357,7 @@ impl Client {
         Ok(ImportDone {
             imported: ids.iter().filter_map(|i| Uuid::parse_str(i).ok()).collect(),
             warnings,
+            notes,
             undo,
         })
     }
@@ -686,7 +694,7 @@ impl Client {
 
     /// ApplyProfile; on a stale revision, take the current one and apply on top (once).
     async fn send_profile(&self, profile: &Profile) -> Result<()> {
-        let text = toml::to_string(profile).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        let text = profile_to_toml(profile).map_err(|e| ClientError::Protocol(e.to_string()))?;
         for attempt in 0..2 {
             let rev = self.revision(profile.id);
             match self
