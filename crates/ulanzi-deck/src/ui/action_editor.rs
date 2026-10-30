@@ -12,6 +12,7 @@ use ulanzi_core::model::*;
 use uuid::Uuid;
 
 use crate::state::State;
+use crate::ui::capture::Capture;
 
 /// How an edit should be applied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,18 +181,12 @@ fn fill_keycaps(b: &gtk::Box, keys: &str) {
 struct Recording {
     active: std::cell::Cell<bool>,
     recorder: RefCell<Recorder>,
-    /// The toplevel whose system shortcuts are inhibited, restored when recording ends.
-    inhibited: RefCell<Option<glib::WeakRef<gdk::Toplevel>>>,
-    /// The app's accelerators, off while recording so any combination can be recorded.
-    accels: RefCell<Option<crate::ui::key_routing::AccelGuard>>,
-    inhibit: std::cell::Cell<InhibitState>,
-    /// Handlers on the window and its surface while recording; disconnected when it ends.
-    handlers: RefCell<Vec<(glib::WeakRef<glib::Object>, glib::SignalHandlerId)>>,
+    capture: Rc<Capture>,
 }
 
 impl Recording {
     fn start(self: &Rc<Self>, b: &gtk::Button) {
-        self.release();
+        self.capture.end();
         self.active.set(true);
         *self.recorder.borrow_mut() = Recorder::default();
         b.set_label("Press keys…");
@@ -199,59 +194,14 @@ impl Recording {
         // The window's own keys (Escape closes the editor) step aside while recording.
         b.add_css_class(crate::ui::key_routing::RECORDING);
         b.grab_focus();
-        // Another application taking focus ends recording (unless it is the inhibit prompt).
-        if let Some(win) = b.root().and_downcast::<gtk::Window>() {
-            let (rec, weak_b) = (Rc::downgrade(self), b.downgrade());
-            let id = win.connect_is_active_notify(move |w| {
-                let (Some(rec), Some(b)) = (rec.upgrade(), weak_b.upgrade()) else {
-                    return;
-                };
-                if !rec.active.get() {
-                    return;
-                }
-                let (state, stop) = on_window_active(rec.inhibit.get(), w.is_active());
-                rec.inhibit.set(state);
-                if stop {
-                    rec.stop(&b);
-                }
-            });
-            self.handlers
-                .borrow_mut()
-                .push((win.upcast_ref::<glib::Object>().downgrade(), id));
-        }
-        // Ctrl+L, Ctrl+O, Ctrl+comma and every other app shortcut: off until recording ends.
-        if let Some(app) = b
-            .root()
-            .and_downcast::<gtk::Window>()
-            .and_then(|w| w.application())
-        {
-            *self.accels.borrow_mut() = Some(crate::ui::key_routing::AccelGuard::park(&app));
-        }
-        // Let Super, Alt+Tab and friends reach the recorder instead of the desktop.
-        if let Some(top) = b
-            .native()
-            .and_then(|n| n.surface())
-            .and_downcast::<gdk::Toplevel>()
-        {
-            let rec = Rc::downgrade(self);
-            let id = top.connect_shortcuts_inhibited_notify(move |_| {
-                if let Some(rec) = rec.upgrade()
-                    && rec.inhibit.get() == InhibitState::Waiting
-                {
-                    rec.inhibit.set(InhibitState::Answered);
-                }
-            });
-            self.handlers
-                .borrow_mut()
-                .push((top.upcast_ref::<glib::Object>().downgrade(), id));
-            self.inhibit.set(InhibitState::Waiting);
-            top.inhibit_system_shortcuts(None::<&gdk::Event>);
-            // X11 grabs the keyboard at once.
-            if top.is_shortcuts_inhibited() {
-                self.inhibit.set(InhibitState::Answered);
+        let (rec, weak_b) = (Rc::downgrade(self), b.downgrade());
+        self.capture.begin(b.upcast_ref(), move || {
+            if let (Some(rec), Some(b)) = (rec.upgrade(), weak_b.upgrade())
+                && rec.active.get()
+            {
+                rec.stop(&b);
             }
-            *self.inhibited.borrow_mut() = Some(top.downgrade());
-        }
+        });
     }
 
     /// Ends recording for any reason; always gives the desktop its shortcuts back.
@@ -261,27 +211,7 @@ impl Recording {
         b.set_label("Record");
         b.remove_css_class("suggested-action");
         b.remove_css_class(crate::ui::key_routing::RECORDING);
-        self.release();
-    }
-
-    /// Disconnects the recording-time handlers and restores the desktop's shortcuts.
-    fn release(&self) {
-        for (obj, id) in self.handlers.take() {
-            if let Some(obj) = obj.upgrade() {
-                obj.disconnect(id);
-            }
-        }
-        self.inhibit.set(InhibitState::Off);
-        self.accels.take();
-        if let Some(top) = self.inhibited.take().and_then(|w| w.upgrade()) {
-            top.restore_system_shortcuts();
-        }
-    }
-}
-
-impl Drop for Recording {
-    fn drop(&mut self) {
-        self.release();
+        self.capture.end();
     }
 }
 
@@ -1871,29 +1801,6 @@ pub enum RecordStep {
     Unsendable,
 }
 
-/// Where the request to pause the desktop's shortcuts stands while recording.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum InhibitState {
-    /// Not requested (no toplevel surface).
-    #[default]
-    Off,
-    /// Requested, no answer yet: the compositor may be asking the user (GNOME's prompt).
-    Waiting,
-    /// Granted or denied.
-    Answered,
-}
-
-/// What the window's activation changing means for recording: the new inhibit state, and
-/// whether to stop. Losing activation stops recording unless the inhibit request is still
-/// waiting (its prompt takes focus); coming back while waiting means the prompt was answered.
-pub fn on_window_active(state: InhibitState, active: bool) -> (InhibitState, bool) {
-    match (state, active) {
-        (InhibitState::Waiting, true) => (InhibitState::Answered, false),
-        (InhibitState::Waiting, false) => (state, false),
-        (_, active) => (state, !active),
-    }
-}
-
 /// Key-combo recorder logic. A modifier pressed and released with no other key in between
 /// records that modifier (with any others held), so Super alone is a valid shortcut.
 #[derive(Debug, Default)]
@@ -2239,7 +2146,7 @@ mod tests {
 
     #[test]
     fn deactivation_stops_unless_inhibit_prompt_is_open() {
-        use InhibitState::*;
+        use crate::ui::capture::{InhibitState::*, on_window_active};
         assert_eq!(on_window_active(Answered, false), (Answered, true));
         assert_eq!(on_window_active(Off, false), (Off, true));
         assert_eq!(on_window_active(Waiting, false), (Waiting, false));

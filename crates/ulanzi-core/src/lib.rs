@@ -12,6 +12,7 @@ pub mod edit;
 mod error;
 pub mod import;
 pub mod keys;
+pub mod macro_record;
 pub mod migrate;
 pub mod model;
 pub mod obs;

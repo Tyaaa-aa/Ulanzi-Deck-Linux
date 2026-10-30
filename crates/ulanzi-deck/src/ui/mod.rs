@@ -5,6 +5,7 @@ pub mod app_picker;
 pub mod autoswitch;
 pub mod bundle_dialogs;
 pub mod canvas;
+pub mod capture;
 pub mod color_popover;
 pub mod how_it_works;
 pub mod icon_picker;
