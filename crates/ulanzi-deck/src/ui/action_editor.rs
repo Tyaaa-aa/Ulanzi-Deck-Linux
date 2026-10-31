@@ -1682,35 +1682,41 @@ pub fn picker_button(
         .label(label)
         .valign(gtk::Align::Center)
         .build();
-    let popover = gtk::Popover::new();
-    popover.add_css_class("action-picker");
-    // The list is owned by the popover; its pick handler holds the popover weakly.
-    let pick = {
-        let popover = popover.downgrade();
-        move |a: Action| {
-            if let Some(p) = popover.upgrade() {
-                p.popdown();
+    // The list takes a while to build and most buttons are never opened, so it waits for the first.
+    let on_pick = std::cell::Cell::new(Some(on_pick));
+    let state = state.clone();
+    button.set_create_popup_func(move |button| {
+        let Some(on_pick) = on_pick.take() else {
+            return;
+        };
+        let popover = gtk::Popover::new();
+        popover.add_css_class("action-picker");
+        // The list is owned by the popover; its pick handler holds the popover weakly.
+        let pick = {
+            let popover = popover.downgrade();
+            move |a: Action| {
+                if let Some(p) = popover.upgrade() {
+                    p.popdown();
+                }
+                on_pick(a);
             }
-            on_pick(a);
-        }
-    };
-    let list = crate::ui::library::action_list(
-        state,
-        crate::ui::library::Use::Picker {
-            include_multi: allow_multi,
-            allow_macros,
-            on_pick: Box::new(pick),
-        },
-    );
-    list.scroller.set_vexpand(false);
-    list.scroller.set_min_content_height(320);
-    list.scroller.set_max_content_height(420);
-    list.scroller.set_min_content_width(300);
-    list.scroller.set_propagate_natural_height(true);
-    list.root.set_width_request(320);
-    popover.set_child(Some(&list.root));
-    button.set_popover(Some(&popover));
-    {
+        };
+        let list = crate::ui::library::action_list(
+            &state,
+            crate::ui::library::Use::Picker {
+                include_multi: allow_multi,
+                allow_macros,
+                on_pick: Box::new(pick),
+            },
+        );
+        list.scroller.set_vexpand(false);
+        list.scroller.set_min_content_height(320);
+        list.scroller.set_max_content_height(420);
+        list.scroller.set_min_content_width(300);
+        list.scroller.set_propagate_natural_height(true);
+        list.root.set_width_request(320);
+        popover.set_child(Some(&list.root));
+        button.set_popover(Some(&popover));
         // Plugins come and go: the list is read again each time the popover opens.
         let (search, reload) = (list.search.clone(), list.reload.clone());
         popover.connect_show(move |_| {
@@ -1720,7 +1726,7 @@ pub fn picker_button(
             reload();
             search.grab_focus();
         });
-    }
+    });
     button
 }
 

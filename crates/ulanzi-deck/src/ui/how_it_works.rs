@@ -21,8 +21,8 @@ const TARGET: (usize, usize) = (0, 1);
 const LIB: (f64, f64, f64, f64) = (296.0, 16.0, 128.0, 178.0);
 const CARD_H: f64 = 34.0;
 
-const BLUE: (f64, f64, f64) = (0.208, 0.518, 0.894);
-const GREEN: (f64, f64, f64) = (0.2, 0.82, 0.478);
+pub(crate) const BLUE: (f64, f64, f64) = (0.208, 0.518, 0.894);
+pub(crate) const GREEN: (f64, f64, f64) = (0.2, 0.82, 0.478);
 const ORANGE: (f64, f64, f64) = (1.0, 0.47, 0.0);
 
 /// Where each step of the story starts, in seconds.
@@ -42,16 +42,16 @@ pub fn caption(t: f64) -> &'static str {
     }
 }
 
-fn ease(x: f64) -> f64 {
+pub(crate) fn ease(x: f64) -> f64 {
     let x = x.clamp(0.0, 1.0);
     x * x * (3.0 - 2.0 * x)
 }
 
-fn phase(t: f64, from: f64, to: f64) -> f64 {
+pub(crate) fn phase(t: f64, from: f64, to: f64) -> f64 {
     ease((t - from) / (to - from))
 }
 
-fn rounded(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+pub(crate) fn rounded(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     cr.new_sub_path();
     cr.arc(x + w - r, y + r, r, -PI / 2.0, 0.0);
     cr.arc(x + w - r, y + h - r, r, 0.0, PI / 2.0);
@@ -67,7 +67,7 @@ fn key_rect(row: usize, col: usize) -> (f64, f64) {
     )
 }
 
-fn play_glyph(cr: &cairo::Context, cx: f64, cy: f64, s: f64) {
+pub(crate) fn play_glyph(cr: &cairo::Context, cx: f64, cy: f64, s: f64) {
     cr.move_to(cx - 0.35 * s, cy - 0.42 * s);
     cr.line_to(cx + 0.45 * s, cy);
     cr.line_to(cx - 0.35 * s, cy + 0.42 * s);
@@ -105,7 +105,7 @@ fn note(cr: &cairo::Context, x: f64, y: f64, k: f64) {
     cr.restore().ok();
 }
 
-fn cursor(cr: &cairo::Context, x: f64, y: f64, fg: (f64, f64, f64)) {
+pub(crate) fn cursor(cr: &cairo::Context, x: f64, y: f64, fg: (f64, f64, f64)) {
     cr.move_to(x, y);
     cr.line_to(x, y + 16.0);
     cr.line_to(x + 4.5, y + 12.0);

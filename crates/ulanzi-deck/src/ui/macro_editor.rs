@@ -18,6 +18,7 @@ use crate::runtime;
 use crate::state::State;
 use crate::ui::action_editor::{How, OnChange, base_key_name, picker_button, rows_for, sendable_alias};
 use crate::ui::capture::Capture;
+use crate::ui::macro_diagram::Diagram;
 use crate::ui::macro_steps::{
     Chip, Direction, RECORD_HINT, chips, held_warning, move_chip, remove_chip, trigger_sentence,
 };
@@ -601,58 +602,6 @@ fn draw_steps(ed: &Ed) {
     }
 }
 
-/// How far through a loop of the diagram each of its four parts of a key press has come.
-fn diagram_state(t: &Trigger, phase: f64) -> (bool, usize) {
-    let lit = |from: f64, to: f64| ((phase - from) / (to - from) * 4.0).floor().clamp(-1.0, 3.0) as i32;
-    match t {
-        Trigger::Once { .. } => (phase < 0.08, lit(0.08, 0.6).max(-1) as usize % 5),
-        Trigger::WhileHeld { .. } => (phase < 0.75, (phase * 16.0) as usize % 4),
-        Trigger::Toggle => (
-            (0.0..0.06).contains(&phase) || (0.75..0.81).contains(&phase),
-            (phase * 16.0) as usize % 4,
-        ),
-        Trigger::Sequence => (phase < 0.7, (phase * 4.0) as usize % 4),
-    }
-}
-
-/// A small looping picture of a key press and what the steps do.
-fn diagram(trigger: Trigger) -> gtk::DrawingArea {
-    let area = gtk::DrawingArea::builder()
-        .content_width(96)
-        .content_height(34)
-        .build();
-    let phase = Rc::new(Cell::new(0.0f64));
-    {
-        let phase = phase.clone();
-        area.set_draw_func(move |w, cr, width, _| {
-            let color = w.color();
-            let (down, active) = diagram_state(&trigger, phase.get());
-            cr.set_source_rgba(color.red().into(), color.green().into(), color.blue().into(), 0.9);
-            let key = if down { 14.0 } else { 18.0 };
-            cr.rectangle(2.0, (34.0 - key) / 2.0, key, key);
-            let _ = if down { cr.fill() } else { cr.stroke() };
-            for i in 0..4 {
-                let alpha = if i == active { 0.9 } else { 0.25 };
-                cr.set_source_rgba(
-                    color.red().into(),
-                    color.green().into(),
-                    color.blue().into(),
-                    alpha,
-                );
-                let x = 28.0 + i as f64 * (width as f64 - 30.0) / 4.0;
-                cr.rectangle(x, 12.0, 11.0, 10.0);
-                let _ = cr.fill();
-            }
-        });
-    }
-    area.add_tick_callback(move |w, clock| {
-        phase.set((clock.frame_time() as f64 / 2_400_000.0).fract());
-        w.queue_draw();
-        glib::ControlFlow::Continue
-    });
-    area
-}
-
 fn trigger_cards(ed: &Ed) -> (gtk::Widget, gtk::Label) {
     let cards = gtk::Box::builder().spacing(6).homogeneous(true).build();
     let sentence = gtk::Label::builder()
@@ -662,6 +611,7 @@ fn trigger_cards(ed: &Ed) -> (gtk::Widget, gtk::Label) {
         .build();
     let current = ed.m.borrow().trigger;
     sentence.set_label(trigger_sentence(&current));
+    let diagram = Diagram::new(current);
     let options = [
         ("Play Once", Trigger::default()),
         (
@@ -676,11 +626,8 @@ fn trigger_cards(ed: &Ed) -> (gtk::Widget, gtk::Label) {
     let same = |a: &Trigger, b: &Trigger| std::mem::discriminant(a) == std::mem::discriminant(b);
     let mut first: Option<gtk::ToggleButton> = None;
     for (name, trigger) in options {
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        content.append(&diagram(trigger));
-        content.append(&gtk::Label::new(Some(name)));
         let card = gtk::ToggleButton::builder()
-            .child(&content)
+            .label(name)
             .active(same(&current, &trigger))
             .css_classes(["flat", "macro-type"])
             .build();
@@ -696,79 +643,132 @@ fn trigger_cards(ed: &Ed) -> (gtk::Widget, gtk::Label) {
                 ed2.edit(|m| m.trigger = trigger);
             }
         });
+        // Pointing at a type shows that type, with the choice already made for the one in use.
+        let motion = gtk::EventControllerMotion::new();
+        {
+            let (ed, diagram) = (ed.clone(), diagram.clone());
+            motion.connect_enter(move |_, _, _| {
+                let current = ed.m.borrow().trigger;
+                diagram.show(if same(&current, &trigger) {
+                    current
+                } else {
+                    trigger
+                });
+            });
+        }
+        card.add_controller(motion);
         cards.append(&card);
     }
-    (cards.upcast(), sentence)
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    column.append(&cards);
+    column.append(&diagram.root);
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let diagram = diagram.clone();
+        motion.connect_enter(move |_, _, _| diagram.hover(true));
+    }
+    {
+        let diagram = diagram.clone();
+        motion.connect_leave(move |_| diagram.hover(false));
+    }
+    column.add_controller(motion);
+    // Any change of type or of what it does afterwards plays once.
+    let previous = ed.redraw.borrow().clone();
+    {
+        let ed = ed.clone();
+        let chained: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(p) = &previous {
+                p();
+            }
+            let trigger = ed.m.borrow().trigger;
+            diagram.choose(trigger);
+        });
+        *ed.redraw.borrow_mut() = Some(chained);
+    }
+    (column.upcast(), sentence)
 }
 
+const AGAIN: [(&str, PressAgain); 4] = [
+    ("Stops it", PressAgain::Stop),
+    ("Restarts it", PressAgain::Restart),
+    ("Does nothing", PressAgain::Ignore),
+    ("Plays it again after", PressAgain::Queue),
+];
+
+const RELEASE: [(&str, Release); 2] = [
+    ("Finishes the pass", Release::FinishPass),
+    ("Stops at once", Release::StopNow),
+];
+
 /// What another press does, or what letting go does, for the types that ask.
+///
+/// Each question has its own list. A redraw only moves a list that is showing the wrong thing:
+/// changing `selected` from inside its own notify makes GObject restart that notify, for ever.
 fn trigger_option(ed: &Ed) -> gtk::Widget {
     let row = gtk::Box::builder().spacing(8).build();
     let label = gtk::Label::new(None);
     row.append(&label);
-    let drop = gtk::DropDown::from_strings(&[]);
-    row.append(&drop);
-    let holder = (row.clone(), label, drop);
-    let draw: Rc<dyn Fn()> = {
-        let (ed, (row, label, drop)) = (ed.clone(), holder);
-        let updating = Rc::new(Cell::new(false));
-        {
-            let (ed, updating) = (ed.clone(), updating.clone());
-            drop.connect_selected_notify(move |d| {
-                if updating.get() {
-                    return;
-                }
-                let i = d.selected();
-                ed.edit(|m| match m.trigger {
-                    Trigger::Once { .. } => {
-                        m.trigger = Trigger::Once {
-                            again: match i {
-                                1 => PressAgain::Restart,
-                                2 => PressAgain::Ignore,
-                                3 => PressAgain::Queue,
-                                _ => PressAgain::Stop,
-                            },
-                        }
-                    }
-                    Trigger::WhileHeld { .. } => {
-                        m.trigger = Trigger::WhileHeld {
-                            on_release: if i == 1 {
-                                Release::StopNow
-                            } else {
-                                Release::FinishPass
-                            },
-                        }
-                    }
-                    _ => {}
-                });
-            });
-        }
-        Rc::new(move || {
-            updating.set(true);
-            let trigger = ed.m.borrow().trigger;
-            let (text, names, selected): (&str, &[&str], u32) = match trigger {
-                Trigger::Once { again } => (
-                    "Pressing again",
-                    &["Stops it", "Restarts it", "Does nothing", "Plays it again after"],
-                    match again {
-                        PressAgain::Stop => 0,
-                        PressAgain::Restart => 1,
-                        PressAgain::Ignore => 2,
-                        PressAgain::Queue => 3,
-                    },
-                ),
-                Trigger::WhileHeld { on_release } => (
-                    "Letting go",
-                    &["Finishes the pass", "Stops at once"],
-                    (on_release == Release::StopNow) as u32,
-                ),
-                _ => ("", &[], 0),
+    let again = gtk::DropDown::from_strings(&AGAIN.map(|(name, _)| name));
+    let release = gtk::DropDown::from_strings(&RELEASE.map(|(name, _)| name));
+    row.append(&again);
+    row.append(&release);
+    {
+        let ed = ed.clone();
+        again.connect_selected_notify(move |d| {
+            let Some((_, chosen)) = AGAIN.get(d.selected() as usize).copied() else {
+                return;
             };
-            row.set_visible(!names.is_empty());
-            label.set_label(text);
-            drop.set_model(Some(&gtk::StringList::new(names)));
-            drop.set_selected(selected);
-            updating.set(false);
+            let current = ed.m.borrow().trigger;
+            if matches!(current, Trigger::Once { again } if again != chosen) {
+                ed.edit(|m| m.trigger = Trigger::Once { again: chosen });
+            }
+        });
+    }
+    {
+        let ed = ed.clone();
+        release.connect_selected_notify(move |d| {
+            let Some((_, chosen)) = RELEASE.get(d.selected() as usize).copied() else {
+                return;
+            };
+            let current = ed.m.borrow().trigger;
+            if matches!(current, Trigger::WhileHeld { on_release } if on_release != chosen) {
+                ed.edit(|m| m.trigger = Trigger::WhileHeld { on_release: chosen });
+            }
+        });
+    }
+    let draw: Rc<dyn Fn()> = {
+        let (ed, row) = (ed.clone(), row.clone());
+        Rc::new(move || {
+            let trigger = ed.m.borrow().trigger;
+            let shown = |drop: &gtk::DropDown, index: Option<usize>| {
+                drop.set_visible(index.is_some());
+                if let Some(index) = index.map(|i| i as u32).filter(|i| *i != drop.selected()) {
+                    drop.set_selected(index);
+                }
+            };
+            shown(
+                &again,
+                match trigger {
+                    Trigger::Once { again } => AGAIN.iter().position(|(_, a)| *a == again),
+                    _ => None,
+                },
+            );
+            shown(
+                &release,
+                match trigger {
+                    Trigger::WhileHeld { on_release } => RELEASE.iter().position(|(_, r)| *r == on_release),
+                    _ => None,
+                },
+            );
+            match trigger {
+                Trigger::Once { .. } => label.set_label("Pressing again"),
+                Trigger::WhileHeld { .. } => label.set_label("Letting go"),
+                _ => {}
+            }
+            row.set_visible(matches!(
+                trigger,
+                Trigger::Once { .. } | Trigger::WhileHeld { .. }
+            ));
         })
     };
     let previous = ed.redraw.borrow().clone();
@@ -1352,4 +1352,46 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         });
     }
     window.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_drop_downs(w: &gtk::Widget, out: &mut Vec<gtk::DropDown>) {
+        if let Some(d) = w.downcast_ref::<gtk::DropDown>() {
+            out.push(d.clone());
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            all_drop_downs(&c, out);
+            child = c.next_sibling();
+        }
+    }
+
+    #[test]
+    fn every_press_again_choice_settles() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            let window = gtk::Window::new();
+            open(&state, &window, MacroTarget::New);
+            let editor = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|w| w.downcast::<adw::Window>().ok())
+                .next()
+                .expect("editor");
+            let mut drops = Vec::new();
+            all_drop_downs(editor.upcast_ref(), &mut drops);
+            let drop = drops.first().expect("drop down");
+            assert_eq!(drop.model().expect("model").n_items(), AGAIN.len() as u32);
+            for choice in [3, 1, 2, 3, 0] {
+                drop.set_selected(choice);
+                assert_eq!(drop.selected(), choice);
+            }
+            editor.destroy();
+        });
+    }
 }
