@@ -593,12 +593,22 @@ pub fn pretty_combo(keys: &str) -> String {
         .map(|k| {
             let k = k.trim();
             match k.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" => "Ctrl".into(),
-                "alt" => "Alt".into(),
-                "shift" => "Shift".into(),
-                "super" | "meta" | "win" | "hyper" => "Super".into(),
+                "ctrl" | "control" | "control_l" | "control_r" => "Ctrl".into(),
+                "alt" | "alt_l" | "alt_r" => "Alt".into(),
+                "shift" | "shift_l" | "shift_r" => "Shift".into(),
+                "super" | "meta" | "win" | "hyper" | "super_l" | "super_r" | "meta_l" | "meta_r" => {
+                    "Super".into()
+                }
+                "return" | "enter" => "Enter".into(),
+                "escape" | "esc" => "Esc".into(),
                 _ if k.chars().count() == 1 => k.to_uppercase(),
-                _ => k.to_string(),
+                _ => {
+                    let mut letters = k.chars();
+                    letters
+                        .next()
+                        .map(|first| first.to_uppercase().chain(letters).collect())
+                        .unwrap_or_default()
+                }
             }
         })
         .collect::<Vec<_>>()

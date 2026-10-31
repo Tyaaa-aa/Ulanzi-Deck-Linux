@@ -18,17 +18,20 @@ use uuid::Uuid;
 use crate::runtime;
 use crate::state::State;
 use crate::ui::action_editor::{How, OnChange, base_key_name, picker_button, rows_for, sendable_alias};
+use crate::ui::app_picker::app_texture;
 use crate::ui::capture::Capture;
 use crate::ui::macro_diagram::Diagram;
 use crate::ui::macro_steps::{
-    Chip, Direction, RECORD_HINT, chips, held_warning, move_chips, remove_chip, remove_selected, step_count,
-    trigger_sentence,
+    Chip, Direction, Kind, RECORD_HINT, chips, held_warning, move_chips, remove_chip, remove_selected,
+    step_count, trigger_sentence,
 };
 use crate::ui::wrap_box::WrapBox;
 
 /// Seconds before Try It plays, to click into the target app.
 const TRY_COUNTDOWN: u32 = 3;
 const DEFAULT_STANDARD_DELAY: u32 = 50;
+/// The smallest width of a step in the grid.
+const STEP_WIDTH: i32 = 136;
 
 /// What the editor opens on.
 #[derive(Clone)]
@@ -102,6 +105,13 @@ struct Ed {
     selected: Rc<RefCell<BTreeSet<usize>>>,
     /// The chip a Shift+click range starts from.
     anchor: Rc<Cell<Option<(SequencePart, usize)>>>,
+    /// Shows whether there is anything to save.
+    mark: Redraw,
+    /// Starts or stops recording.
+    toggle_record: Redraw,
+    recording: Rc<Cell<bool>>,
+    /// The row of a Sequence that a recording goes into.
+    record_part: Rc<Cell<SequencePart>>,
     /// The profile and page this was opened on: an action is written back there.
     opened_on: (Uuid, usize),
 }
@@ -117,6 +127,8 @@ impl Ed {
     fn let_go(&self) {
         *self.redraw.borrow_mut() = None;
         *self.stop_recording.borrow_mut() = None;
+        *self.mark.borrow_mut() = None;
+        *self.toggle_record.borrow_mut() = None;
         while let Some(child) = self.steps.first_child() {
             self.steps.remove(&child);
         }
@@ -126,6 +138,26 @@ impl Ed {
         let draw = self.redraw.borrow().clone();
         if let Some(draw) = draw {
             draw();
+        }
+        self.show_unsaved();
+    }
+
+    fn unsaved(&self) -> bool {
+        *self.m.borrow() != *self.original.borrow()
+    }
+
+    fn show_unsaved(&self) {
+        let mark = self.mark.borrow().clone();
+        if let Some(mark) = mark {
+            mark();
+        }
+    }
+
+    fn record(&self, part: SequencePart) {
+        let toggle = self.toggle_record.borrow().clone();
+        if let Some(toggle) = toggle {
+            self.record_part.set(part);
+            toggle();
         }
     }
 
@@ -300,8 +332,7 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
     let popover = gtk::Popover::builder().child(&list).build();
     let button = gtk::MenuButton::builder()
-        .icon_name("list-add-symbolic")
-        .tooltip_text("Add a step")
+        .label("Add Step")
         .popover(&popover)
         .build();
     let item = |label: &str, f: Box<dyn Fn()>| {
@@ -427,6 +458,21 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
         });
         holder.append(&action);
     }
+    let recording = ed.recording.get();
+    let record = gtk::Button::builder()
+        .child(
+            &adw::ButtonContent::builder()
+                .icon_name("media-record-symbolic")
+                .label(if recording { "Stop" } else { "Record" })
+                .build(),
+        )
+        .css_classes(["macro-record"])
+        .build();
+    {
+        let ed = ed.clone();
+        record.connect_clicked(move |_| ed.record(part));
+    }
+    holder.append(&record);
     holder.upcast()
 }
 
@@ -521,6 +567,15 @@ fn key_choices(ed: &Ed, popover: &gtk::Popover, body: &gtk::Box, steps: &[usize]
     }
 }
 
+/// What a chip for an action step should say.
+fn action_text_of(ed: &Ed, chip: &Chip) -> Option<String> {
+    let m = ed.m.borrow();
+    match &m.steps.get(*chip.steps.first()?)?.event {
+        MacroEvent::Action { action } => Some(action_text(action)),
+        _ => None,
+    }
+}
+
 /// A step's action, with how it's named on its chip.
 fn action_text(action: &Action) -> String {
     if let Action::LaunchApp {
@@ -562,7 +617,13 @@ fn fill_action(ed: &Ed, i: usize, group: &gtk::ListBox, title: &gtk::Label, chip
                 });
                 if let Some(text) = text {
                     title.set_label(&text);
-                    chip.set_child(Some(&gtk::Label::new(Some(&text))));
+                    if let Some(name) = chip
+                        .child()
+                        .and_then(|c| c.last_child())
+                        .and_downcast::<gtk::Label>()
+                    {
+                        name.set_label(&text);
+                    }
                 }
             });
         })
@@ -847,6 +908,14 @@ fn steps_heading(ed: &Ed) -> gtk::Widget {
             .tooltip_text(STEP_TIPS)
             .build(),
     );
+    for (kind, name) in Kind::ALL {
+        heading.append(
+            &gtk::Label::builder()
+                .label(name)
+                .css_classes(["macro-legend", kind.class()])
+                .build(),
+        );
+    }
     let all = gtk::Button::builder()
         .label("Select All")
         .hexpand(true)
@@ -892,49 +961,57 @@ fn confirm_clear(ed: &Ed) {
     alert.present(Some(&ed.window));
 }
 
-/// The app a Launch App chip opens: its id and name.
-fn app_of(ed: &Ed, chip: &Chip) -> Option<(String, String)> {
+/// The id of the app a Launch App chip opens.
+fn app_of(ed: &Ed, chip: &Chip) -> Option<String> {
     let m = ed.m.borrow();
-    let step = m.steps.get(*chip.steps.first()?)?;
-    let MacroEvent::Action {
-        action: Action::LaunchApp {
-            desktop_id: Some(id), ..
-        },
-    } = &step.event
-    else {
-        return None;
-    };
-    let apps = crate::ui::action_editor::installed_apps();
-    let app = apps.iter().find(|a| a.desktop_id == *id)?;
-    Some((id.clone(), app.name.clone()))
+    match &m.steps.get(*chip.steps.first()?)?.event {
+        MacroEvent::Action {
+            action: Action::LaunchApp {
+                desktop_id: Some(id), ..
+            },
+        } => Some(id.clone()),
+        _ => None,
+    }
 }
 
 fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::Widget {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let app = app_of(ed, chip);
-    match &app {
-        Some((id, name)) => {
-            let text = format!("Launch {name}");
-            content.append(&crate::ui::app_picker::app_label(Some(id), &text, 16));
-        }
-        None => content.append(&gtk::Image::from_icon_name(chip.icon)),
-    }
-    let arrow = match chip.direction {
-        Direction::Down => Some("go-down-symbolic"),
-        Direction::Up => Some("go-up-symbolic"),
-        Direction::Both => None,
+    content.append(
+        &gtk::Label::builder()
+            .label((index + 1).to_string())
+            .css_classes(["macro-number"])
+            .build(),
+    );
+    let picture = match (chip.direction, app_of(ed, chip).as_deref().and_then(app_texture)) {
+        (Direction::Down, _) => gtk::Image::from_icon_name("go-down-symbolic"),
+        (Direction::Up, _) => gtk::Image::from_icon_name("go-up-symbolic"),
+        (Direction::Both, Some(icon)) => gtk::Image::from_paintable(Some(&icon)),
+        (Direction::Both, None) => gtk::Image::from_icon_name(chip.icon),
     };
-    if let Some(arrow) = arrow {
-        content.append(&gtk::Image::from_icon_name(arrow));
-    }
-    if app.is_none() {
-        content.append(&gtk::Label::new(Some(&chip.label)));
-    }
+    content.append(&picture);
+    let label = match app_of(ed, chip) {
+        Some(_) => action_text_of(ed, chip),
+        None => None,
+    };
+    content.append(
+        &gtk::Label::builder()
+            .label(label.as_deref().unwrap_or(&chip.label))
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .hexpand(true)
+            .xalign(0.0)
+            .build(),
+    );
     let button = gtk::Button::builder()
         .child(&content)
-        .css_classes(["macro-step"])
-        .tooltip_text(STEP_TIPS)
+        .css_classes(["macro-step", chip.kind.class()])
+        .tooltip_text(format!(
+            "{}\n\n{STEP_TIPS}",
+            label.as_deref().unwrap_or(&chip.label)
+        ))
         .build();
+    if chip.direction == Direction::Up {
+        button.add_css_class("up");
+    }
     let first = chip.steps.first().copied().unwrap_or_default();
     if ed.selected.borrow().contains(&first) {
         button.add_css_class("selected");
@@ -1041,28 +1118,33 @@ fn draw_steps(ed: &Ed) {
         if list.is_empty() && m.trigger != Trigger::Sequence {
             ed.steps.append(
                 &gtk::Label::builder()
-                    .label("No steps yet. Press Record, or add one here.")
+                    .label("No steps yet. Press Record, or add one below.")
                     .css_classes(["dim-label"])
                     .xalign(0.0)
                     .build(),
             );
         }
-        let flow = WrapBox::default();
+        let grid = WrapBox::grid(STEP_WIDTH);
         for (i, chip) in list.iter().enumerate() {
-            flow.append(&chip_widget(ed, chip, i, *part));
+            let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            cell.append(&chip_widget(ed, chip, i, *part));
             if let (Some(ms), Some(step)) = (chip.delay, chip.steps.last().copied()) {
                 let b = gtk::Button::builder()
                     .label(format!("{ms} ms"))
-                    .valign(gtk::Align::Center)
+                    .halign(gtk::Align::Center)
                     .css_classes(["flat", "macro-delay"])
+                    .tooltip_text("Wait after this step. Click to change it.")
                     .build();
                 let ed2 = ed.clone();
                 b.connect_clicked(move |b| delay_popover(&ed2, b, step, ms));
-                flow.append(&b);
+                cell.append(&b);
             }
+            grid.append(&cell);
         }
-        flow.append(&add_menu(ed, *part));
-        ed.steps.append(&flow);
+        if !list.is_empty() {
+            ed.steps.append(&grid);
+        }
+        ed.steps.append(&add_menu(ed, *part));
     }
     let count = ed.selected.borrow().len();
     if count > 0 {
@@ -1404,42 +1486,69 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
         Rc::new(move || {
             capture.end();
             panel.set_visible(false);
+            ed.recording.set(false);
             if let Some(record) = record.upgrade() {
                 record.set_label("Record");
                 record.remove_css_class("destructive-action");
             }
-            if let Some(r) = live.borrow_mut().take() {
-                let steps = r.finish();
-                ed.edit(|m| m.steps.extend(steps));
+            let finished = live.borrow_mut().take();
+            match finished {
+                Some(r) => {
+                    let mut steps = r.finish();
+                    let part = ed.record_part.get();
+                    steps.iter_mut().for_each(|s| s.part = part);
+                    ed.edit(|m| m.steps.extend(steps));
+                }
+                None => ed.changed(),
             }
         })
     };
     *ed.stop_recording.borrow_mut() = Some(stop.clone());
     {
-        let (ed, live, capture, panel, stop) = (
+        let (ed2, live, capture, panel, stop, top) = (
             ed.clone(),
             live.clone(),
             capture.clone(),
             panel.clone(),
             stop.clone(),
+            record.downgrade(),
         );
-        record.connect_clicked(move |b| {
+        let toggle: Rc<dyn Fn()> = Rc::new(move || {
             if live.borrow().is_some() {
                 stop();
                 return;
             }
             *live.borrow_mut() = Some(MacroRecorder::default());
             panel.set_visible(true);
-            b.set_label("Stop");
-            b.add_css_class("destructive-action");
+            ed2.recording.set(true);
+            if let Some(b) = top.upgrade() {
+                b.set_label("Stop");
+                b.add_css_class("destructive-action");
+            }
             let stop = stop.clone();
             let lost = Rc::downgrade(&stop);
-            capture.begin(ed.window.upcast_ref(), move || {
+            capture.begin(ed2.window.upcast_ref(), move || {
                 if let Some(stop) = lost.upgrade() {
                     stop();
                 }
             });
+            ed2.changed();
+            // The recorder sits under the steps: bring it into view.
+            let panel = panel.downgrade();
+            glib::timeout_add_local_once(Duration::from_millis(60), move || {
+                let scroller = panel
+                    .upgrade()
+                    .and_then(|p| p.ancestor(gtk::ScrolledWindow::static_type()))
+                    .and_downcast::<gtk::ScrolledWindow>();
+                if let Some(s) = scroller {
+                    let bar = s.vadjustment();
+                    bar.set_value(bar.upper() - bar.page_size());
+                }
+            });
         });
+        *ed.toggle_record.borrow_mut() = Some(toggle);
+        let ed = ed.clone();
+        record.connect_clicked(move |_| ed.record(SequencePart::Press));
     }
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -1627,20 +1736,21 @@ fn update_library(ed: &Ed, save: &OnChange) {
     alert.present(Some(&ed.window));
 }
 
-fn save(ed: &Ed, saving: &Saving) {
+/// Save and stay open. False when it couldn't be saved.
+fn save(ed: &Ed, saving: &Saving) -> bool {
     ed.end_recording();
     let m = ed.m.borrow().clone();
     let id = m.id;
     match saving {
         Saving::Own(save) => {
             if !ed.in_place() {
-                return;
+                return false;
             }
             write_action(save, id, Some(m));
         }
         Saving::Library(link) => {
             if link.is_some() && !ed.in_place() {
-                return;
+                return false;
             }
             let mut saved = true;
             ed.state.edit(|e| {
@@ -1649,14 +1759,16 @@ fn save(ed: &Ed, saving: &Saving) {
             });
             if !saved {
                 crate::ui::toast(&ed.state, "A macro can't run itself");
-                return;
+                return false;
             }
             if let Some(save) = link {
                 write_action(save, id, None);
             }
         }
     }
-    ed.close_saved();
+    *ed.original.borrow_mut() = ed.m.borrow().clone();
+    ed.show_unsaved();
+    true
 }
 
 fn stop_trying(ed: &Ed) {
@@ -1750,6 +1862,10 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         try_run: Rc::default(),
         selected: Rc::default(),
         anchor: Rc::default(),
+        mark: Rc::default(),
+        toggle_record: Rc::default(),
+        recording: Rc::default(),
+        record_part: Rc::new(Cell::new(SequencePart::Press)),
         opened_on: (state.profile_id(), state.editor.borrow().page()),
     };
     {
@@ -1764,7 +1880,10 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         .build();
     {
         let ed = ed.clone();
-        name.connect_changed(move |e| ed.m.borrow_mut().name = e.text().to_string());
+        name.connect_changed(move |e| {
+            ed.m.borrow_mut().name = e.text().to_string();
+            ed.show_unsaved();
+        });
     }
     let (record, record_panel) = recorder(&ed);
     let keys = gtk::EventControllerKey::new();
@@ -1794,7 +1913,6 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     top.append(&try_button);
     top.append(&record);
     body.append(&top);
-    body.append(&record_panel);
 
     let id = ed.m.borrow().id;
     let is_own = matches!(saving, Saving::Own(_));
@@ -1884,6 +2002,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     body.append(&delays_row(&ed));
     body.append(&steps_heading(&ed));
     body.append(&ed.steps);
+    body.append(&record_panel);
     body.append(&ed.warning);
     body.append(
         &gtk::Label::builder()
@@ -1895,16 +2014,65 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     body.append(&feedback_row(&ed));
     ed.changed();
 
-    let header = adw::HeaderBar::new();
+    let saving = Rc::new(saving);
+    let title = adw::WindowTitle::new("Macro", "");
+    let header = adw::HeaderBar::builder().title_widget(&title).build();
+    let cancel = gtk::Button::with_label("Cancel");
+    {
+        let window = window.clone();
+        cancel.connect_clicked(move |_| {
+            window.close();
+        });
+    }
+    header.pack_start(&cancel);
     let done = gtk::Button::builder()
         .label("Done")
         .css_classes(["suggested-action"])
+        .tooltip_text("Save and close")
         .build();
     {
-        let ed = ed.clone();
-        done.connect_clicked(move |_| save(&ed, &saving));
+        let (ed, saving) = (ed.clone(), saving.clone());
+        done.connect_clicked(move |_| {
+            if save(&ed, &saving) {
+                ed.window.close();
+            }
+        });
     }
     header.pack_end(&done);
+    let save_button = gtk::Button::builder()
+        .label("Save")
+        .tooltip_text("Save and keep editing (Ctrl+S)")
+        .sensitive(false)
+        .build();
+    {
+        let (ed, saving) = (ed.clone(), saving.clone());
+        save_button.connect_clicked(move |_| {
+            save(&ed, &saving);
+        });
+    }
+    header.pack_end(&save_button);
+    {
+        let ed2 = ed.clone();
+        *ed.mark.borrow_mut() = Some(Rc::new(move || {
+            let unsaved = ed2.unsaved();
+            title.set_subtitle(if unsaved { "● Unsaved changes" } else { "" });
+            save_button.set_sensitive(unsaved);
+        }));
+    }
+    let keys = gtk::EventControllerKey::new();
+    {
+        let (ed, saving) = (ed.clone(), saving.clone());
+        keys.connect_key_pressed(move |_, key, _, held| {
+            if matches!(key, gdk::Key::s | gdk::Key::S) && held.contains(gdk::ModifierType::CONTROL_MASK) {
+                ed.end_recording();
+                save(&ed, &saving);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+    }
+    window.add_controller(keys);
+    ed.show_unsaved();
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
     view.set_content(Some(
@@ -1925,7 +2093,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
             if ed.trying.get() {
                 stop_trying(&ed);
             }
-            if *ed.m.borrow() == *ed.original.borrow() {
+            if !ed.unsaved() {
                 ed.let_go();
                 held.take();
                 return glib::Propagation::Proceed;
@@ -1937,7 +2105,18 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
                 .build();
             alert.add_response("keep", "Keep Editing");
             alert.add_response("discard", "Discard");
+            alert.add_response("save", "Save");
             alert.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+            alert.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+            alert.set_default_response(Some("save"));
+            {
+                let (ed2, window, saving) = (ed.clone(), w.clone(), saving.clone());
+                alert.connect_response(Some("save"), move |_, _| {
+                    if save(&ed2, &saving) {
+                        window.close();
+                    }
+                });
+            }
             let (ed2, window) = (ed.clone(), w.clone());
             alert.connect_response(Some("discard"), move |_, _| {
                 *ed2.original.borrow_mut() = ed2.m.borrow().clone();
@@ -1999,6 +2178,44 @@ mod tests {
             for w in gtk::Window::list_toplevels() {
                 w.downcast::<gtk::Window>().expect("window").destroy();
             }
+        });
+    }
+
+    #[test]
+    fn save_keeps_the_window_open_and_clears_the_mark() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            let m = Macro::new("Kept");
+            let id = m.id;
+            let ed = Ed {
+                state: state.clone(),
+                m: Rc::new(RefCell::new(m.clone())),
+                window: adw::Window::new(),
+                steps: gtk::Box::new(gtk::Orientation::Vertical, 6),
+                warning: gtk::Label::new(None),
+                redraw: Rc::default(),
+                original: Rc::new(RefCell::new(m)),
+                stop_recording: Rc::default(),
+                users: Rc::default(),
+                trying: Rc::default(),
+                try_run: Rc::default(),
+                selected: Rc::default(),
+                anchor: Rc::default(),
+                mark: Rc::default(),
+                toggle_record: Rc::default(),
+                recording: Rc::default(),
+                record_part: Rc::new(Cell::new(SequencePart::Press)),
+                opened_on: (state.profile_id(), 0),
+            };
+            ed.edit(|m| m.name = "Renamed".into());
+            assert!(ed.unsaved());
+            assert!(save(&ed, &Saving::Library(None)));
+            assert!(!ed.unsaved());
+            let e = state.editor.borrow();
+            assert_eq!(e.library().get(id).map(|m| m.name.as_str()), Some("Renamed"));
         });
     }
 

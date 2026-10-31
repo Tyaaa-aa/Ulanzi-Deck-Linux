@@ -1,5 +1,5 @@
-//! A row that packs its children and wraps when they no longer fit. GTK's `FlowBox` lines children
-//! up in columns, which leaves wide gaps between steps of different sizes.
+//! A row that packs its children and wraps when they no longer fit, or with [`WrapBox::grid`] a
+//! grid of equal cells that fills the width.
 
 use adw::prelude::*;
 use gtk::glib;
@@ -26,11 +26,21 @@ fn rows(widths: &[i32], width: i32) -> Vec<(usize, usize)> {
     out
 }
 
+/// How many cells of at least `cell` fit in `width`, and how wide each one comes out.
+fn grid_cells(width: i32, cell: i32) -> (i32, i32) {
+    let columns = ((width + SPACING) / (cell + SPACING)).max(1);
+    (columns, (width - SPACING * (columns - 1)) / columns)
+}
+
 mod imp {
     use super::*;
+    use std::cell::Cell;
 
     #[derive(Default)]
-    pub struct WrapBox;
+    pub struct WrapBox {
+        /// The smallest width of a grid cell; 0 packs children instead.
+        pub cell: Cell<i32>,
+    }
 
     #[glib::object_subclass]
     impl ObjectSubclass for WrapBox {
@@ -59,6 +69,14 @@ mod imp {
             }
             out
         }
+
+        /// How wide each child is laid out in `width`.
+        fn widths(&self, children: &[gtk::Widget], width: i32) -> Vec<i32> {
+            match self.cell.get() {
+                0 => children.iter().map(natural_width).collect(),
+                cell => vec![grid_cells(width, cell).1; children.len()],
+            }
+        }
     }
 
     fn natural_width(w: &gtk::Widget) -> i32 {
@@ -76,14 +94,19 @@ mod imp {
 
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
             let children = self.children();
+            let cell = self.cell.get();
+            if cell > 0 && orientation == gtk::Orientation::Horizontal {
+                let gaps = SPACING * (children.len() as i32 - 1).max(0);
+                return (cell, cell * children.len() as i32 + gaps, -1, -1);
+            }
             if orientation == gtk::Orientation::Horizontal {
                 let widest = children.iter().map(natural_width).max().unwrap_or(0);
                 let total: i32 = children.iter().map(natural_width).sum();
                 let gaps = SPACING * (children.len() as i32 - 1).max(0);
                 return (widest, total + gaps, -1, -1);
             }
-            let widths: Vec<i32> = children.iter().map(natural_width).collect();
             let width = if for_size < 0 { i32::MAX / 2 } else { for_size };
+            let widths = self.widths(&children, width);
             let list = rows(&widths, width);
             let height: i32 = list
                 .iter()
@@ -95,7 +118,7 @@ mod imp {
 
         fn size_allocate(&self, width: i32, _height: i32, _baseline: i32) {
             let children = self.children();
-            let widths: Vec<i32> = children.iter().map(natural_width).collect();
+            let widths = self.widths(&children, width);
             let mut y = 0;
             for (a, b) in rows(&widths, width) {
                 let row = &children[a..b];
@@ -104,7 +127,13 @@ mod imp {
                 for (child, w) in row.iter().zip(&widths[a..b]) {
                     let w = (*w).min(width);
                     let h = natural_height(child);
-                    let spot = gtk::Allocation::new(x, y + (tallest - h) / 2, w, h);
+                    // Grid cells line up along their tops; a packed row centres.
+                    let top = if self.cell.get() > 0 {
+                        y
+                    } else {
+                        y + (tallest - h) / 2
+                    };
+                    let spot = gtk::Allocation::new(x, top, w, h);
                     child.size_allocate(&spot, -1);
                     x += w + SPACING;
                 }
@@ -127,6 +156,13 @@ impl Default for WrapBox {
 }
 
 impl WrapBox {
+    /// A grid of equal cells at least `cell` wide.
+    pub fn grid(cell: i32) -> Self {
+        let grid = Self::default();
+        grid.imp().cell.set(cell);
+        grid
+    }
+
     pub fn append(&self, child: &impl IsA<gtk::Widget>) {
         child.set_parent(self);
     }
@@ -146,6 +182,12 @@ mod tests {
     fn a_child_too_wide_gets_its_own_row() {
         assert_eq!(rows(&[300, 40], 100), [(0, 1), (1, 2)]);
         assert_eq!(rows(&[40, 300], 100), [(0, 1), (1, 2)]);
+    }
+
+    #[test]
+    fn grid_cells_fill_the_width() {
+        assert_eq!(grid_cells(724, 136), (5, 141));
+        assert_eq!(grid_cells(100, 136), (1, 100));
     }
 
     #[test]

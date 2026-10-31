@@ -157,7 +157,10 @@ other apps, which keeps your passwords safe. Your macro still plays back in what
 | Movement in pixels | **+** → **Move Pointer…** |
 | Text | **+** → **Text…** |
 
-**Arrange:** drag a step to move it. Click a step to edit or delete it, and a delay to change it.
+**Save:** **Save** keeps the window open, and **Done** saves and closes. **Cancel** asks before dropping
+unsaved changes, and the title says when there are any.
+
+**Arrange:** steps sit in a numbered grid, coloured by kind. Drag a step to move it. Click a step to edit or delete it, and a delay to change it.
 Ctrl+click selects steps, Shift+click selects a range and Ctrl+A selects them all, to delete them or
 drag them together. **Clear All** removes every step, after asking. **Add Action** adds any app action as a step. **Use Standard Delays** gives every step the same delay
 and shows each press as one chip; turning it off brings back the recorded delays.

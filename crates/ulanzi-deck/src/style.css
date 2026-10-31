@@ -337,8 +337,34 @@ row.drop-target {
 
 /* Macro editor */
 .macro-step {
-  font-feature-settings: "tnum";
+  font-weight: normal;
+  padding: 5px 8px;
 }
+.macro-record {
+  background-color: #e01b24;
+  color: #ffffff;
+}
+.macro-record:hover {
+  background-color: #f0303a;
+}
+.macro-number {
+  font-size: 0.8em;
+  font-feature-settings: "tnum";
+  opacity: 0.6;
+}
+.macro-legend {
+  font-size: 0.8em;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+.macro-step.kind-keys, .macro-legend.kind-keys { background-color: alpha(#3584e4, 0.34); }
+.macro-step.kind-mouse, .macro-legend.kind-mouse { background-color: alpha(#2ec27e, 0.3); }
+.macro-step.kind-text, .macro-legend.kind-text { background-color: alpha(#c061cb, 0.34); }
+.macro-step.kind-wait, .macro-legend.kind-wait { background-color: alpha(#e5a50a, 0.3); }
+.macro-step.kind-action, .macro-legend.kind-action { background-color: alpha(#e66100, 0.34); }
+.macro-step.kind-keys.up { background-color: alpha(#3584e4, 0.14); }
+.macro-step.kind-mouse.up { background-color: alpha(#2ec27e, 0.13); }
+.macro-step:hover { filter: brightness(1.15); }
 .macro-delay {
   font-size: 0.85em;
   min-height: 0;
@@ -346,7 +372,7 @@ row.drop-target {
   padding: 2px 4px;
 }
 .macro-step.selected {
-  outline: 2px solid @accent_color;
+  outline: 2px solid @window_fg_color;
   outline-offset: -2px;
 }
 .macro-type {

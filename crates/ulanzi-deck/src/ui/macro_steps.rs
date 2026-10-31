@@ -20,11 +20,53 @@ pub enum Direction {
     Both,
 }
 
+/// What kind of input a chip is, which sets its colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Keys,
+    Mouse,
+    Text,
+    Wait,
+    Action,
+}
+
+impl Kind {
+    pub const ALL: [(Kind, &'static str); 5] = [
+        (Kind::Keys, "Keys"),
+        (Kind::Mouse, "Mouse"),
+        (Kind::Text, "Text"),
+        (Kind::Wait, "Waits"),
+        (Kind::Action, "Actions"),
+    ];
+
+    /// The style class that colours it.
+    pub fn class(self) -> &'static str {
+        match self {
+            Kind::Keys => "kind-keys",
+            Kind::Mouse => "kind-mouse",
+            Kind::Text => "kind-text",
+            Kind::Wait => "kind-wait",
+            Kind::Action => "kind-action",
+        }
+    }
+}
+
+fn kind_of(event: &MacroEvent) -> Kind {
+    match event {
+        MacroEvent::KeyDown { .. } | MacroEvent::KeyUp { .. } => Kind::Keys,
+        MacroEvent::TypeText { .. } => Kind::Text,
+        MacroEvent::Wait { .. } => Kind::Wait,
+        MacroEvent::RunMacro { .. } | MacroEvent::Action { .. } => Kind::Action,
+        _ => Kind::Mouse,
+    }
+}
+
 /// One chip in the editor: one step, or with standard delays a matching down and up.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chip {
     pub label: String,
     pub icon: &'static str,
+    pub kind: Kind,
     pub direction: Direction,
     /// The delay after it, when delays are shown and something follows.
     pub delay: Option<u32>,
@@ -49,6 +91,7 @@ fn step_chip(step: &MacroStep, index: usize) -> Chip {
     let chip = |label: String, icon, direction| Chip {
         label,
         icon,
+        kind: kind_of(&step.event),
         direction,
         delay: None,
         steps: vec![index],
@@ -72,6 +115,13 @@ fn step_chip(step: &MacroStep, index: usize) -> Chip {
         ),
         MacroEvent::Action { action } => chip(describe(action), "system-run-symbolic", Direction::Both),
     }
+}
+
+fn is_modifier(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["ctrl", "control", "shift", "alt", "super", "meta"]
+        .iter()
+        .any(|m| key.starts_with(m))
 }
 
 /// The steps `start` opens up to where everything it pressed is released again: keys or one button,
@@ -109,13 +159,20 @@ fn merged_chip(steps: &[(usize, &MacroStep)]) -> Chip {
             _ => None,
         })
         .collect();
-    let (label, icon) = match steps.first().map(|(_, s)| &s.event) {
-        Some(MacroEvent::MouseDown { button }) => (format!("{} Click", button_name(*button)), MOUSE),
-        _ => (pretty_combo(&pressed.join("+")), KEYBOARD),
+    // Keys that overlap without a modifier are fast typing, not a shortcut.
+    let held = pressed.iter().any(|k| is_modifier(k));
+    let names: Vec<String> = pressed.iter().map(|k| pretty_combo(k)).collect();
+    let (label, icon, kind) = match steps.first().map(|(_, s)| &s.event) {
+        Some(MacroEvent::MouseDown { button }) => {
+            (format!("{} Click", button_name(*button)), MOUSE, Kind::Mouse)
+        }
+        _ if held => (names.join("+"), KEYBOARD, Kind::Keys),
+        _ => (names.join(", "), KEYBOARD, Kind::Keys),
     };
     Chip {
         label,
         icon,
+        kind,
         direction: Direction::Both,
         delay: None,
         steps: indexes,
@@ -277,6 +334,42 @@ mod tests {
                 _ => String::new(),
             })
             .collect()
+    }
+
+    #[test]
+    fn overlapping_keys_are_typing_unless_a_modifier_is_held() {
+        let mut m = Macro::new("Fast");
+        m.standard_delay_ms = Some(20);
+        m.steps = vec![
+            key("space", true, 0),
+            key("w", true, 0),
+            key("space", false, 0),
+            key("w", false, 0),
+            key("control_l", true, 0),
+            key("c", true, 0),
+            key("c", false, 0),
+            key("control_l", false, 0),
+        ];
+        assert_eq!(labels(&m), ["Space, W", "Ctrl+C"]);
+    }
+
+    #[test]
+    fn each_kind_of_step_has_its_colour() {
+        let mut m = Macro::new("Kinds");
+        m.steps = vec![
+            step(MacroEvent::KeyDown { key: "a".into() }, 0),
+            step(MacroEvent::MoveBy { dx: 1, dy: 1 }, 0),
+            step(MacroEvent::TypeText { text: "a".into() }, 0),
+            step(MacroEvent::Wait { ms: 5 }, 0),
+            step(
+                MacroEvent::Action {
+                    action: ulanzi_core::model::Action::StopMacros,
+                },
+                0,
+            ),
+        ];
+        let kinds: Vec<Kind> = chips(&m, SequencePart::Press).iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, Kind::ALL.map(|(k, _)| k));
     }
 
     #[test]
