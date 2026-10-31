@@ -1,6 +1,7 @@
 //! The macro editor: name, type, steps, recording and key feedback.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -20,8 +21,10 @@ use crate::ui::action_editor::{How, OnChange, base_key_name, picker_button, rows
 use crate::ui::capture::Capture;
 use crate::ui::macro_diagram::Diagram;
 use crate::ui::macro_steps::{
-    Chip, Direction, RECORD_HINT, chips, held_warning, move_chip, remove_chip, trigger_sentence,
+    Chip, Direction, RECORD_HINT, chips, held_warning, move_chips, remove_chip, remove_selected,
+    trigger_sentence,
 };
+use crate::ui::wrap_box::WrapBox;
 
 /// Seconds before Try It plays, to click into the target app.
 const TRY_COUNTDOWN: u32 = 3;
@@ -93,6 +96,10 @@ struct Ed {
     users: Rc<Cell<u32>>,
     /// Try It's countdown or playback is running.
     trying: Rc<Cell<bool>>,
+    /// Goes up with each Try It or stop, so the timers of an older one know to give up.
+    try_run: Rc<Cell<u32>>,
+    /// The first step of each selected chip.
+    selected: Rc<RefCell<BTreeSet<usize>>>,
     /// The profile and page this was opened on: an action is written back there.
     opened_on: (Uuid, usize),
 }
@@ -102,6 +109,15 @@ impl Ed {
     fn close_saved(&self) {
         *self.original.borrow_mut() = self.m.borrow().clone();
         self.window.close();
+    }
+
+    /// Everything the editor's widgets hold of each other, so they go when the window does.
+    fn let_go(&self) {
+        *self.redraw.borrow_mut() = None;
+        *self.stop_recording.borrow_mut() = None;
+        while let Some(child) = self.steps.first_child() {
+            self.steps.remove(&child);
+        }
     }
 
     fn changed(&self) {
@@ -142,6 +158,7 @@ impl Ed {
 
     fn edit(&self, f: impl FnOnce(&mut Macro)) {
         f(&mut self.m.borrow_mut());
+        self.selected.borrow_mut().clear();
         self.changed();
     }
 }
@@ -373,6 +390,72 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
     holder.upcast()
 }
 
+const MOUSE_BUTTONS: [(&str, MouseButton); 5] = [
+    ("Left", MouseButton::Left),
+    ("Right", MouseButton::Right),
+    ("Middle", MouseButton::Middle),
+    ("Back", MouseButton::Back),
+    ("Forward", MouseButton::Forward),
+];
+
+/// A label and a whole number, reported as it changes.
+fn number_row(label: &str, value: i32, max: i32, changed: impl Fn(i32) + 'static) -> gtk::Widget {
+    let row = gtk::Box::builder().spacing(8).build();
+    row.append(
+        &gtk::Label::builder()
+            .label(label)
+            .hexpand(true)
+            .xalign(0.0)
+            .build(),
+    );
+    let spin = gtk::SpinButton::with_range(-max as f64, max as f64, 1.0);
+    spin.set_value(value as f64);
+    spin.connect_value_changed(move |s| changed(s.value() as i32));
+    row.append(&spin);
+    row.upcast()
+}
+
+/// One button for each key on a chip, to swap it for another.
+fn key_choices(ed: &Ed, popover: &gtk::Popover, body: &gtk::Box, steps: &[usize]) {
+    let mut seen: Vec<String> = Vec::new();
+    {
+        let m = ed.m.borrow();
+        for step in steps.iter().filter_map(|i| m.steps.get(*i)) {
+            if let MacroEvent::KeyDown { key } | MacroEvent::KeyUp { key } = &step.event
+                && !seen.contains(key)
+            {
+                seen.push(key.clone());
+            }
+        }
+    }
+    for key in seen {
+        let label = format!("Change {}…", ulanzi_core::catalog::pretty_combo(&key));
+        let button = gtk::Button::with_label(&label);
+        let (ed, popover, steps) = (ed.clone(), popover.clone(), steps.to_vec());
+        button.connect_clicked(move |_| {
+            popover.popdown();
+            let names = ulanzi_core::keys::all_sendable();
+            let (ed2, shown, old, steps) = (ed.clone(), names.clone(), key.clone(), steps.clone());
+            ask_pick(&ed, "Choose a Key", shown, move |pick| {
+                let Some(new) = names.get(pick).cloned() else {
+                    return;
+                };
+                ed2.edit(|m| {
+                    for i in &steps {
+                        if let Some(MacroEvent::KeyDown { key } | MacroEvent::KeyUp { key }) =
+                            m.steps.get_mut(*i).map(|step| &mut step.event)
+                            && *key == old
+                        {
+                            *key = new.clone();
+                        }
+                    }
+                });
+            });
+        });
+        body.append(&button);
+    }
+}
+
 /// What opens when a step is clicked: its values, its look with Custom feedback, and Delete.
 fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: SequencePart) {
     let body = gtk::Box::builder()
@@ -428,6 +511,97 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                 }
                 body.append(&gtk::Label::new(Some(&describe(&action))));
                 body.append(&group);
+            }
+            Some(MacroEvent::KeyDown { .. } | MacroEvent::KeyUp { .. }) => {
+                key_choices(ed, &popover, &body, &chip.steps);
+            }
+            Some(MacroEvent::MouseDown { button: current } | MacroEvent::MouseUp { button: current }) => {
+                let names = MOUSE_BUTTONS.map(|(name, _)| name);
+                let drop = gtk::DropDown::from_strings(&names);
+                let at = MOUSE_BUTTONS.iter().position(|(_, b)| *b == current);
+                drop.set_selected(at.unwrap_or(0) as u32);
+                let (ed2, steps) = (ed.clone(), chip.steps.clone());
+                drop.connect_selected_notify(move |d| {
+                    let Some((_, button)) = MOUSE_BUTTONS.get(d.selected() as usize).copied() else {
+                        return;
+                    };
+                    let mut m = ed2.m.borrow_mut();
+                    for i in &steps {
+                        if let Some(MacroEvent::MouseDown { button: b } | MacroEvent::MouseUp { button: b }) =
+                            m.steps.get_mut(*i).map(|step| &mut step.event)
+                        {
+                            *b = button;
+                        }
+                    }
+                });
+                body.append(&drop);
+            }
+            Some(MacroEvent::Scroll { dx, dy }) => {
+                let set = |ed: &Ed, across: bool| {
+                    let ed = ed.clone();
+                    move |value: i32| {
+                        if let Some(MacroEvent::Scroll { dx, dy }) =
+                            ed.m.borrow_mut().steps.get_mut(i).map(|s| &mut s.event)
+                        {
+                            *(if across { dx } else { dy }) = value;
+                        }
+                    }
+                };
+                body.append(&number_row("Down (minus is up)", dy, 100, set(ed, false)));
+                body.append(&number_row("Right (minus is left)", dx, 100, set(ed, true)));
+            }
+            Some(MacroEvent::MoveBy { dx, dy }) => {
+                let set = |ed: &Ed, across: bool| {
+                    let ed = ed.clone();
+                    move |value: i32| {
+                        if let Some(MacroEvent::MoveBy { dx, dy }) =
+                            ed.m.borrow_mut().steps.get_mut(i).map(|s| &mut s.event)
+                        {
+                            *(if across { dx } else { dy }) = value;
+                        }
+                    }
+                };
+                body.append(&number_row("Right (minus is left)", dx, 10_000, set(ed, true)));
+                body.append(&number_row("Down (minus is up)", dy, 10_000, set(ed, false)));
+            }
+            Some(MacroEvent::MoveTo { .. }) => {
+                let again = gtk::Button::with_label("Pick the Spot Again…");
+                let (ed2, popover2) = (ed.clone(), popover.clone());
+                again.connect_clicked(move |_| {
+                    popover2.popdown();
+                    let ed3 = ed2.clone();
+                    crate::ui::pick_spot::open(&ed2.state, move |x, y| {
+                        if let Some(step) = ed3.m.borrow_mut().steps.get_mut(i) {
+                            step.event = MacroEvent::MoveTo { x, y };
+                        }
+                        ed3.changed();
+                    });
+                });
+                body.append(&again);
+            }
+            Some(MacroEvent::RunMacro { .. }) => {
+                let again = gtk::Button::with_label("Run a Different Macro…");
+                let (ed2, popover2) = (ed.clone(), popover.clone());
+                again.connect_clicked(move |_| {
+                    popover2.popdown();
+                    let choices = runnable(&ed2.state, &ed2.m.borrow());
+                    if choices.is_empty() {
+                        crate::ui::toast(&ed2.state, "No other macro to run");
+                        return;
+                    }
+                    let names = choices.iter().map(|m| m.name.clone()).collect();
+                    let ed3 = ed2.clone();
+                    ask_pick(&ed2, "Run Which Macro?", names, move |pick| {
+                        if let Some(id) = choices.get(pick).map(|m| m.id) {
+                            ed3.edit(|m| {
+                                if let Some(step) = m.steps.get_mut(i) {
+                                    step.event = MacroEvent::RunMacro { id };
+                                }
+                            });
+                        }
+                    });
+                });
+                body.append(&again);
             }
             _ => {}
         }
@@ -525,10 +699,35 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
         .child(&content)
         .css_classes(["macro-step"])
         .build();
+    let first = chip.steps.first().copied().unwrap_or_default();
+    if ed.selected.borrow().contains(&first) {
+        button.add_css_class("selected");
+    }
     {
         let (ed, chip) = (ed.clone(), chip.clone());
         button.connect_clicked(move |b| step_popover(&ed, b, &chip, index, part));
     }
+    // Ctrl+click selects instead of opening the step.
+    let select = gtk::GestureClick::new();
+    select.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let ed = ed.clone();
+        select.connect_pressed(move |g, _, _, _| {
+            if !g.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
+                return;
+            }
+            g.set_state(gtk::EventSequenceState::Claimed);
+            {
+                let mut selected = ed.selected.borrow_mut();
+                if !selected.remove(&first) {
+                    selected.insert(first);
+                }
+            }
+            let ed = ed.clone();
+            glib::idle_add_local_once(move || ed.changed());
+        });
+    }
+    button.add_controller(select);
     let drag = gtk::DragSource::builder().actions(gdk::DragAction::MOVE).build();
     let code = drag_code(part, index);
     drag.connect_prepare(move |_, _, _| Some(gdk::ContentProvider::for_value(&code.to_value())));
@@ -544,12 +743,30 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
             let Some(from) = drag_index(code, part) else {
                 return false;
             };
-            ed.edit(|m| move_chip(m, part, from, index));
+            // A selected chip brings the rest of the selection with it.
+            let group = dragged_with(&ed, part, from);
+            ed.edit(|m| move_chips(m, part, &group, index));
             true
         });
     }
     button.add_controller(drop);
     button.upcast()
+}
+
+/// The chips that move with chip `from`: the whole selection if it is part of one.
+fn dragged_with(ed: &Ed, part: SequencePart, from: usize) -> Vec<usize> {
+    let list = chips(&ed.m.borrow(), part);
+    let selected = ed.selected.borrow();
+    let chosen = |i: &usize| {
+        list.get(*i)
+            .and_then(|c| c.steps.first())
+            .is_some_and(|first| selected.contains(first))
+    };
+    if chosen(&from) {
+        (0..list.len()).filter(chosen).collect()
+    } else {
+        vec![from]
+    }
 }
 
 fn draw_steps(ed: &Ed) {
@@ -572,26 +789,64 @@ fn draw_steps(ed: &Ed) {
                     .build(),
             );
         }
-        let flow = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .max_children_per_line(30)
-            .column_spacing(4)
-            .row_spacing(4)
-            .build();
-        for (i, chip) in chips(&m, *part).iter().enumerate() {
-            flow.insert(&chip_widget(ed, chip, i, *part), -1);
+        let list = chips(&m, *part);
+        if list.is_empty() && m.trigger != Trigger::Sequence {
+            ed.steps.append(
+                &gtk::Label::builder()
+                    .label("No steps yet. Press Record, or add one here.")
+                    .css_classes(["dim-label"])
+                    .xalign(0.0)
+                    .build(),
+            );
+        }
+        let flow = WrapBox::new();
+        for (i, chip) in list.iter().enumerate() {
+            flow.append(&chip_widget(ed, chip, i, *part));
             if let (Some(ms), Some(step)) = (chip.delay, chip.steps.last().copied()) {
                 let b = gtk::Button::builder()
                     .label(format!("{ms} ms"))
+                    .valign(gtk::Align::Center)
                     .css_classes(["flat", "macro-delay"])
                     .build();
                 let ed2 = ed.clone();
                 b.connect_clicked(move |b| delay_popover(&ed2, b, step, ms));
-                flow.insert(&b, -1);
+                flow.append(&b);
             }
         }
-        flow.insert(&add_menu(ed, *part), -1);
+        flow.append(&add_menu(ed, *part));
         ed.steps.append(&flow);
+    }
+    let count = ed.selected.borrow().len();
+    if count > 0 {
+        let bar = gtk::Box::builder().spacing(6).build();
+        bar.append(&gtk::Label::new(Some(&format!("{count} selected"))));
+        let delete = gtk::Button::builder()
+            .label("Delete")
+            .css_classes(["destructive-action"])
+            .build();
+        {
+            let ed = ed.clone();
+            let parts = parts.to_vec();
+            delete.connect_clicked(move |_| {
+                let selected = ed.selected.borrow().clone();
+                ed.edit(|m| remove_selected(m, &parts, &selected));
+            });
+        }
+        bar.append(&delete);
+        let clear = gtk::Button::builder()
+            .label("Clear")
+            .css_classes(["flat"])
+            .build();
+        {
+            let ed = ed.clone();
+            clear.connect_clicked(move |_| {
+                ed.selected.borrow_mut().clear();
+                let ed = ed.clone();
+                glib::idle_add_local_once(move || ed.changed());
+            });
+        }
+        bar.append(&clear);
+        ed.steps.append(&bar);
     }
     match held_warning(&m) {
         Some(w) => {
@@ -883,13 +1138,15 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
             live.clone(),
             capture.clone(),
             panel.clone(),
-            record.clone(),
+            record.downgrade(),
         );
         Rc::new(move || {
             capture.end();
             panel.set_visible(false);
-            record.set_label("Record");
-            record.remove_css_class("destructive-action");
+            if let Some(record) = record.upgrade() {
+                record.set_label("Record");
+                record.remove_css_class("destructive-action");
+            }
             if let Some(r) = live.borrow_mut().take() {
                 let steps = r.finish();
                 ed.edit(|m| m.steps.extend(steps));
@@ -952,7 +1209,6 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
     });
     ed.window.add_controller(keys);
 
-    let click = gtk::GestureClick::builder().button(0).build();
     let button_of = |n: u32| match n {
         2 => MouseButton::Middle,
         3 => MouseButton::Right,
@@ -960,27 +1216,26 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
         9 => MouseButton::Forward,
         _ => MouseButton::Left,
     };
+    // Raw events: a click gesture gives up when the pointer moves, and would lose the release.
+    let buttons = gtk::EventControllerLegacy::new();
     {
         let live = live.clone();
-        click.connect_pressed(move |g, _, _, _| {
-            if let Some(r) = live.borrow_mut().as_mut() {
-                r.button(button_of(g.current_button()), true, g.current_event_time() as u64);
+        buttons.connect_event(move |_, event| {
+            let down = match event.event_type() {
+                gdk::EventType::ButtonPress => true,
+                gdk::EventType::ButtonRelease => false,
+                _ => return glib::Propagation::Proceed,
+            };
+            if let (Some(r), Some(e)) = (
+                live.borrow_mut().as_mut(),
+                event.downcast_ref::<gdk::ButtonEvent>(),
+            ) {
+                r.button(button_of(e.button()), down, event.time() as u64);
             }
+            glib::Propagation::Stop
         });
     }
-    {
-        let live = live.clone();
-        click.connect_released(move |g, _, _, _| {
-            if let Some(r) = live.borrow_mut().as_mut() {
-                r.button(
-                    button_of(g.current_button()),
-                    false,
-                    g.current_event_time() as u64,
-                );
-            }
-        });
-    }
-    pad.add_controller(click);
+    pad.add_controller(buttons);
     let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
     {
         let live = live.clone();
@@ -1141,12 +1396,13 @@ fn save(ed: &Ed, saving: &Saving) {
 
 fn stop_trying(ed: &Ed) {
     ed.trying.set(false);
+    ed.try_run.set(ed.try_run.get() + 1);
     if let Some(c) = ed.state.client.borrow().clone() {
         runtime::run(async move { c.stop_macros().await }, |_| {});
     }
 }
 
-/// Try It: a countdown, then one pass. The button stops it at any point.
+/// Try It: a countdown on the button, then one pass. The button stops it at any point.
 fn try_it(ed: &Ed, button: &gtk::Button) {
     if ed.trying.get() {
         stop_trying(ed);
@@ -1161,14 +1417,32 @@ fn try_it(ed: &Ed, button: &gtk::Button) {
     let playing: u32 = m.steps.iter().map(|s| m.effective_delay(s)).sum();
     runtime::run(async move { c.try_macro(&m, TRY_COUNTDOWN * 1000).await }, |_| {});
     ed.trying.set(true);
-    button.set_label("Stop");
-    let (b, trying) = (button.downgrade(), ed.trying.clone());
-    let total = (TRY_COUNTDOWN * 1000 + playing) as u64;
-    glib::timeout_add_local_once(Duration::from_millis(total), move || {
-        trying.set(false);
-        if let Some(b) = b.upgrade() {
-            b.set_label("Try It");
+    let run = ed.try_run.get() + 1;
+    ed.try_run.set(run);
+    let counting = |left: u32| format!("Stop ({left})");
+    button.set_label(&counting(TRY_COUNTDOWN));
+    let (b, ed) = (button.downgrade(), ed.clone());
+    let left = Cell::new(TRY_COUNTDOWN);
+    glib::timeout_add_seconds_local(1, move || {
+        let Some(button) = b.upgrade().filter(|_| ed.try_run.get() == run) else {
+            return glib::ControlFlow::Break;
+        };
+        left.set(left.get() - 1);
+        if left.get() > 0 {
+            button.set_label(&counting(left.get()));
+            return glib::ControlFlow::Continue;
         }
+        button.set_label("Stop");
+        let (b, ed) = (button.downgrade(), ed.clone());
+        glib::timeout_add_local_once(Duration::from_millis(playing as u64), move || {
+            if ed.try_run.get() == run {
+                ed.trying.set(false);
+                if let Some(b) = b.upgrade() {
+                    b.set_label("Try It");
+                }
+            }
+        });
+        glib::ControlFlow::Break
     });
 }
 
@@ -1208,6 +1482,8 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         stop_recording: Rc::default(),
         users: Rc::default(),
         trying: Rc::default(),
+        try_run: Rc::default(),
+        selected: Rc::default(),
         opened_on: (state.profile_id(), state.editor.borrow().page()),
     };
     {
@@ -1254,6 +1530,37 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
                 usage.set_label(&format!("Used on {total} {keys}"));
             });
         }
+        if let Some(old) = ed.m.borrow().previous.clone() {
+            let restore = gtk::Button::builder()
+                .label("Restore Previous Version")
+                .css_classes(["flat"])
+                .build();
+            let (ed2, parent2) = (ed.clone(), parent.clone().upcast::<gtk::Widget>());
+            restore.connect_clicked(move |_| {
+                let alert = adw::AlertDialog::builder()
+                    .heading("Restore the Previous Version?")
+                    .body(
+                        "This replaces the macro with how it was before the last save. Undo brings it back.",
+                    )
+                    .close_response("cancel")
+                    .build();
+                alert.add_response("cancel", "Cancel");
+                alert.add_response("restore", "Restore");
+                alert.set_response_appearance("restore", adw::ResponseAppearance::Suggested);
+                let (ed3, parent3, old) = (ed2.clone(), parent2.clone(), (*old).clone());
+                alert.connect_response(Some("restore"), move |_, _| {
+                    let (old, id) = (old.clone(), old.id);
+                    ed3.end_recording();
+                    ed3.state.edit(|e| {
+                        e.save_macro(old);
+                    });
+                    ed3.close_saved();
+                    open(&ed3.state, &parent3, MacroTarget::Library(id));
+                });
+                alert.present(Some(&ed2.window));
+            });
+            row.append(&restore);
+        }
         if let Saving::Library(Some(save)) = &saving {
             let copy = gtk::Button::builder()
                 .label("Edit for This Key Only")
@@ -1291,6 +1598,22 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     body.append(&sentence);
     body.append(&trigger_option(&ed));
     body.append(&delays_row(&ed));
+    let heading = gtk::Box::builder().spacing(8).build();
+    heading.append(
+        &gtk::Label::builder()
+            .label("Steps")
+            .css_classes(["dim-label", "caption"])
+            .build(),
+    );
+    heading.append(
+        &gtk::Label::builder()
+            .label("Drag to rearrange, Ctrl+click to select several")
+            .css_classes(["dim-label", "caption"])
+            .hexpand(true)
+            .halign(gtk::Align::End)
+            .build(),
+    );
+    body.append(&heading);
     body.append(&ed.steps);
     body.append(&ed.warning);
     body.append(
@@ -1323,15 +1646,19 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     ));
     window.set_content(Some(&view));
     {
-        let ed = ed.clone();
+        // Given up on closing: a handler on the window that kept this would keep the window.
+        let held = RefCell::new(Some(ed.clone()));
         window.connect_close_request(move |w| {
+            let Some(ed) = held.borrow().clone() else {
+                return glib::Propagation::Proceed;
+            };
             ed.end_recording();
             if ed.trying.get() {
                 stop_trying(&ed);
             }
             if *ed.m.borrow() == *ed.original.borrow() {
-                *ed.redraw.borrow_mut() = None;
-                *ed.stop_recording.borrow_mut() = None;
+                ed.let_go();
+                held.take();
                 return glib::Propagation::Proceed;
             }
             let alert = adw::AlertDialog::builder()
@@ -1367,6 +1694,49 @@ mod tests {
             all_drop_downs(&c, out);
             child = c.next_sibling();
         }
+    }
+
+    #[test]
+    /// Run by hand: `cargo test -- --ignored opening_and_closing --nocapture` prints the growth.
+    #[ignore]
+    fn opening_and_closing_costs_little() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            let parent = gtk::Window::new();
+            let rss = || {
+                std::fs::read_to_string("/proc/self/statm")
+                    .ok()
+                    .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
+                    .unwrap_or(0)
+                    * 4
+            };
+            let context = glib::MainContext::default();
+            let mut cycle = || {
+                open(&state, &parent, MacroTarget::New);
+                while context.pending() {
+                    context.iteration(false);
+                }
+                for window in gtk::Window::list_toplevels() {
+                    if let Ok(w) = window.downcast::<adw::Window>() {
+                        w.close();
+                    }
+                }
+                while context.pending() {
+                    context.iteration(false);
+                }
+            };
+            for _ in 0..50 {
+                cycle();
+            }
+            let before = rss();
+            for _ in 0..200 {
+                cycle();
+            }
+            eprintln!("{} KiB per open", (rss() - before) / 200);
+        });
     }
 
     #[test]

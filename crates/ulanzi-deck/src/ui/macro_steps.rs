@@ -1,6 +1,8 @@
 //! What the macro editor shows for a macro's steps, and rearranging them. No GTK, so it is tested
 //! directly.
 
+use std::collections::BTreeSet;
+
 use ulanzi_core::catalog::{describe, pretty_combo};
 use ulanzi_core::model::{Macro, MacroEvent, MacroStep, MouseButton, SequencePart, Trigger};
 
@@ -153,25 +155,35 @@ pub fn chips(m: &Macro, part: SequencePart) -> Vec<Chip> {
 
 /// Move chip `from` to position `to` among the chips of `part`.
 pub fn move_chip(m: &mut Macro, part: SequencePart, from: usize, to: usize) {
-    let list = chips(m, part);
-    let Some(chip) = list.get(from) else {
-        return;
-    };
-    if from == to {
+    move_chips(m, part, &[from], to);
+}
+
+/// Move several chips of `part` together, keeping their order: after chip `to` when any of them
+/// comes before it, otherwise before it.
+pub fn move_chips(m: &mut Macro, part: SequencePart, from: &[usize], to: usize) {
+    if from.contains(&to) {
         return;
     }
+    let list = chips(m, part);
+    let Some(target) = list.get(to) else {
+        return;
+    };
+    let mut picked: Vec<usize> = from
+        .iter()
+        .filter_map(|i| list.get(*i))
+        .flat_map(|c| c.steps.iter().copied())
+        .collect();
+    picked.sort_unstable();
+    let forward = from.iter().any(|f| *f < to);
+    let anchor = match forward {
+        true => target.steps.last().map_or(0, |last| last + 1),
+        false => target.steps.first().copied().unwrap_or(0),
+    };
+    let at = anchor - picked.iter().filter(|i| **i < anchor).count();
     let mut moving = Vec::new();
-    for i in chip.steps.iter().rev() {
+    for i in picked.iter().rev() {
         moving.insert(0, m.steps.remove(*i));
     }
-    let after = chips(m, part);
-    let at = match after.get(to).and_then(|c| c.steps.first()) {
-        Some(first) => *first,
-        None => after
-            .last()
-            .and_then(|c| c.steps.last())
-            .map_or(m.steps.len(), |last| last + 1),
-    };
     for (offset, step) in moving.into_iter().enumerate() {
         m.steps.insert(at + offset, step);
     }
@@ -183,6 +195,21 @@ pub fn remove_chip(m: &mut Macro, part: SequencePart, index: usize) {
         for i in chip.steps.iter().rev() {
             m.steps.remove(*i);
         }
+    }
+}
+
+/// Delete the chips of `parts` that start at one of the `selected` steps.
+pub fn remove_selected(m: &mut Macro, parts: &[SequencePart], selected: &BTreeSet<usize>) {
+    let mut doomed: Vec<usize> = parts
+        .iter()
+        .flat_map(|part| chips(m, *part))
+        .filter(|c| c.steps.first().is_some_and(|f| selected.contains(f)))
+        .flat_map(|c| c.steps)
+        .collect();
+    doomed.sort_unstable();
+    doomed.dedup();
+    for i in doomed.iter().rev() {
+        m.steps.remove(*i);
     }
 }
 
@@ -209,6 +236,54 @@ pub fn held_warning(m: &Macro) -> Option<String> {
 mod tests {
     use super::*;
     use ulanzi_core::model::{LookOverride, Macro, MacroEvent, MacroStep, SequencePart, Trigger};
+
+    fn named(names: &[&str]) -> Macro {
+        let mut m = Macro::new("Names");
+        m.steps = names
+            .iter()
+            .map(|n| MacroStep {
+                event: MacroEvent::TypeText { text: n.to_string() },
+                delay_ms: 0,
+                look: LookOverride::default(),
+                part: SequencePart::Press,
+            })
+            .collect();
+        m
+    }
+
+    fn names(m: &Macro) -> Vec<String> {
+        m.steps
+            .iter()
+            .map(|s| match &s.event {
+                MacroEvent::TypeText { text } => text.clone(),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn several_chips_move_together_and_keep_their_order() {
+        let mut m = named(&["a", "b", "c", "d", "e"]);
+        move_chips(&mut m, SequencePart::Press, &[0, 2], 3);
+        assert_eq!(names(&m), ["b", "d", "a", "c", "e"]);
+        let mut m = named(&["a", "b", "c", "d", "e"]);
+        move_chips(&mut m, SequencePart::Press, &[3, 4], 1);
+        assert_eq!(names(&m), ["a", "d", "e", "b", "c"]);
+    }
+
+    #[test]
+    fn dropping_a_group_on_itself_changes_nothing() {
+        let mut m = named(&["a", "b", "c"]);
+        move_chips(&mut m, SequencePart::Press, &[0, 1], 1);
+        assert_eq!(names(&m), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn selected_chips_are_deleted_together() {
+        let mut m = named(&["a", "b", "c", "d"]);
+        remove_selected(&mut m, &[SequencePart::Press], &BTreeSet::from([1, 3]));
+        assert_eq!(names(&m), ["a", "c"]);
+    }
 
     fn step(event: MacroEvent, delay_ms: u32) -> MacroStep {
         MacroStep {

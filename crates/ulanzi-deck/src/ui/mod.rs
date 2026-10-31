@@ -29,6 +29,7 @@ pub mod templates;
 pub mod updates;
 pub mod widgets_editor;
 pub mod window;
+pub mod wrap_box;
 
 use std::cell::RefCell;
 

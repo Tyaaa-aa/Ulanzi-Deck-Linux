@@ -342,7 +342,12 @@ row.drop-target {
 .macro-delay {
   font-size: 0.85em;
   min-height: 0;
-  padding: 2px 6px;
+  min-width: 0;
+  padding: 2px 4px;
+}
+.macro-step.selected {
+  outline: 2px solid @accent_color;
+  outline-offset: -2px;
 }
 .macro-type {
   padding: 8px;
