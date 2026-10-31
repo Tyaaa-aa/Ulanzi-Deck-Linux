@@ -697,7 +697,7 @@ fn undoing_a_key_edit_leaves_a_newer_library_alone() {
     e.set_library(library.clone());
     assert!(e.undo());
     assert_eq!(e.library(), &library);
-    assert!(e.take_library_changed() == false);
+    assert!(!e.take_library_changed());
 }
 
 #[test]

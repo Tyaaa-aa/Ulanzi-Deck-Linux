@@ -221,7 +221,6 @@ impl InputSink for NoInput {
 
 /// A macro playing, and where its key is.
 struct Playing {
-    run: u64,
     control: Control,
     page: Uuid,
     m: Macro,
@@ -1064,7 +1063,6 @@ impl Deck {
             self.playing.insert(
                 run,
                 Playing {
-                    run,
                     control: c,
                     page,
                     m,
