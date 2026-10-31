@@ -382,6 +382,8 @@ pub struct Diagram {
     time: Rc<Cell<f64>>,
     hovering: Rc<Cell<bool>>,
     playing: Rc<Cell<bool>>,
+    /// Goes up with each start, so an older tick callback knows to give up.
+    run: Rc<Cell<u32>>,
     last: Rc<Cell<Option<i64>>>,
 }
 
@@ -411,6 +413,7 @@ impl Diagram {
             time: Rc::new(Cell::new(rest(&trigger))),
             hovering: Rc::default(),
             playing: Rc::default(),
+            run: Rc::default(),
             last: Rc::default(),
         };
         let (shown, time) = (d.shown.clone(), d.time.clone());
@@ -441,11 +444,14 @@ impl Diagram {
         self.time.set(0.0);
         self.last.set(None);
         self.refresh();
-        if self.playing.replace(true) {
-            return;
-        }
+        self.playing.set(true);
+        let run = self.run.get() + 1;
+        self.run.set(run);
         let d = self.clone();
         self.area.add_tick_callback(move |_, clock| {
+            if d.run.get() != run {
+                return glib::ControlFlow::Break;
+            }
             let now = clock.frame_time();
             let step = d.last.replace(Some(now)).map_or(0.0, |l| (now - l) as f64 / 1e6);
             let t = d.time.get() + step;
@@ -484,7 +490,12 @@ impl Diagram {
         if on && !self.playing.get() {
             self.start();
         } else if !on && self.shown.get() != self.chosen.get() {
-            self.show(self.chosen.get());
+            let chosen = self.chosen.get();
+            self.shown.set(chosen);
+            self.time.set(rest(&chosen));
+            self.playing.set(false);
+            self.run.set(self.run.get() + 1);
+            self.refresh();
         }
     }
 }
