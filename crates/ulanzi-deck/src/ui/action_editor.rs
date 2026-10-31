@@ -893,7 +893,7 @@ fn multi_rows(ed: &Ed, state: &State, path: &str, steps: &[Step]) -> Vec<gtk::Wi
         .title(if n == 0 { "No steps yet" } else { "Add a Step" })
         .build();
     let ed2 = ed.clone();
-    let add = picker_button(state, "Add Step", true, move |action| {
+    let add = picker_button(state, "Add Step", true, false, move |action| {
         ed2.apply(How::Structure, |a| {
             if let Action::Multi { steps } = a {
                 steps.push(Step { action, delay_ms: 0 });
@@ -1137,7 +1137,7 @@ fn cycle_rows(ed: &Ed, state: &State, path: &str, steps: &[CycleStep], show: Cyc
         })
         .build();
     let (ed2, st) = (ed.clone(), state.clone());
-    let add = picker_button(state, "Add Step", false, move |action| {
+    let add = picker_button(state, "Add Step", false, true, move |action| {
         let look = step_look(&action, &st);
         ed2.apply(How::Structure, |a| {
             if let Action::Cycle { steps, .. } = a {
@@ -1289,17 +1289,13 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
                 .label("Edit Macro")
                 .valign(gtk::Align::Center)
                 .build();
-            let (state, on) = (state.clone(), ed.clone());
+            let (state, action, save) = (state.clone(), action.clone(), ed.on.clone());
             edit.connect_clicked(move |b| {
-                let _ = &on;
-                let keys = state.selection.borrow().slots();
-                if let [slot] = keys.as_slice() {
-                    crate::ui::macro_editor::open(
-                        &state,
-                        b,
-                        crate::ui::macro_editor::MacroTarget::Key(*slot),
-                    );
-                }
+                let target = crate::ui::macro_editor::MacroTarget::Action {
+                    action: action.clone(),
+                    save: save.clone(),
+                };
+                crate::ui::macro_editor::open(&state, b, target);
             });
             row.add_suffix(&edit);
             vec![row.upcast()]
@@ -1679,6 +1675,7 @@ pub fn picker_button(
     state: &State,
     label: &str,
     allow_multi: bool,
+    allow_macros: bool,
     on_pick: impl Fn(Action) + 'static,
 ) -> gtk::MenuButton {
     let button = gtk::MenuButton::builder()
@@ -1701,6 +1698,7 @@ pub fn picker_button(
         state,
         crate::ui::library::Use::Picker {
             include_multi: allow_multi,
+            allow_macros,
             on_pick: Box::new(pick),
         },
     );

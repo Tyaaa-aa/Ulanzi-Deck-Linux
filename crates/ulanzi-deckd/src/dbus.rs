@@ -447,11 +447,13 @@ impl DeckService {
                 _ => None,
             })
             .collect();
+        let macros = ulanzi_core::bundle::macro_conflicts(&self.store, &b);
         let conflicts = b
             .profiles
             .iter()
             .filter(|p| have.contains(&p.profile.id))
             .map(|p| p.profile.name.clone())
+            .chain(macros.into_iter().map(|m| format!("Macro: {m}")))
             .collect();
         let manifest = toml::to_string_pretty(&b.manifest).map_err(|e| DeckError::Invalid(e.to_string()))?;
         Ok((manifest, conflicts))

@@ -1184,6 +1184,7 @@ fn slot_rows(
             state,
             if action.is_some() { "Change" } else { "Choose" },
             true,
+            true,
             move |a| write(Some(a), How::Structure, true),
         )
     };
@@ -1242,12 +1243,16 @@ fn slot_expander(
         .build();
     exp.add_prefix(&action_editor::action_chip(state, action, 32));
     state.remember_expanded(&exp, path);
+    // A dial turn is many presses: no place for a macro.
+    let lower = path.to_lowercase();
+    let turning = lower.ends_with("left") || lower.ends_with("right");
     let picker = {
         let (write, state, path) = (write.clone(), state.clone(), path.to_string());
         action_editor::picker_button(
             &state.clone(),
             if action.is_some() { "Change" } else { "Choose" },
             true,
+            !turning,
             move |a| {
                 // Open the row so its settings are right there.
                 state.expanded.borrow_mut().insert(path.clone());

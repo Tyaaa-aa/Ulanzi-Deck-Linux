@@ -154,7 +154,11 @@ fn import_dialog(state: &State, parent: &gtk::Widget, path: &Path, preview: crat
     if !preview.commands.is_empty() {
         let n = preview.commands.len();
         let cmds = adw::PreferencesGroup::builder()
-            .title(if n == 1 { "Runs a Command" } else { "Runs Commands" })
+            .title(if n == 1 {
+                "Runs a Command or Presses Keys"
+            } else {
+                "Runs Commands or Presses Keys"
+            })
             .description(
                 "Keys or widgets in this file run these on your computer. Import only if you trust them.",
             )

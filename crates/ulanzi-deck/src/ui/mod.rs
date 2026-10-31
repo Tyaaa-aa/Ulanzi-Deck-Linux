@@ -92,6 +92,11 @@ fn arm_timer(toast: &adw::Toast) -> glib::SourceId {
 /// Show a short message at the bottom of the window. The same message again while it is still
 /// shown bumps a counter on it instead of queueing another (dials can fail many times a second).
 pub fn toast(_state: &State, text: &str) {
+    show_toast(text);
+}
+
+/// [`toast`], for code with no [`State`] handle.
+pub fn show_toast(text: &str) {
     let repeated = SHOWING.with(|s| {
         let mut s = s.borrow_mut();
         let Some(sh) = s.as_mut().filter(|sh| sh.text == text) else {

@@ -126,7 +126,7 @@ pub fn chips(m: &Macro, part: SequencePart) -> Vec<Chip> {
         .steps
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.part == part)
+        .filter(|(_, s)| m.trigger != Trigger::Sequence || s.part == part)
         .collect();
     let mut out = Vec::new();
     let mut at = 0;
@@ -314,11 +314,23 @@ mod tests {
     #[test]
     fn sequence_parts_stay_apart() {
         let mut m = ctrl_e_then_text();
+        m.trigger = Trigger::Sequence;
         m.steps[4].part = SequencePart::Held;
         assert_eq!(chips(&m, SequencePart::Press).len(), 4);
         assert_eq!(chips(&m, SequencePart::Held).len(), 1);
         move_chip(&mut m, SequencePart::Press, 3, 0);
         assert_eq!(m.steps[4].part, SequencePart::Held);
+    }
+
+    #[test]
+    fn leaving_sequence_keeps_every_step_in_view() {
+        let mut m = ctrl_e_then_text();
+        m.trigger = Trigger::Sequence;
+        m.steps[4].part = SequencePart::ReleaseKey;
+        m.trigger = Trigger::Toggle;
+        assert_eq!(chips(&m, SequencePart::Press).len(), 5);
+        remove_chip(&mut m, SequencePart::Press, 4);
+        assert_eq!(m.steps.len(), 4);
     }
 
     #[test]

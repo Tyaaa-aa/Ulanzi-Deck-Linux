@@ -567,13 +567,22 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
             let profiles = c.profiles().await?;
             let settings = c.settings().await?;
             let too_new = c.too_new_profiles().await.unwrap_or_default();
-            let macros = c.macros().await.unwrap_or_default();
+            let macros = c.macros().await;
             Ok::<_, crate::client::ClientError>((c, hello, profile, profiles, settings, too_new, macros))
         },
         move |r| {
             match r {
                 Ok((c, hello, profile, profiles, settings, too_new, macros)) => {
-                    state.editor.borrow_mut().set_library(macros);
+                    match macros {
+                        Ok(macros) => state.editor.borrow_mut().set_library(macros),
+                        Err(e) => {
+                            tracing::error!("macros unreadable: {e}");
+                            crate::ui::toast(
+                                &state,
+                                "Your macros couldn't be read, so they were left as they are",
+                            );
+                        }
+                    }
                     follow_events(&state, &c);
                     *state.client.borrow_mut() = Some(c);
                     *state.profiles.borrow_mut() = profiles;

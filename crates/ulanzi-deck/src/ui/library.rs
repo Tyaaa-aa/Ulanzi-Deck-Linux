@@ -25,6 +25,8 @@ pub(crate) enum Use {
     /// The action picker: a click hands a fresh action to `on_pick`.
     Picker {
         include_multi: bool,
+        /// Offer the macro library.
+        allow_macros: bool,
         on_pick: Box<dyn Fn(Action)>,
     },
 }
@@ -73,6 +75,13 @@ impl Inner {
         }
     }
 
+    fn allow_macros(&self) -> bool {
+        match self.purpose {
+            Use::Library => true,
+            Use::Picker { allow_macros, .. } => allow_macros,
+        }
+    }
+
     fn include_multi(&self) -> bool {
         match self.purpose {
             Use::Library => true,
@@ -82,8 +91,7 @@ impl Inner {
 
     fn fresh_catalog(&self) -> Catalog {
         let catalog = Catalog::new(&self.state.plugins.borrow(), self.include_multi());
-        // Only for a key itself: a Multi Action step can't play a macro.
-        if self.include_multi() {
+        if self.allow_macros() {
             catalog.with_macros(self.state.editor.borrow().library())
         } else {
             catalog
@@ -402,6 +410,11 @@ impl Inner {
         let row = gtk::ListBoxRow::builder().child(&b).tooltip_text(tooltip).build();
         if matches!(self.purpose, Use::Library) {
             row.add_controller(drag_source(&self.state, e.action.clone()));
+            if let Action::Macro { id, .. } = e.action
+                && !id.is_nil()
+            {
+                macro_menu(&self.state, &row, id, &e.title);
+            }
         }
         row
     }
@@ -430,6 +443,68 @@ fn arrow_icon(open: bool) -> &'static str {
 
 /// The plugin's icon when the icon theme has it, else the add-on icon.
 /// Dragging a row carries the action, as the canvas expects it.
+/// Right-click on a macro in the list: open it, or delete it.
+fn macro_menu(state: &State, row: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) {
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    let popover = gtk::Popover::builder().child(&body).has_arrow(false).build();
+    popover.set_parent(row);
+    let edit = gtk::Button::builder().label("Edit").css_classes(["flat"]).build();
+    let delete = gtk::Button::builder()
+        .label("Delete")
+        .css_classes(["flat"])
+        .build();
+    body.append(&edit);
+    body.append(&delete);
+    {
+        let (state, popover, row) = (state.clone(), popover.clone(), row.clone());
+        edit.connect_clicked(move |_| {
+            popover.popdown();
+            crate::ui::macro_editor::open(&state, &row, crate::ui::macro_editor::MacroTarget::Library(id));
+        });
+    }
+    {
+        let (state, popover, row, name) = (state.clone(), popover.clone(), row.clone(), name.to_string());
+        delete.connect_clicked(move |_| {
+            popover.popdown();
+            confirm_delete(&state, &row, id, &name);
+        });
+    }
+    let click = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();
+    click.connect_pressed(move |g, _, x, y| {
+        g.set_state(gtk::EventSequenceState::Claimed);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.popup();
+    });
+    row.add_controller(click);
+}
+
+/// Delete a macro, saying which keys use it first.
+fn confirm_delete(state: &State, parent: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) {
+    let Some(c) = state.client.borrow().clone() else {
+        return;
+    };
+    let (state, parent, name) = (state.clone(), parent.clone(), name.to_string());
+    crate::runtime::run(async move { c.macro_usage(id).await }, move |usage| {
+        let keys: u32 = usage.iter().flatten().map(|(_, n)| n).sum();
+        let body = match keys {
+            0 => "No key uses it.".to_string(),
+            1 => "1 key uses it and will show a warning.".to_string(),
+            n => format!("{n} keys use it and will show a warning."),
+        };
+        let alert = adw::AlertDialog::builder()
+            .heading(format!("Delete {name}?"))
+            .body(body)
+            .close_response("cancel")
+            .build();
+        alert.add_response("cancel", "Cancel");
+        alert.add_response("delete", "Delete");
+        alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        let st = state.clone();
+        alert.connect_response(Some("delete"), move |_, _| st.edit(|e| e.delete_macro(id)));
+        alert.present(Some(&parent));
+    });
+}
+
 fn drag_source(state: &State, action: Action) -> gtk::DragSource {
     let drag = gtk::DragSource::builder().actions(gdk::DragAction::COPY).build();
     {
@@ -661,6 +736,7 @@ mod tests {
                 &state,
                 Use::Picker {
                     include_multi: false,
+                    allow_macros: false,
                     on_pick: Box::new(move |a| p.borrow_mut().push(a)),
                 },
             );
@@ -720,6 +796,7 @@ mod tests {
                 &state,
                 Use::Picker {
                     include_multi: false,
+                    allow_macros: false,
                     on_pick: Box::new(|_| {}),
                 },
             );

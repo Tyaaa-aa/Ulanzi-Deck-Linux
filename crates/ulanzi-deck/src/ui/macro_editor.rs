@@ -7,7 +7,6 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gdk, glib};
 use ulanzi_core::catalog::describe;
-use ulanzi_core::edit::Slot;
 use ulanzi_core::macro_record::MacroRecorder;
 use ulanzi_core::model::{
     Action, Feedback, ImageSource, LookOverride, Macro, MacroEvent, MacroStep, MouseButton, PressAgain,
@@ -28,49 +27,47 @@ const TRY_COUNTDOWN: u32 = 3;
 const DEFAULT_STANDARD_DELAY: u32 = 50;
 
 /// What the editor opens on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum MacroTarget {
     New,
     Library(Uuid),
-    /// The macro on a key: its own copy, its library macro, or a new one.
-    Key(Slot),
+    /// A macro action wherever it sits (a key's press or hold, a Cycle step): its own copy, its
+    /// library macro, or a new one. `save` writes the action back.
+    Action {
+        action: Action,
+        save: OnChange,
+    },
 }
 
 /// What Done does.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 enum Saving {
-    /// Into the library, linking `slot` to it.
-    Library(Option<Slot>),
-    /// Into the key's own copy.
-    Own(Slot),
+    /// Into the library, and with `link`, the action follows it.
+    Library(Option<OnChange>),
+    /// Into the action's own copy.
+    Own(OnChange),
 }
 
-fn action_at(state: &State, slot: Slot) -> Option<Action> {
-    let e = state.editor.borrow();
-    match slot {
-        Slot::Key(k) => e.key(k).and_then(|k| k.tap.clone()),
-        Slot::Dial(d) => e.dials().get(d as usize).and_then(|d| d.press.clone()),
-        Slot::Small(0) => e.profile().small_buttons.left.clone(),
-        Slot::Small(_) => e.profile().small_buttons.right.clone(),
-        Slot::Screen => None,
-    }
+fn write_action(save: &OnChange, id: Uuid, own: Option<Macro>) {
+    save(
+        Action::Macro {
+            id,
+            own: own.map(Box::new),
+        },
+        How::Structure,
+    );
 }
 
 fn load(state: &State, target: MacroTarget) -> (Macro, Saving) {
     let library = |id: Uuid| state.editor.borrow().library().get(id).cloned();
+    let new = || Macro::new("New Macro");
     match target {
-        MacroTarget::New => (Macro::new("New Macro"), Saving::Library(None)),
-        MacroTarget::Library(id) => (
-            library(id).unwrap_or_else(|| Macro::new("New Macro")),
-            Saving::Library(None),
-        ),
-        MacroTarget::Key(slot) => match action_at(state, slot) {
-            Some(Action::Macro { own: Some(m), .. }) => (*m, Saving::Own(slot)),
-            Some(Action::Macro { id, own: None }) => match library(id) {
-                Some(m) => (m, Saving::Library(Some(slot))),
-                None => (Macro::new("New Macro"), Saving::Library(Some(slot))),
-            },
-            _ => (Macro::new("New Macro"), Saving::Library(Some(slot))),
+        MacroTarget::New => (new(), Saving::Library(None)),
+        MacroTarget::Library(id) => (library(id).unwrap_or_else(new), Saving::Library(None)),
+        MacroTarget::Action { action, save } => match action {
+            Action::Macro { own: Some(m), .. } => (*m, Saving::Own(save)),
+            Action::Macro { id, own: None } => (library(id).unwrap_or_else(new), Saving::Library(Some(save))),
+            _ => (new(), Saving::Library(Some(save))),
         },
     }
 }
@@ -87,14 +84,59 @@ struct Ed {
     steps: gtk::Box,
     warning: gtk::Label,
     redraw: Redraw,
+    /// The macro as it was opened, to know whether closing loses anything.
+    original: Rc<RefCell<Macro>>,
+    /// Ends a recording in progress, keeping its steps.
+    stop_recording: Redraw,
+    /// How many keys in every profile follow this macro.
+    users: Rc<Cell<u32>>,
+    /// Try It's countdown or playback is running.
+    trying: Rc<Cell<bool>>,
+    /// The profile and page this was opened on: an action is written back there.
+    opened_on: (Uuid, usize),
 }
 
 impl Ed {
+    /// Close without asking: everything is saved.
+    fn close_saved(&self) {
+        *self.original.borrow_mut() = self.m.borrow().clone();
+        self.window.close();
+    }
+
     fn changed(&self) {
         let draw = self.redraw.borrow().clone();
         if let Some(draw) = draw {
             draw();
         }
+    }
+
+    /// Whether this is still the page the action sits on.
+    fn in_place(&self) -> bool {
+        let page = self.state.editor.borrow().page();
+        if (self.state.profile_id(), page) == self.opened_on {
+            return true;
+        }
+        crate::ui::toast(&self.state, "Go back to the page this key is on to save it");
+        false
+    }
+
+    fn end_recording(&self) {
+        let stop = self.stop_recording.borrow().clone();
+        if let Some(stop) = stop {
+            stop();
+        }
+    }
+
+    /// A popover on a chip: gone when closed, then the steps are redrawn, which removes its parent.
+    fn tidy(&self, popover: &gtk::Popover) {
+        let ed = self.clone();
+        popover.connect_closed(move |p| {
+            let (ed, p) = (ed.clone(), p.clone());
+            glib::idle_add_local_once(move || {
+                p.unparent();
+                ed.changed();
+            });
+        });
     }
 
     fn edit(&self, f: impl FnOnce(&mut Macro)) {
@@ -322,7 +364,7 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
     holder.append(&button);
     {
         let ed = ed.clone();
-        let action = picker_button(&ed.state.clone(), "Add Action", false, move |action| {
+        let action = picker_button(&ed.state.clone(), "Add Action", false, false, move |action| {
             ed.edit(|m| m.steps.push(new_step(MacroEvent::Action { action }, part)));
         });
         holder.append(&action);
@@ -343,6 +385,7 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
         .build();
     let popover = gtk::Popover::builder().child(&body).build();
     popover.set_parent(button);
+    ed.tidy(&popover);
     let first = chip.steps.first().copied();
     let m = ed.m.borrow().clone();
     if let Some(i) = first {
@@ -356,8 +399,6 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                         s.event = MacroEvent::TypeText { text };
                     }
                 });
-                let ed2 = ed.clone();
-                popover.connect_closed(move |_| ed2.changed());
                 body.append(&entry);
             }
             Some(MacroEvent::Wait { ms }) => {
@@ -370,8 +411,6 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                         step.event = MacroEvent::Wait { ms };
                     }
                 });
-                let ed2 = ed.clone();
-                popover.connect_closed(move |_| ed2.changed());
                 body.append(&spin);
             }
             Some(MacroEvent::Action { action }) => {
@@ -388,8 +427,6 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                 }
                 body.append(&gtk::Label::new(Some(&describe(&action))));
                 body.append(&group);
-                let ed2 = ed.clone();
-                popover.connect_closed(move |_| ed2.changed());
             }
             _ => {}
         }
@@ -443,15 +480,31 @@ fn delay_popover(ed: &Ed, button: &gtk::Button, step: usize, ms: u32) {
     spin.set_value(ms as f64);
     let popover = gtk::Popover::builder().child(&spin).build();
     popover.set_parent(button);
+    ed.tidy(&popover);
     let ed2 = ed.clone();
     spin.connect_value_changed(move |s| {
         if let Some(step) = ed2.m.borrow_mut().steps.get_mut(step) {
             step.delay_ms = s.value() as u32;
         }
     });
-    let ed2 = ed.clone();
-    popover.connect_closed(move |_| ed2.changed());
     popover.popup();
+}
+
+const PART_STRIDE: u32 = 100_000;
+
+fn drag_code(part: SequencePart, index: usize) -> u32 {
+    let row = match part {
+        SequencePart::Press => 0,
+        SequencePart::Held => 1,
+        SequencePart::ReleaseKey => 2,
+    };
+    row * PART_STRIDE + index as u32
+}
+
+/// The chip a drag carries, when it comes from `part`.
+fn drag_index(code: u32, part: SequencePart) -> Option<usize> {
+    let row = code / PART_STRIDE;
+    (drag_code(part, 0) / PART_STRIDE == row).then_some((code % PART_STRIDE) as usize)
 }
 
 /// One step chip: click to edit, drag to reorder.
@@ -476,16 +529,21 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
         button.connect_clicked(move |b| step_popover(&ed, b, &chip, index, part));
     }
     let drag = gtk::DragSource::builder().actions(gdk::DragAction::MOVE).build();
-    drag.connect_prepare(move |_, _, _| Some(gdk::ContentProvider::for_value(&(index as u32).to_value())));
+    let code = drag_code(part, index);
+    drag.connect_prepare(move |_, _, _| Some(gdk::ContentProvider::for_value(&code.to_value())));
     button.add_controller(drag);
     let drop = gtk::DropTarget::new(u32::static_type(), gdk::DragAction::MOVE);
     {
         let ed = ed.clone();
         drop.connect_drop(move |_, value, _, _| {
-            let Ok(from) = value.get::<u32>() else {
+            let Ok(code) = value.get::<u32>() else {
                 return false;
             };
-            ed.edit(|m| move_chip(m, part, from as usize, index));
+            // A step keeps to its row of a Sequence: which part it plays in is what it means.
+            let Some(from) = drag_index(code, part) else {
+                return false;
+            };
+            ed.edit(|m| move_chip(m, part, from, index));
             true
         });
     }
@@ -838,6 +896,7 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
             }
         })
     };
+    *ed.stop_recording.borrow_mut() = Some(stop.clone());
     {
         let (ed, live, capture, panel, stop) = (
             ed.clone(),
@@ -926,12 +985,11 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
     {
         let live = live.clone();
         scroll.connect_scroll(move |c, dx, dy| {
-            if let Some(r) = live.borrow_mut().as_mut() {
-                r.scroll(
-                    dx.round() as i32,
-                    dy.round() as i32,
-                    c.current_event_time() as u64,
-                );
+            let (dx, dy) = (dx.round() as i32, dy.round() as i32);
+            if let Some(r) = live.borrow_mut().as_mut()
+                && (dx, dy) != (0, 0)
+            {
+                r.scroll(dx, dy, c.current_event_time() as u64);
             }
             glib::Propagation::Stop
         });
@@ -941,7 +999,7 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
 }
 
 /// The bar for a key's own copy: back to the library, one way or another.
-fn own_bar(ed: &Ed, slot: Slot, library_name: Option<String>) -> gtk::Widget {
+fn own_bar(ed: &Ed, save: &OnChange, library_name: Option<String>) -> gtk::Widget {
     let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let name = ed.m.borrow().name.clone();
     bar.append(
@@ -952,31 +1010,28 @@ fn own_bar(ed: &Ed, slot: Slot, library_name: Option<String>) -> gtk::Widget {
             .build(),
     );
     let row = gtk::Box::builder().spacing(6).build();
-    let keep = move |ed: &Ed| {
-        let m = ed.m.borrow().clone();
-        let id = m.id;
-        ed.state.edit(|e| {
-            e.set_slot_action(
-                slot,
-                Action::Macro {
-                    id,
-                    own: Some(Box::new(m)),
-                },
-            );
-        });
-    };
     let new = gtk::Button::with_label("Save as New Macro");
     {
-        let ed = ed.clone();
+        let (ed, save) = (ed.clone(), save.clone());
         new.connect_clicked(move |_| {
-            let ed2 = ed.clone();
+            if !ed.in_place() {
+                return;
+            }
+            let (ed2, save) = (ed.clone(), save.clone());
             let name = ed.m.borrow().name.clone();
             ask_text(&ed, "Name the New Macro", &name, move |name| {
-                keep(&ed2);
+                ed2.end_recording();
+                let mut m = ed2.m.borrow().clone();
+                m.id = Uuid::new_v4();
+                m.name = name;
+                m.previous = None;
+                let id = m.id;
                 ed2.state.edit(|e| {
-                    e.own_to_new(slot, &name);
+                    e.save_macro(m);
+                    e.merge_next();
                 });
-                ed2.window.close();
+                write_action(&save, id, None);
+                ed2.close_saved();
             });
         });
     }
@@ -987,20 +1042,23 @@ fn own_bar(ed: &Ed, slot: Slot, library_name: Option<String>) -> gtk::Widget {
     };
     let update = gtk::Button::with_label(&update_label);
     {
-        let ed = ed.clone();
-        update.connect_clicked(move |_| update_library(&ed, slot));
+        let (ed, save) = (ed.clone(), save.clone());
+        update.connect_clicked(move |_| update_library(&ed, &save));
     }
     row.append(&update);
     if library_name.is_some() {
         let back = gtk::Button::with_label("Use Library Version");
-        let ed = ed.clone();
+        let (ed, save) = (ed.clone(), save.clone());
         back.connect_clicked(move |_| {
-            ed.state.edit(|e| e.use_library(slot));
+            if !ed.in_place() {
+                return;
+            }
+            write_action(&save, ed.m.borrow().id, None);
             crate::ui::toast(
                 &ed.state,
                 "Back on the library version. Undo brings your copy back.",
             );
-            ed.window.close();
+            ed.close_saved();
         });
         row.append(&back);
     }
@@ -1009,26 +1067,30 @@ fn own_bar(ed: &Ed, slot: Slot, library_name: Option<String>) -> gtk::Widget {
 }
 
 /// Put the key's copy in the library, asking first when other keys follow that macro.
-fn update_library(ed: &Ed, slot: Slot) {
+fn update_library(ed: &Ed, save: &OnChange) {
+    if !ed.in_place() {
+        return;
+    }
     let apply: Rc<dyn Fn()> = {
-        let ed = ed.clone();
+        let (ed, save) = (ed.clone(), save.clone());
         Rc::new(move || {
+            ed.end_recording();
             let m = ed.m.borrow().clone();
             let id = m.id;
+            let mut saved = true;
             ed.state.edit(|e| {
-                e.set_slot_action(
-                    slot,
-                    Action::Macro {
-                        id,
-                        own: Some(Box::new(m)),
-                    },
-                );
-                e.own_to_library(slot);
+                saved = e.save_macro(m);
+                e.merge_next();
             });
-            ed.window.close();
+            if !saved {
+                crate::ui::toast(&ed.state, "A macro can't run itself");
+                return;
+            }
+            write_action(&save, id, None);
+            ed.close_saved();
         })
     };
-    let others = ed.state.editor.borrow().macro_users(ed.m.borrow().id).len();
+    let others = ed.users.get();
     if others == 0 {
         return apply();
     }
@@ -1045,58 +1107,68 @@ fn update_library(ed: &Ed, slot: Slot) {
     alert.present(Some(&ed.window));
 }
 
-fn save(ed: &Ed, saving: Saving) {
+fn save(ed: &Ed, saving: &Saving) {
+    ed.end_recording();
     let m = ed.m.borrow().clone();
     let id = m.id;
     match saving {
-        Saving::Own(slot) => ed.state.edit(|e| {
-            e.set_slot_action(
-                slot,
-                Action::Macro {
-                    id,
-                    own: Some(Box::new(m)),
-                },
-            );
-        }),
-        Saving::Library(slot) => {
+        Saving::Own(save) => {
+            if !ed.in_place() {
+                return;
+            }
+            write_action(save, id, Some(m));
+        }
+        Saving::Library(link) => {
+            if link.is_some() && !ed.in_place() {
+                return;
+            }
             let mut saved = true;
             ed.state.edit(|e| {
                 saved = e.save_macro(m);
-                if let (true, Some(slot)) = (saved, slot) {
-                    e.set_slot_action(slot, Action::Macro { id, own: None });
-                }
+                e.merge_next();
             });
             if !saved {
                 crate::ui::toast(&ed.state, "A macro can't run itself");
                 return;
             }
+            if let Some(save) = link {
+                write_action(save, id, None);
+            }
         }
     }
-    ed.window.close();
+    ed.close_saved();
 }
 
+fn stop_trying(ed: &Ed) {
+    ed.trying.set(false);
+    if let Some(c) = ed.state.client.borrow().clone() {
+        runtime::run(async move { c.stop_macros().await }, |_| {});
+    }
+}
+
+/// Try It: a countdown, then one pass. The button stops it at any point.
 fn try_it(ed: &Ed, button: &gtk::Button) {
+    if ed.trying.get() {
+        stop_trying(ed);
+        button.set_label("Try It");
+        return;
+    }
     let Some(c) = ed.state.client.borrow().clone() else {
         return;
     };
+    ed.end_recording();
     let m = ed.m.borrow().clone();
+    let playing: u32 = m.steps.iter().map(|s| m.effective_delay(s)).sum();
     runtime::run(async move { c.try_macro(&m, TRY_COUNTDOWN * 1000).await }, |_| {});
-    let left = Rc::new(Cell::new(TRY_COUNTDOWN));
-    button.set_sensitive(false);
-    button.set_label(&format!("Playing in {TRY_COUNTDOWN}…"));
-    let b = button.downgrade();
-    glib::timeout_add_local(Duration::from_secs(1), move || {
-        let Some(b) = b.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        left.set(left.get() - 1);
-        if left.get() == 0 {
+    ed.trying.set(true);
+    button.set_label("Stop");
+    let (b, trying) = (button.downgrade(), ed.trying.clone());
+    let total = (TRY_COUNTDOWN * 1000 + playing) as u64;
+    glib::timeout_add_local_once(Duration::from_millis(total), move || {
+        trying.set(false);
+        if let Some(b) = b.upgrade() {
             b.set_label("Try It");
-            b.set_sensitive(true);
-            return glib::ControlFlow::Break;
         }
-        b.set_label(&format!("Playing in {}…", left.get()));
-        glib::ControlFlow::Continue
     });
 }
 
@@ -1120,6 +1192,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         .margin_top(12)
         .margin_bottom(18)
         .build();
+    let original = m.clone();
     let ed = Ed {
         state: state.clone(),
         m: Rc::new(RefCell::new(m)),
@@ -1131,6 +1204,11 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
             .visible(false)
             .build(),
         redraw: Rc::default(),
+        original: Rc::new(RefCell::new(original)),
+        stop_recording: Rc::default(),
+        users: Rc::default(),
+        trying: Rc::default(),
+        opened_on: (state.profile_id(), state.editor.borrow().page()),
     };
     {
         let ed2 = ed.clone();
@@ -1159,44 +1237,53 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     body.append(&top);
     body.append(&record_panel);
 
-    match saving {
-        Saving::Own(slot) => {
-            let id = ed.m.borrow().id;
-            let library_name = state.editor.borrow().library().get(id).map(|m| m.name.clone());
-            body.append(&own_bar(&ed, slot, library_name));
+    let id = ed.m.borrow().id;
+    let in_library = state.editor.borrow().library().get(id).is_some();
+    if in_library {
+        let usage = gtk::Label::builder()
+            .css_classes(["dim-label", "caption"])
+            .build();
+        let row = gtk::Box::builder().spacing(8).build();
+        row.append(&usage);
+        if let Some(c) = state.client.borrow().clone() {
+            let (users, usage) = (ed.users.clone(), usage.clone());
+            runtime::run(async move { c.macro_usage(id).await }, move |r| {
+                let total: u32 = r.iter().flatten().map(|(_, n)| n).sum();
+                users.set(total);
+                let keys = if total == 1 { "key" } else { "keys" };
+                usage.set_label(&format!("Used on {total} {keys}"));
+            });
         }
-        Saving::Library(slot) => {
-            let id = ed.m.borrow().id;
-            let users = state.editor.borrow().macro_users(id).len();
-            if users > 0 || slot.is_some() {
-                let row = gtk::Box::builder().spacing(8).build();
-                let keys = if users == 1 { "key" } else { "keys" };
-                row.append(
-                    &gtk::Label::builder()
-                        .label(format!("Used on {users} {keys}"))
-                        .css_classes(["dim-label", "caption"])
-                        .build(),
-                );
-                if let (Some(slot), true) = (slot, state.editor.borrow().library().get(id).is_some()) {
-                    let copy = gtk::Button::builder()
-                        .label("Edit for This Key Only")
-                        .css_classes(["flat"])
-                        .build();
-                    let (state2, window2, parent2) = (
-                        state.clone(),
-                        window.clone(),
-                        parent.clone().upcast::<gtk::Widget>(),
-                    );
-                    copy.connect_clicked(move |_| {
-                        state2.edit(|e| e.edit_for_this_key(slot));
-                        window2.close();
-                        open(&state2, &parent2, MacroTarget::Key(slot));
-                    });
-                    row.append(&copy);
+        if let Saving::Library(Some(save)) = &saving {
+            let copy = gtk::Button::builder()
+                .label("Edit for This Key Only")
+                .css_classes(["flat"])
+                .build();
+            let (ed2, save, parent2) = (ed.clone(), save.clone(), parent.clone().upcast::<gtk::Widget>());
+            copy.connect_clicked(move |_| {
+                if !ed2.in_place() {
+                    return;
                 }
-                body.append(&row);
-            }
+                ed2.end_recording();
+                let m = ed2.m.borrow().clone();
+                write_action(&save, m.id, Some(m.clone()));
+                let target = MacroTarget::Action {
+                    action: Action::Macro {
+                        id: m.id,
+                        own: Some(Box::new(m)),
+                    },
+                    save: save.clone(),
+                };
+                ed2.close_saved();
+                open(&ed2.state, &parent2, target);
+            });
+            row.append(&copy);
         }
+        body.append(&row);
+    }
+    if let Saving::Own(save) = &saving {
+        let library_name = state.editor.borrow().library().get(id).map(|m| m.name.clone());
+        body.append(&own_bar(&ed, save, library_name));
     }
 
     let (cards, sentence) = trigger_cards(&ed);
@@ -1223,7 +1310,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         .build();
     {
         let ed = ed.clone();
-        done.connect_clicked(move |_| save(&ed, saving));
+        done.connect_clicked(move |_| save(&ed, &saving));
     }
     header.pack_end(&done);
     let view = adw::ToolbarView::new();
@@ -1235,5 +1322,34 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
             .build(),
     ));
     window.set_content(Some(&view));
+    {
+        let ed = ed.clone();
+        window.connect_close_request(move |w| {
+            ed.end_recording();
+            if ed.trying.get() {
+                stop_trying(&ed);
+            }
+            if *ed.m.borrow() == *ed.original.borrow() {
+                *ed.redraw.borrow_mut() = None;
+                *ed.stop_recording.borrow_mut() = None;
+                return glib::Propagation::Proceed;
+            }
+            let alert = adw::AlertDialog::builder()
+                .heading("Discard Your Changes?")
+                .body("This macro has changes that aren't saved.")
+                .close_response("keep")
+                .build();
+            alert.add_response("keep", "Keep Editing");
+            alert.add_response("discard", "Discard");
+            alert.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+            let (ed2, window) = (ed.clone(), w.clone());
+            alert.connect_response(Some("discard"), move |_, _| {
+                *ed2.original.borrow_mut() = ed2.m.borrow().clone();
+                window.close();
+            });
+            alert.present(Some(w));
+            glib::Propagation::Stop
+        });
+    }
     window.present();
 }

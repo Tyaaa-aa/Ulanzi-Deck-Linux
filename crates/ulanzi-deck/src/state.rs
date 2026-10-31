@@ -280,6 +280,7 @@ impl AppState {
                 crate::runtime::run(async move { c.set_macros(&library).await }, |r| {
                     if let Err(e) = r {
                         tracing::error!("macros not saved: {e}");
+                        crate::ui::show_toast("Macro not saved");
                     }
                 });
             }
