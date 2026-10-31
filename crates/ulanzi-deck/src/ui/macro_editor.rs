@@ -1966,6 +1966,43 @@ mod tests {
     }
 
     #[test]
+    fn new_macro_on_a_key_opens_the_editor_and_the_list_stays_put() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            let mut library_macro = Macro::new("First");
+            library_macro.id = Uuid::new_v4();
+            let id = library_macro.id;
+            state.edit(|e| {
+                e.save_macro(library_macro);
+            });
+            let action = Action::Macro { id, own: None };
+            let on: OnChange = Rc::new(|_, _| {});
+            let rows = rows_for(&state, "test", &action, on);
+            let combo = rows[0].clone().downcast::<adw::ComboRow>().expect("list");
+            assert_eq!(combo.selected(), 1);
+            let window = gtk::Window::new();
+            let list = gtk::ListBox::new();
+            list.append(&combo);
+            window.set_child(Some(&list));
+            window.present();
+            let before = gtk::Window::list_toplevels().len();
+            combo.set_selected(0);
+            let context = glib::MainContext::default();
+            while context.pending() {
+                context.iteration(false);
+            }
+            assert_eq!(combo.selected(), 1);
+            assert_eq!(gtk::Window::list_toplevels().len(), before + 1);
+            for w in gtk::Window::list_toplevels() {
+                w.downcast::<gtk::Window>().expect("window").destroy();
+            }
+        });
+    }
+
+    #[test]
     fn add_action_builds_its_list_when_opened() {
         crate::ui::with_gtk(|| {
             let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(

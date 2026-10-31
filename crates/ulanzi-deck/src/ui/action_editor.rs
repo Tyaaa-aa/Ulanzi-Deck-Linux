@@ -143,9 +143,11 @@ fn macro_rows(ed: &Ed, state: &State, action: &Action) -> Vec<gtk::Widget> {
         false if current.is_nil() => "Choose a Macro",
         false => "Macro Was Deleted",
     });
-    let mut names: Vec<&str> = lead.into_iter().collect();
+    let mut names = vec!["New Macro…"];
+    names.extend(lead);
     names.extend(macros.iter().map(|m| m.name.as_str()));
-    let shift = lead.map_or(0, |_| 1);
+    let shift = 1 + lead.map_or(0, |_| 1);
+    let shown = at.map_or(1, |i| i + shift) as u32;
     let choice = adw::ComboRow::builder()
         .title("Macro")
         .model(&gtk::StringList::new(&names))
@@ -155,15 +157,31 @@ fn macro_rows(ed: &Ed, state: &State, action: &Action) -> Vec<gtk::Widget> {
             None::<&gtk::Expression>,
             "string",
         ))
-        .selected(at.map_or(0, |i| (i + shift) as u32))
+        .selected(shown)
         .build();
     {
-        let on = ed.on.clone();
+        let (on, state) = (ed.on.clone(), state.clone());
         choice.connect_selected_notify(move |c| {
-            let Some(m) = (c.selected() as usize)
-                .checked_sub(shift)
-                .and_then(|i| macros.get(i))
-            else {
+            let picked = c.selected();
+            if picked == shown {
+                return;
+            }
+            if picked == 0 {
+                // The list stays on this key's macro until a new one is saved. Later, because
+                // moving a list from inside its own notify never ends.
+                let (c, state, save) = (c.clone(), state.clone(), on.clone());
+                gtk::glib::idle_add_local_once(move || {
+                    c.set_selected(shown);
+                    let action = Action::Macro {
+                        id: uuid::Uuid::nil(),
+                        own: None,
+                    };
+                    let target = crate::ui::macro_editor::MacroTarget::Action { action, save };
+                    crate::ui::macro_editor::open(&state, &c, target);
+                });
+                return;
+            }
+            let Some(m) = (picked as usize).checked_sub(shift).and_then(|i| macros.get(i)) else {
                 return;
             };
             let (id, on) = (m.id, on.clone());

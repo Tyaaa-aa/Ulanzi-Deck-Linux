@@ -141,7 +141,7 @@ Action instead.
 every macro, to edit, duplicate or delete.
 
 **Put one on a key:** drag it from **Macros** in the action list, or drag **Macro** from **System** onto
-a key and choose from the list on the key. That list also swaps a key to a different macro.
+a key and choose from the list on the key. That list also swaps a key to a different macro, or makes a new one for it.
 
 **Record:** select **Record**, press your keys, then select **Stop**. Delays are recorded too.
 
