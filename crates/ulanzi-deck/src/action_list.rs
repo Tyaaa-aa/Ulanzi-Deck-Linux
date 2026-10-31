@@ -13,6 +13,7 @@ use ulanzi_core::catalog::{self, Category};
 use ulanzi_core::model::{Action, MacroLibrary};
 
 use crate::plugins::{Plugins, defaults};
+use crate::ui::macro_steps::{step_count, type_name};
 
 /// The id of the All category.
 pub const ALL: &str = "all";
@@ -33,6 +34,8 @@ pub struct Entry {
     /// The plugin's icon for this action (the action's own, else the plugin's), as the manifest
     /// names it. Built-in actions show their default key look instead.
     pub icon: Option<String>,
+    /// What it does, for its tooltip.
+    pub help: Option<String>,
     /// What a click assigns and a drag carries: a fresh action with its defaults.
     pub action: Action,
 }
@@ -153,6 +156,7 @@ impl Catalog {
                 title: m.name.clone(),
                 plugin: None,
                 icon: None,
+                help: Some(format!("{}, {}", type_name(&m.trigger), step_count(m))),
                 action: Action::Macro { id: m.id, own: None },
             })
             .collect();
@@ -163,6 +167,7 @@ impl Catalog {
                 title: "New Macro".to_string(),
                 plugin: None,
                 icon: None,
+                help: Some("Makes a new macro for this key".to_string()),
                 action: Action::Macro {
                     id: uuid::Uuid::nil(),
                     own: None,
@@ -208,6 +213,7 @@ impl Catalog {
                     title: s.title.to_string(),
                     plugin: None,
                     icon: None,
+                    help: catalog::help(s.id).map(String::from),
                     action: (s.make)(),
                 })
                 .collect();
@@ -245,6 +251,7 @@ impl Catalog {
                     title: a.name.clone(),
                     plugin: Some(name.clone()),
                     icon: a.icon.clone().or_else(|| plugin_icon.clone()),
+                    help: a.description.clone(),
                     action: Action::Plugin {
                         plugin: id.clone(),
                         action: a.id.clone(),
@@ -365,6 +372,13 @@ impl Default for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn built_in_actions_say_what_they_do() {
+        let catalog = Catalog::new(&Plugins::default(), true);
+        let mut entries = catalog.groups.iter().flat_map(|g| g.entries.iter());
+        assert!(entries.all(|e| e.help.is_some()));
+    }
 
     #[test]
     fn macro_sits_in_system_and_stays_out_where_a_macro_cannot_go() {

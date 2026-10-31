@@ -177,6 +177,9 @@ pub struct Permissions {
 pub struct ManifestAction {
     pub id: String,
     pub name: String,
+    /// One line on what it does, shown when pointing at it in the action list.
+    #[serde(default)]
+    pub description: Option<String>,
     /// A one-colour `assets/….svg` the app tints: the action in lists and on fresh keys.
     #[serde(default)]
     pub icon: Option<String>,

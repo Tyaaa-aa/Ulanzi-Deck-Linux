@@ -78,6 +78,49 @@ fn vol(op: VolumeOp) -> Action {
     }
 }
 
+/// One line on what an action does, for its tooltip.
+pub fn help(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "next_page" => "Shows the next page of keys",
+        "prev_page" => "Shows the previous page of keys",
+        "go_to_page" => "Jumps to a page you choose",
+        "open_folder" => "Opens a page of keys, with a way back",
+        "back" => "Returns to the page you came from",
+        "switch_profile" => "Changes to another profile",
+        "auto_profile" => "Turns switching profiles by app on or off",
+        "command" => "Runs a shell command",
+        "launch_app" => "Opens an app, or switches to it",
+        "open_url" => "Opens a web address in your browser",
+        "shortcut" => "Presses a key combination in the app in front",
+        "type_text" => "Types text into the app in front",
+        "multi" => "Runs several actions from one press",
+        "cycle" => "Runs the next action in a list on each press",
+        "macro" => "Plays back recorded keys, mouse input and more",
+        "stop_macros" => "Stops every macro that is playing",
+        "play_pause" => "Plays or pauses the media player",
+        "next_track" => "Skips to the next track",
+        "prev_track" => "Goes back to the previous track",
+        "stop" => "Stops the media player",
+        "seek_back" => "Jumps back a few seconds",
+        "seek_forward" => "Jumps forward a few seconds",
+        "switch_output" => "Moves sound to another output device",
+        "play_sound" => "Plays a sound file",
+        "volume_up" => "Turns the volume up",
+        "volume_down" => "Turns the volume down",
+        "mute" => "Mutes or unmutes the sound",
+        "volume_set" => "Sets the volume to a level you choose",
+        "brightness_up" => "Makes the deck's screen brighter",
+        "brightness_down" => "Makes the deck's screen dimmer",
+        "brightness_set" => "Sets the deck's brightness to a level you choose",
+        "sleep_now" => "Puts the deck to sleep",
+        "screen_next" => "Shows the next widget on the wide screen",
+        "timer_start" => "Starts or pauses the timer",
+        "timer_reset" => "Resets the timer",
+        "timer_add" => "Adds time to the timer",
+        _ => return None,
+    })
+}
+
 static CATALOG: &[ActionSpec] = &[
     spec!(
         "next_page",

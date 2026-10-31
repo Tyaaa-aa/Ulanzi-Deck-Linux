@@ -335,8 +335,11 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
         .label("Add Step")
         .popover(&popover)
         .build();
-    let item = |label: &str, f: Box<dyn Fn()>| {
-        let b = gtk::Button::builder().label(label).css_classes(["flat"]).build();
+    let item = |icon: &str, label: &str, f: Box<dyn Fn()>| {
+        let row = gtk::Box::builder().spacing(8).build();
+        row.append(&gtk::Image::from_icon_name(icon));
+        row.append(&gtk::Label::new(Some(label)));
+        let b = gtk::Button::builder().child(&row).css_classes(["flat"]).build();
         let p = popover.clone();
         b.connect_clicked(move |_| {
             p.popdown();
@@ -354,6 +357,7 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
     {
         let ed = ed.clone();
         item(
+            "input-keyboard-symbolic",
             "Key…",
             Box::new(move || {
                 let names = ulanzi_core::keys::all_sendable();
@@ -373,6 +377,7 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
     {
         let ed = ed.clone();
         item(
+            "insert-text-symbolic",
             "Text…",
             Box::new(move || {
                 let ed2 = ed.clone();
@@ -391,19 +396,22 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
             MacroEvent::MouseDown { button },
             MacroEvent::MouseUp { button },
         ]);
-        item(label, Box::new(click));
+        item("input-mouse-symbolic", label, Box::new(click));
     }
     item(
+        "go-up-symbolic",
         "Scroll Up",
         Box::new(add(vec![MacroEvent::Scroll { dx: 0, dy: -1 }])),
     );
     item(
+        "go-down-symbolic",
         "Scroll Down",
         Box::new(add(vec![MacroEvent::Scroll { dx: 0, dy: 1 }])),
     );
     {
         let ed = ed.clone();
         item(
+            "input-mouse-symbolic",
             "Move Pointer…",
             Box::new(move || {
                 let ed2 = ed.clone();
@@ -419,6 +427,7 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
     {
         let ed = ed.clone();
         item(
+            "find-location-symbolic",
             "Pick a Spot…",
             Box::new(move || {
                 let ed2 = ed.clone();
@@ -428,10 +437,15 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
             }),
         );
     }
-    item("Wait", Box::new(add(vec![MacroEvent::Wait { ms: 500 }])));
+    item(
+        "alarm-symbolic",
+        "Wait",
+        Box::new(add(vec![MacroEvent::Wait { ms: 500 }])),
+    );
     {
         let ed = ed.clone();
         item(
+            "media-playback-start-symbolic",
             "Run Macro…",
             Box::new(move || {
                 let choices = runnable(&ed.state, &ed.m.borrow());
@@ -466,7 +480,7 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
                 .label(if recording { "Stop" } else { "Record" })
                 .build(),
         )
-        .css_classes(["macro-record"])
+        .css_classes(["destructive-action"])
         .build();
     {
         let ed = ed.clone();
@@ -993,22 +1007,27 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
         Some(_) => action_text_of(ed, chip),
         None => None,
     };
-    content.append(
-        &gtk::Label::builder()
-            .label(label.as_deref().unwrap_or(&chip.label))
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .hexpand(true)
-            .xalign(0.0)
-            .build(),
-    );
+    let text = label.unwrap_or_else(|| chip.label.clone());
+    let name = gtk::Label::builder()
+        .label(&text)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    content.append(&name);
     let button = gtk::Button::builder()
         .child(&content)
         .css_classes(["macro-step", chip.kind.class()])
-        .tooltip_text(format!(
-            "{}\n\n{STEP_TIPS}",
-            label.as_deref().unwrap_or(&chip.label)
-        ))
+        .has_tooltip(true)
         .build();
+    // Only a name that was cut off has anything to add.
+    button.connect_query_tooltip(move |_, _, _, _, tip| {
+        let cut = name.layout().is_ellipsized();
+        if cut {
+            tip.set_text(Some(&name.label()));
+        }
+        cut
+    });
     if chip.direction == Direction::Up {
         button.add_css_class("up");
     }

@@ -340,13 +340,6 @@ row.drop-target {
   font-weight: normal;
   padding: 5px 8px;
 }
-.macro-record {
-  background-color: #e01b24;
-  color: #ffffff;
-}
-.macro-record:hover {
-  background-color: #f0303a;
-}
 .macro-number {
   font-size: 0.8em;
   font-feature-settings: "tnum";

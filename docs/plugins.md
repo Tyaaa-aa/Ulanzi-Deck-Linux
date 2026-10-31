@@ -174,7 +174,7 @@ params = [{ key = "name", kind = "text", label = "Name" }]
 | `background` | Optional, default `false`. |
 | `[permissions]` | Optional, see below. Nothing is allowed that is not listed. |
 | `[[settings]]` | Optional. The plugin's settings page in the app, one field each; see [Settings and parameters](#settings-and-parameters). |
-| `[[actions]]` | The actions the plugin offers: `id` and `name` (required, ids unique), `icon` (see [Icons](#icons)), and `params` (fields, as below). |
+| `[[actions]]` | The actions the plugin offers: `id` and `name` (required, ids unique), `description` (one line on what it does, shown when pointing at it in the action list; older apps ignore it), `icon` (see [Icons](#icons)), and `params` (fields, as below). |
 | `[[pickers]]` | Contract 1.1. Lists that `item` fields are picked from: `id` (required, unique), `style`, `groups`, `multi`; see [Pickers](#pickers). |
 | `[[key_sets]]` | Contract 1.1. Ready-made keys for items the user picks; see [Ready-made keys](#ready-made-keys). |
 

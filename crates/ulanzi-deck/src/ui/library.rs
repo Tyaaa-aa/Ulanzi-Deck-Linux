@@ -399,15 +399,9 @@ impl Inner {
                 .ellipsize(gtk::pango::EllipsizeMode::End)
                 .build(),
         );
-        let what = match &e.plugin {
-            Some(p) => format!("{} ({p})", e.title),
-            None => e.title.clone(),
-        };
-        let tooltip = match self.purpose {
-            Use::Library => format!("{what}: drag onto the deck, or click to assign"),
-            Use::Picker { .. } => what,
-        };
-        let row = gtk::ListBoxRow::builder().child(&b).tooltip_text(tooltip).build();
+        // Say what it does; a plugin that doesn't say gets no tooltip rather than its own name again.
+        let row = gtk::ListBoxRow::builder().child(&b).build();
+        row.set_tooltip_text(e.help.as_deref());
         if matches!(self.purpose, Use::Library) {
             row.add_controller(drag_source(&self.state, e.action.clone()));
             if let Action::Macro { id, .. } = e.action

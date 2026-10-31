@@ -282,3 +282,10 @@ fn plugin_problem_comes_from_the_callback() {
     };
     assert_eq!(problem(&multi, &ctx).as_deref(), Some("obs/x"));
 }
+
+#[test]
+fn every_action_says_what_it_does() {
+    for spec in ulanzi_core::catalog::catalog() {
+        assert!(ulanzi_core::catalog::help(spec.id).is_some(), "{}", spec.id);
+    }
+}
