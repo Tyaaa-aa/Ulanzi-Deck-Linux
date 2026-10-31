@@ -267,6 +267,26 @@ async fn while_held_repeats_until_release_and_finishes_the_pass() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn holding_again_during_the_last_pass_carries_on() {
+    let r = rig();
+    let m = macro_of(
+        Trigger::WhileHeld {
+            on_release: Release::FinishPass,
+        },
+        vec![down("a", 100), up("a", 100)],
+    );
+    r.player.press(KEY, m.clone());
+    wait(50).await;
+    r.player.release(KEY);
+    wait(50).await;
+    r.player.press(KEY, m);
+    wait(250).await;
+    r.player.release(KEY);
+    wait(500).await;
+    assert_eq!(r.log(), ["+a", "-a", "+a", "-a"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn while_held_can_stop_at_once() {
     let r = rig();
     let m = macro_of(

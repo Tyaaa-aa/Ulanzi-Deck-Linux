@@ -55,6 +55,8 @@ pub struct DeckService {
     settings_lock: tokio::sync::Mutex<()>,
     /// Stops the service.
     quit: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// A Try It still counting down.
+    trying: Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 impl DeckService {
@@ -68,6 +70,14 @@ impl DeckService {
             plugins_dir: None,
             settings_lock: tokio::sync::Mutex::new(()),
             quit: None,
+            trying: Mutex::default(),
+        }
+    }
+
+    /// A Try It that hasn't started won't.
+    fn cancel_try(&self) {
+        if let Some(waiting) = self.trying.lock().ok().and_then(|mut t| t.take()) {
+            waiting.abort();
         }
     }
 
@@ -845,15 +855,20 @@ impl DeckService {
     async fn try_macro(&self, text: String, delay_ms: u32) -> Result<()> {
         let m: Macro = toml::from_str(&text).map_err(|e| DeckError::Invalid(e.to_string()))?;
         let tx = self.tx.clone();
-        tokio::spawn(async move {
+        self.cancel_try();
+        let waiting = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms as u64)).await;
             let _ = tx.send(DeckMsg::TryMacro(Box::new(m))).await;
         });
+        if let Ok(mut trying) = self.trying.lock() {
+            *trying = Some(waiting.abort_handle());
+        }
         Ok(())
     }
 
     /// Stop every macro and let go of everything they hold.
     async fn stop_macros(&self) -> Result<()> {
+        self.cancel_try();
         self.send(DeckMsg::StopMacros).await
     }
 

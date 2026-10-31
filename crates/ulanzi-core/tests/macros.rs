@@ -111,6 +111,22 @@ fn a_key_left_down_is_reported() {
     assert_eq!(m.end_state(), vec!["ctrl".to_string()]);
 }
 
+#[test]
+fn a_sequence_is_checked_in_the_order_it_plays() {
+    let mut m = Macro::new("Hold");
+    m.trigger = Trigger::Sequence;
+    let part = |event, part| MacroStep {
+        part,
+        ..step(event, 0)
+    };
+    // Listed backwards: the release row comes first, but plays last.
+    m.steps = vec![
+        part(up("shift"), SequencePart::ReleaseKey),
+        part(down("shift"), SequencePart::Press),
+    ];
+    assert!(m.end_state().is_empty());
+}
+
 fn with_macro_key(id: Uuid, own: Option<Macro>) -> Profile {
     let mut p = Profile::new_default("P", Model::D200X);
     p.pages[0].keys.insert(
@@ -153,6 +169,28 @@ fn a_bundle_carries_the_macros_its_profiles_use() {
     let there = store(e.path());
     import(&there, &b, &keep_both()).expect("import");
     assert_eq!(there.load_macros().expect("load").macros.len(), 2);
+}
+
+#[test]
+fn old_versions_stay_out_of_shared_files_but_stay_in_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let mut m = Macro::new("Old");
+    let mut older = m.clone();
+    older.name = "Older".into();
+    m.previous = Some(Box::new(older));
+    let profile = with_macro_key(m.id, None);
+    store.save_profile(&profile).unwrap();
+    store
+        .save_macros(&MacroLibrary {
+            macros: vec![m.clone()],
+        })
+        .unwrap();
+
+    let shared = read(&export(&store, &[profile.id], false).unwrap()).unwrap();
+    assert_eq!(shared.macros.get(m.id).unwrap().previous, None);
+    let backup = read(&export(&store, &[], false).unwrap()).unwrap();
+    assert!(backup.macros.get(m.id).unwrap().previous.is_some());
 }
 
 fn keep_both() -> ImportOptions {

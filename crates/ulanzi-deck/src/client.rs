@@ -130,14 +130,15 @@ pub enum ClientEvent {
     SettingsChanged,
     /// The plugin list or a plugin's status changed: fetch the list again.
     PluginsChanged,
-    /// How far installing `id` from the store is: `stage` is preparing, downloading (`done` of
-    /// `total` bytes), checking or installing.
+    /// The macro library changed outside the window: fetch it again.
     MacrosChanged,
     UpdateProgress {
         stage: String,
         done: u64,
         total: u64,
     },
+    /// How far installing `id` from the store is: `stage` is preparing, downloading (`done` of
+    /// `total` bytes), checking or installing.
     InstallProgress {
         id: String,
         stage: String,

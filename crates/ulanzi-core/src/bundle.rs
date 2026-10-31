@@ -231,10 +231,15 @@ pub fn export_with(
         tracing::error!("macros unreadable: {e}");
         MacroLibrary::default()
     });
+    // A backup keeps everything; a shared file keeps only what the macros do now.
     let macros = if ids.is_empty() {
         library
     } else {
-        library.closure(out.iter().flat_map(|bp| bp.profile.macros_used()))
+        let mut used = library.closure(out.iter().flat_map(|bp| bp.profile.macros_used()));
+        for m in &mut used.macros {
+            m.previous = None;
+        }
+        used
     };
     to_bytes(&Bundle {
         manifest,

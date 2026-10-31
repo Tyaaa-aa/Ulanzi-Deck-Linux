@@ -170,7 +170,7 @@ impl Macro {
     /// The keys and buttons still down after the last step.
     pub fn end_state(&self) -> Vec<String> {
         let mut held: Vec<String> = Vec::new();
-        for s in &self.steps {
+        for s in self.in_playing_order() {
             let (name, down) = match &s.event {
                 MacroEvent::KeyDown { key } => (key.clone(), true),
                 MacroEvent::KeyUp { key } => (key.clone(), false),
@@ -184,6 +184,17 @@ impl Macro {
             }
         }
         held
+    }
+
+    /// The steps in the order they play: a Sequence goes by part, however the list is arranged.
+    fn in_playing_order(&self) -> Vec<&MacroStep> {
+        if self.trigger != Trigger::Sequence {
+            return self.steps.iter().collect();
+        }
+        [SequencePart::Press, SequencePart::Held, SequencePart::ReleaseKey]
+            .iter()
+            .flat_map(|part| self.steps.iter().filter(move |s| s.part == *part))
+            .collect()
     }
 
     /// The actions this macro runs itself.

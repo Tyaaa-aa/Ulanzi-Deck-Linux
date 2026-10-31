@@ -18,6 +18,7 @@ use ulanzi_core::model::{
 use ulanzi_proto::Control;
 use uuid::Uuid;
 
+use crate::actions::keys;
 use crate::actions::mouse::InputSink;
 use crate::actions::{ActionError, ActionRunner};
 
@@ -25,6 +26,8 @@ use crate::actions::{ActionError, ActionRunner};
 const MIN_PASS: Duration = Duration::from_millis(10);
 /// How deep Run Macro goes.
 const MAX_DEPTH: usize = 8;
+/// How many characters are typed between checks for a stop.
+const TYPING_PIECE: usize = 32;
 
 const DELETED: &str = "This macro no longer exists";
 const TOO_DEEP: &str = "Macros are nested too deeply";
@@ -189,10 +192,14 @@ impl Player {
                     let _ = run.stop.send(true);
                     before = runs.remove(&key).map(|r| r.task);
                 }
+                // Held again during the last pass: it carries on as if never let go.
+                Trigger::WhileHeld { .. } => {
+                    let _ = run.released.send(false);
+                    return None;
+                }
                 Trigger::Once {
                     again: PressAgain::Ignore,
                 }
-                | Trigger::WhileHeld { .. }
                 | Trigger::Sequence => return None,
             }
         }
@@ -448,8 +455,13 @@ impl Inner {
             MacroEvent::MoveTo { x, y } => self.input(|s| s.move_to(*x, *y))?,
             MacroEvent::Wait { ms } => signals.pause(*ms as u64).await?,
             MacroEvent::TypeText { text } => {
-                let action = Action::TypeText { text: text.clone() };
-                self.runner.run(&action).await?;
+                for piece in typing_pieces(text) {
+                    if signals.halted() {
+                        return Err(Halt::Stopped);
+                    }
+                    let action = Action::TypeText { text: piece };
+                    self.runner.run(&action).await?;
+                }
             }
             MacroEvent::RunMacro { id } => self.nested(*id, None, signals, depth).await?,
             MacroEvent::Action { action } => match action {
@@ -508,4 +520,33 @@ fn deck_runs(a: &Action) -> bool {
             | Action::Timer { .. }
             | Action::StopMacros
     )
+}
+
+/// Long text in short pieces, so a stop lands between them. Text that goes in by pasting stays
+/// whole: pasting in pieces would rewrite the clipboard each time.
+fn typing_pieces(text: &str) -> Vec<String> {
+    if !matches!(keys::plan_typing(text), keys::Typing::Keys(_)) {
+        return vec![text.to_string()];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    chars.chunks(TYPING_PIECE).map(|c| c.iter().collect()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_text_types_in_pieces_and_loses_nothing() {
+        let text = "a".repeat(TYPING_PIECE * 2 + 3);
+        let pieces = typing_pieces(&text);
+        assert_eq!(pieces.len(), 3);
+        assert_eq!(pieces.concat(), text);
+    }
+
+    #[test]
+    fn pasted_text_stays_whole() {
+        let text = "日本語".repeat(TYPING_PIECE);
+        assert_eq!(typing_pieces(&text), [text]);
+    }
 }
