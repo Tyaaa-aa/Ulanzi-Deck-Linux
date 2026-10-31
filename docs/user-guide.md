@@ -153,7 +153,7 @@ other apps, which keeps your passwords safe. Your macro still plays back in what
 | Keys | Press them |
 | Mouse buttons and scrolling | Use the pad under the Record button |
 | A shortcut the desktop keeps for itself | **+** → **Key…** |
-| A spot on screen | **+** → **Pick a Spot…**, then click where the pointer should go |
+| A spot on screen | **+** → **Pick a Spot…**, then click where the pointer should go. Escape cancels, and it cancels by itself after 30 seconds |
 | Movement in pixels | **+** → **Move Pointer…** |
 | Text | **+** → **Text…** |
 

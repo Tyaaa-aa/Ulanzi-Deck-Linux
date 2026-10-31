@@ -1,12 +1,21 @@
 //! Pick a Spot: a click on a full-screen overlay gives a macro a place on the desktop.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
 use crate::state::State;
+
+/// Seconds before the overlay gives up by itself, so nothing can leave a screen covered for good.
+const GIVE_UP_AFTER: u32 = 30;
+
+fn hint_text(seconds_left: u32) -> String {
+    format!(
+        "Click the spot the pointer should go to. Press Escape to cancel.\nCancels by itself in {seconds_left} s."
+    )
+}
 
 /// A monitor's place on the desktop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +67,10 @@ pub fn open(_state: &State, done: impl Fn(f32, f32) + 'static) {
     );
     let windows: Rc<RefCell<Vec<gtk::Window>>> = Rc::default();
     let done = Rc::new(done);
+    let hints: Rc<RefCell<Vec<gtk::Label>>> = Rc::default();
+    // The macro editor is modal, and a modal window takes the input of its whole window group. In
+    // a group of their own, these windows hear the click and Escape.
+    let group = gtk::WindowGroup::new();
     let close_all = {
         let windows = windows.clone();
         move || {
@@ -68,9 +81,11 @@ pub fn open(_state: &State, done: impl Fn(f32, f32) + 'static) {
     };
     for (i, monitor) in monitors.iter().enumerate() {
         let hint = gtk::Label::builder()
-            .label("Click the spot the pointer should go to. Press Escape to cancel.")
+            .label(hint_text(GIVE_UP_AFTER))
+            .justify(gtk::Justification::Center)
             .css_classes(["title-2"])
             .build();
+        hints.borrow_mut().push(hint.clone());
         let window = gtk::Window::builder()
             .decorated(false)
             .child(&hint)
@@ -98,10 +113,26 @@ pub fn open(_state: &State, done: impl Fn(f32, f32) + 'static) {
             });
         }
         window.add_controller(keys);
+        group.add_window(&window);
         window.fullscreen_on_monitor(monitor);
         window.present();
         windows.borrow_mut().push(window);
     }
+    let left = Cell::new(GIVE_UP_AFTER);
+    glib::timeout_add_seconds_local(1, move || {
+        if windows.borrow().is_empty() {
+            return glib::ControlFlow::Break;
+        }
+        left.set(left.get().saturating_sub(1));
+        if left.get() == 0 {
+            close_all();
+            return glib::ControlFlow::Break;
+        }
+        for hint in hints.borrow().iter() {
+            hint.set_label(&hint_text(left.get()));
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 #[cfg(test)]
@@ -123,6 +154,30 @@ mod tests {
 
     fn close(a: (f32, f32), b: (f32, f32)) -> bool {
         (a.0 - b.0).abs() < 0.001 && (a.1 - b.1).abs() < 0.001
+    }
+
+    #[test]
+    fn a_modal_window_cannot_take_the_overlays_input() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            let modal = gtk::Window::builder().modal(true).build();
+            modal.present();
+            open(&state, |_, _| {});
+            let overlays: Vec<gtk::Window> = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Window>().ok())
+                .filter(|w| w.has_css_class("pick-spot"))
+                .collect();
+            assert!(!overlays.is_empty());
+            for overlay in &overlays {
+                assert_ne!(overlay.group(), modal.group());
+                overlay.destroy();
+            }
+            modal.destroy();
+        });
     }
 
     #[test]

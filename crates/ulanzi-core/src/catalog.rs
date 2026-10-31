@@ -89,7 +89,7 @@ pub fn help(id: &str) -> Option<&'static str> {
         "switch_profile" => "Changes to another profile",
         "auto_profile" => "Turns switching profiles by app on or off",
         "command" => "Runs a shell command",
-        "launch_app" => "Opens an app, or switches to it",
+        "launch_app" => "Opens an app you choose",
         "open_url" => "Opens a web address in your browser",
         "shortcut" => "Presses a key combination in the app in front",
         "type_text" => "Types text into the app in front",
