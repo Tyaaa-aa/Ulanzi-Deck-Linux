@@ -12,7 +12,7 @@ use adw::prelude::*;
 use gtk::{cairo, glib};
 use ulanzi_core::model::{PressAgain, Release, Trigger};
 
-use crate::ui::how_it_works::{BLUE, GREEN, cursor, ease, phase, play_glyph, rounded};
+use crate::ui::how_it_works::{BLUE, GREEN, ease, phase, play_glyph, rounded};
 
 const W: f64 = 460.0;
 const H: f64 = 88.0;
@@ -314,16 +314,25 @@ fn draw(cr: &cairo::Context, f: &Frame, fg: (f64, f64, f64)) {
     let _ = cr.set_source(&grad);
     let _ = cr.fill();
 
+    // The key stands proud of the deck and sinks flush when pushed, dimming as it goes.
     let (cx, cy) = (kx + KEY / 2.0, ky + KEY / 2.0);
-    let k = KEY * (1.0 - 0.1 * ease(f.down));
-    rounded(cr, cx - k / 2.0, cy - k / 2.0, k, k, 9.0);
-    cr.set_source_rgb(0.047, 0.047, 0.055);
+    let pushed = ease(f.down);
+    rounded(cr, kx, ky, KEY, KEY, 9.0);
+    cr.set_source_rgb(0.03, 0.03, 0.035);
     let _ = cr.fill();
-    let inner = k - 8.0;
-    rounded(cr, cx - inner / 2.0, cy - inner / 2.0, inner, inner, 7.0);
-    cr.set_source_rgb(BLUE.0, BLUE.1, BLUE.2);
+    let cap = KEY - 6.0 - 2.0 * pushed;
+    let lift = 3.5 * (1.0 - pushed);
+    let (capx, capy) = (cx - cap / 2.0, cy - cap / 2.0 - lift);
+    if lift > 0.0 {
+        rounded(cr, capx, capy + lift, cap, cap, 7.0);
+        cr.set_source_rgb(BLUE.0 * 0.45, BLUE.1 * 0.45, BLUE.2 * 0.45);
+        let _ = cr.fill();
+    }
+    let dim = 1.0 - 0.3 * pushed;
+    rounded(cr, capx, capy, cap, cap, 7.0);
+    cr.set_source_rgb(BLUE.0 * dim, BLUE.1 * dim, BLUE.2 * dim);
     let _ = cr.fill();
-    play_glyph(cr, cx, cy, inner * 0.42);
+    play_glyph(cr, cx, cy - lift, cap * 0.42);
 
     if let Some(age) = f.ripple {
         let p = age / 0.8;
@@ -336,7 +345,6 @@ fn draw(cr: &cairo::Context, f: &Frame, fg: (f64, f64, f64)) {
         let _ = cr.stroke();
         cr.restore().ok();
     }
-    cursor(cr, cx + 8.0, cy + 8.0 - 3.0 * ease(f.down), (1.0, 1.0, 1.0));
 
     // The macro: a track that fills as it plays.
     let (x, y, width) = TRACK;

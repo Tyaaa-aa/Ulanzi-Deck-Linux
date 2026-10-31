@@ -105,7 +105,7 @@ fn note(cr: &cairo::Context, x: f64, y: f64, k: f64) {
     cr.restore().ok();
 }
 
-pub(crate) fn cursor(cr: &cairo::Context, x: f64, y: f64, fg: (f64, f64, f64)) {
+fn cursor(cr: &cairo::Context, x: f64, y: f64, fg: (f64, f64, f64)) {
     cr.move_to(x, y);
     cr.line_to(x, y + 16.0);
     cr.line_to(x + 4.5, y + 12.0);
