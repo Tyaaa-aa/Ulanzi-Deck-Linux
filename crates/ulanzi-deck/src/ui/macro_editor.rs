@@ -799,7 +799,7 @@ fn draw_steps(ed: &Ed) {
                     .build(),
             );
         }
-        let flow = WrapBox::new();
+        let flow = WrapBox::default();
         for (i, chip) in list.iter().enumerate() {
             flow.append(&chip_widget(ed, chip, i, *part));
             if let (Some(ms), Some(step)) = (chip.delay, chip.steps.last().copied()) {
@@ -1714,7 +1714,7 @@ mod tests {
                     * 4
             };
             let context = glib::MainContext::default();
-            let mut cycle = || {
+            let cycle = || {
                 open(&state, &parent, MacroTarget::New);
                 while context.pending() {
                     context.iteration(false);

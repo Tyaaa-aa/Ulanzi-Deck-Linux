@@ -154,8 +154,8 @@ other apps, which keeps your passwords safe. Your macro still plays back in what
 | Movement in pixels | **+** → **Move Pointer…** |
 | Text | **+** → **Text…** |
 
-**Arrange:** drag a step to move it. Select a step to edit or delete it, and a delay to change it.
-**Add Action** adds any app action as a step. **Use Standard Delays** gives every step the same delay
+**Arrange:** drag a step to move it. Click a step to edit or delete it, and a delay to change it.
+Ctrl+click selects several steps, to delete them or drag them together. **Add Action** adds any app action as a step. **Use Standard Delays** gives every step the same delay
 and shows each press as one chip; turning it off brings back the recorded delays.
 
 **Types:**
@@ -167,6 +167,9 @@ and shows each press as one chip; turning it off brings back the recorded delays
 | Toggle | Repeats until the key is pressed again |
 | Sequence | Separate steps for press, while held and release |
 
+Point at a type to see a short animation of it. It shows the choice you've made for pressing again or
+letting go.
+
 A macro starts as soon as the key goes down. On a key that also has a When Held action, Play Once and
 Toggle wait for a tap instead. While Holding and Sequence can't share a key with a When Held action.
 
@@ -176,6 +179,9 @@ macro key can also use `{macro.step}`, `{macro.total}`, `{macro.percent}`, `{mac
 
 **One key's version:** **Edit for This Key Only** gives a key its own copy, which stops following the
 library. From there, **Save as New Macro**, **Update** and **Use Library Version** all work with Undo.
+
+**Going back:** a library macro remembers the version before its last save. **Restore Previous
+Version** in the macro window brings it back. Backups keep these old versions; shared files don't.
 
 **Stopping:** put **Stop All Macros** on a key to stop everything at once. Stopping always releases any
 keys and buttons a macro is holding.

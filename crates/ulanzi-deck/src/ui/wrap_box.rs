@@ -120,11 +120,13 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-impl WrapBox {
-    pub fn new() -> Self {
+impl Default for WrapBox {
+    fn default() -> Self {
         glib::Object::new()
     }
+}
 
+impl WrapBox {
     pub fn append(&self, child: &impl IsA<gtk::Widget>) {
         child.set_parent(self);
     }

@@ -173,24 +173,24 @@ fn a_bundle_carries_the_macros_its_profiles_use() {
 
 #[test]
 fn old_versions_stay_out_of_shared_files_but_stay_in_backups() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().expect("ok");
     let store = store(dir.path());
     let mut m = Macro::new("Old");
     let mut older = m.clone();
     older.name = "Older".into();
     m.previous = Some(Box::new(older));
     let profile = with_macro_key(m.id, None);
-    store.save_profile(&profile).unwrap();
+    store.save_profile(&profile).expect("ok");
     store
         .save_macros(&MacroLibrary {
             macros: vec![m.clone()],
         })
-        .unwrap();
+        .expect("ok");
 
-    let shared = read(&export(&store, &[profile.id], false).unwrap()).unwrap();
-    assert_eq!(shared.macros.get(m.id).unwrap().previous, None);
-    let backup = read(&export(&store, &[], false).unwrap()).unwrap();
-    assert!(backup.macros.get(m.id).unwrap().previous.is_some());
+    let shared = read(&export(&store, &[profile.id], false).expect("ok")).expect("ok");
+    assert_eq!(shared.macros.get(m.id).expect("ok").previous, None);
+    let backup = read(&export(&store, &[], false).expect("ok")).expect("ok");
+    assert!(backup.macros.get(m.id).expect("ok").previous.is_some());
 }
 
 fn keep_both() -> ImportOptions {
