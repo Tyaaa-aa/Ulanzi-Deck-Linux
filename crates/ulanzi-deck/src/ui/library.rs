@@ -94,7 +94,7 @@ impl Inner {
         if self.allow_macros() {
             catalog.with_macros(self.state.editor.borrow().library())
         } else {
-            catalog
+            catalog.without_macros()
         }
     }
 
@@ -466,7 +466,7 @@ fn macro_menu(state: &State, row: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) 
         let (state, popover, row, name) = (state.clone(), popover.clone(), row.clone(), name.to_string());
         delete.connect_clicked(move |_| {
             popover.popdown();
-            confirm_delete(&state, &row, id, &name);
+            confirm_delete(&state, row.upcast_ref(), id, &name);
         });
     }
     let click = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();
@@ -479,7 +479,7 @@ fn macro_menu(state: &State, row: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) 
 }
 
 /// Delete a macro, saying which keys use it first.
-fn confirm_delete(state: &State, parent: &gtk::ListBoxRow, id: uuid::Uuid, name: &str) {
+pub(crate) fn confirm_delete(state: &State, parent: &gtk::Widget, id: uuid::Uuid, name: &str) {
     let Some(c) = state.client.borrow().clone() else {
         return;
     };

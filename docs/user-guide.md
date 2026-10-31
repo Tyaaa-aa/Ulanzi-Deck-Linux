@@ -137,8 +137,11 @@ A macro is a named list of inputs that plays back in whatever app is in front. M
 library, so you can put one on any number of keys. To run several actions from one key, use Multi
 Action instead.
 
-**Make one:** in the action list, open **Macros** and drag **New Macro** onto a key, then select the
-key and choose **Edit Macro**.
+**Make one:** click the **Macros** button next to Plugins and choose **New Macro**. That window lists
+every macro, to edit, duplicate or delete.
+
+**Put one on a key:** drag it from **Macros** in the action list, or drag **Macro** from **System** onto
+a key and choose from the list on the key. That list also swaps a key to a different macro.
 
 **Record:** select **Record**, press your keys, then select **Stop**. Delays are recorded too.
 
@@ -155,7 +158,8 @@ other apps, which keeps your passwords safe. Your macro still plays back in what
 | Text | **+** → **Text…** |
 
 **Arrange:** drag a step to move it. Click a step to edit or delete it, and a delay to change it.
-Ctrl+click selects several steps, to delete them or drag them together. **Add Action** adds any app action as a step. **Use Standard Delays** gives every step the same delay
+Ctrl+click selects steps, Shift+click selects a range and Ctrl+A selects them all, to delete them or
+drag them together. **Clear All** removes every step, after asking. **Add Action** adds any app action as a step. **Use Standard Delays** gives every step the same delay
 and shows each press as one chip; turning it off brings back the recorded delays.
 
 **Types:**
@@ -178,7 +182,7 @@ macro key can also use `{macro.step}`, `{macro.total}`, `{macro.percent}`, `{mac
 `{macro.running}` in its label and in Live key looks.
 
 **One key's version:** **Edit for This Key Only** gives a key its own copy, which stops following the
-library. From there, **Save as New Macro**, **Update** and **Use Library Version** all work with Undo.
+library and isn't in the Macros list. From there, **Save as New Macro**, **Update** and **Use Library Version** all work with Undo.
 
 **Going back:** a library macro remembers the version before its last save. **Restore Previous
 Version** in the macro window brings it back. Backups keep these old versions; shared files don't.

@@ -201,6 +201,17 @@ static CATALOG: &[ActionSpec] = &[
         Action::Cycle { .. }
     ),
     spec!(
+        "macro",
+        "Macro",
+        System,
+        "command",
+        Action::Macro {
+            id: uuid::Uuid::nil(),
+            own: None,
+        },
+        Action::Macro { .. }
+    ),
+    spec!(
         "stop_macros",
         "Stop All Macros",
         System,
@@ -684,7 +695,7 @@ pub fn problem(a: &Action, c: &Problems) -> Option<String> {
         Action::SwitchProfile { profile } if !c.profiles.is_empty() && !c.profiles.contains(profile) => {
             Some("That profile no longer exists".into())
         }
-        Action::Macro { id, own: None } if id.is_nil() => Some("No macro made yet".into()),
+        Action::Macro { id, own: None } if id.is_nil() => Some("No macro chosen yet".into()),
         Action::Macro { id, own: None } if !(c.macro_exists)(*id) => {
             Some("This macro no longer exists".into())
         }

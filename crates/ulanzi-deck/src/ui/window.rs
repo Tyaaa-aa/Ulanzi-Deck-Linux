@@ -202,6 +202,12 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .action_name("win.plugins")
         .build();
     header.pack_end(&plugins);
+    let macros = gtk::Button::builder()
+        .icon_name("media-record-symbolic")
+        .tooltip_text("Macros")
+        .action_name("win.macros")
+        .build();
+    header.pack_end(&macros);
     let redo = gtk::Button::builder()
         .icon_name("edit-redo-symbolic")
         .tooltip_text("Redo (Ctrl+Shift+Z)")
@@ -345,6 +351,8 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
         "plugins",
         Box::new(move || crate::ui::plugins_window::open(&s, &w, None)),
     );
+    let (s, w) = (state.clone(), window.clone());
+    action("macros", Box::new(move || crate::ui::macros_window::open(&s, &w)));
     let s = state.clone();
     action("undo", Box::new(move || s.undo()));
     let s = state.clone();

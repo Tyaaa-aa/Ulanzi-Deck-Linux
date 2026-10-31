@@ -408,6 +408,7 @@ fn main() -> glib::ExitCode {
                 Some("about") => {
                     gio::prelude::ActionGroupExt::activate_action(&app, "about", None);
                 }
+                Some("macros") => ui::macros_window::open(&state2, &window),
                 Some("macro") => {
                     let library = state2.editor.borrow().library().clone();
                     let target = library

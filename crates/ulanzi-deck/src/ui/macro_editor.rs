@@ -21,7 +21,7 @@ use crate::ui::action_editor::{How, OnChange, base_key_name, picker_button, rows
 use crate::ui::capture::Capture;
 use crate::ui::macro_diagram::Diagram;
 use crate::ui::macro_steps::{
-    Chip, Direction, RECORD_HINT, chips, held_warning, move_chips, remove_chip, remove_selected,
+    Chip, Direction, RECORD_HINT, chips, held_warning, move_chips, remove_chip, remove_selected, step_count,
     trigger_sentence,
 };
 use crate::ui::wrap_box::WrapBox;
@@ -100,6 +100,8 @@ struct Ed {
     try_run: Rc<Cell<u32>>,
     /// The first step of each selected chip.
     selected: Rc<RefCell<BTreeSet<usize>>>,
+    /// The chip a Shift+click range starts from.
+    anchor: Rc<Cell<Option<(SequencePart, usize)>>>,
     /// The profile and page this was opened on: an action is written back there.
     opened_on: (Uuid, usize),
 }
@@ -156,9 +158,47 @@ impl Ed {
         });
     }
 
+    /// Which chips a macro of this type shows rows for.
+    fn parts(&self) -> &'static [SequencePart] {
+        if self.m.borrow().trigger == Trigger::Sequence {
+            &[SequencePart::Press, SequencePart::Held, SequencePart::ReleaseKey]
+        } else {
+            &[SequencePart::Press]
+        }
+    }
+
+    /// Redraw for a new selection: later, because a click on a chip is still going on.
+    fn selection_changed(&self) {
+        let ed = self.clone();
+        glib::idle_add_local_once(move || ed.changed());
+    }
+
+    fn select_all(&self) {
+        let m = self.m.borrow();
+        let firsts = self
+            .parts()
+            .iter()
+            .flat_map(|part| chips(&m, *part))
+            .filter_map(|c| c.steps.first().copied());
+        self.selected.borrow_mut().extend(firsts);
+        self.selection_changed();
+    }
+
+    fn deselect(&self) {
+        self.selected.borrow_mut().clear();
+        self.selection_changed();
+    }
+
+    fn delete_selected(&self) {
+        let selected = self.selected.borrow().clone();
+        let parts = self.parts();
+        self.edit(|m| remove_selected(m, parts, &selected));
+    }
+
     fn edit(&self, f: impl FnOnce(&mut Macro)) {
         f(&mut self.m.borrow_mut());
         self.selected.borrow_mut().clear();
+        self.anchor.set(None);
         self.changed();
     }
 }
@@ -398,8 +438,32 @@ const MOUSE_BUTTONS: [(&str, MouseButton); 5] = [
     ("Forward", MouseButton::Forward),
 ];
 
+/// A number typed into `spin` counts: Enter saves it and closes, and so does closing.
+fn save_on_close(popover: &gtk::Popover, spin: &gtk::SpinButton) {
+    {
+        let popover = popover.downgrade();
+        spin.connect_activate(move |_| {
+            if let Some(p) = popover.upgrade() {
+                p.popdown();
+            }
+        });
+    }
+    let spin = spin.downgrade();
+    popover.connect_closed(move |_| {
+        if let Some(s) = spin.upgrade() {
+            s.update();
+        }
+    });
+}
+
 /// A label and a whole number, reported as it changes.
-fn number_row(label: &str, value: i32, max: i32, changed: impl Fn(i32) + 'static) -> gtk::Widget {
+fn number_row(
+    popover: &gtk::Popover,
+    label: &str,
+    value: i32,
+    max: i32,
+    changed: impl Fn(i32) + 'static,
+) -> gtk::Widget {
     let row = gtk::Box::builder().spacing(8).build();
     row.append(
         &gtk::Label::builder()
@@ -411,6 +475,7 @@ fn number_row(label: &str, value: i32, max: i32, changed: impl Fn(i32) + 'static
     let spin = gtk::SpinButton::with_range(-max as f64, max as f64, 1.0);
     spin.set_value(value as f64);
     spin.connect_value_changed(move |s| changed(s.value() as i32));
+    save_on_close(popover, &spin);
     row.append(&spin);
     row.upcast()
 }
@@ -456,6 +521,58 @@ fn key_choices(ed: &Ed, popover: &gtk::Popover, body: &gtk::Box, steps: &[usize]
     }
 }
 
+/// A step's action, with how it's named on its chip.
+fn action_text(action: &Action) -> String {
+    if let Action::LaunchApp {
+        desktop_id: Some(id), ..
+    } = action
+        && let Some(app) = crate::ui::action_editor::installed_apps()
+            .iter()
+            .find(|a| a.desktop_id == *id)
+    {
+        return format!("Launch {}", app.name);
+    }
+    describe(action)
+}
+
+/// The controls of step `i`'s action. They come back when the action changes, so a choice shows
+/// straight away, on the chip behind them too.
+fn fill_action(ed: &Ed, i: usize, group: &gtk::ListBox, title: &gtk::Label, chip: &gtk::Button) {
+    let Some(MacroEvent::Action { action }) = ed.m.borrow().steps.get(i).map(|s| s.event.clone()) else {
+        return;
+    };
+    title.set_label(&action_text(&action));
+    while let Some(row) = group.first_child() {
+        group.remove(&row);
+    }
+    let on: OnChange = {
+        let (ed, group, title, chip) = (ed.clone(), group.clone(), title.clone(), chip.clone());
+        Rc::new(move |action: Action, how: How| {
+            if let Some(step) = ed.m.borrow_mut().steps.get_mut(i) {
+                step.event = MacroEvent::Action { action };
+            }
+            let (ed, group, title, chip) = (ed.clone(), group.clone(), title.clone(), chip.clone());
+            glib::idle_add_local_once(move || {
+                if how == How::Structure {
+                    fill_action(&ed, i, &group, &title, &chip);
+                }
+                let text = ed.m.borrow().steps.get(i).and_then(|s| match &s.event {
+                    MacroEvent::Action { action } => Some(action_text(action)),
+                    _ => None,
+                });
+                if let Some(text) = text {
+                    title.set_label(&text);
+                    chip.set_child(Some(&gtk::Label::new(Some(&text))));
+                }
+            });
+        })
+    };
+    let path = format!("macro/{}/{i}", ed.m.borrow().id);
+    for row in rows_for(&ed.state, &path, &action, on) {
+        group.append(&row);
+    }
+}
+
 /// What opens when a step is clicked: its values, its look with Custom feedback, and Delete.
 fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: SequencePart) {
     let body = gtk::Box::builder()
@@ -476,6 +593,14 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
         match m.steps.get(i).map(|s| s.event.clone()) {
             Some(MacroEvent::TypeText { text }) => {
                 let entry = gtk::Entry::builder().text(text).build();
+                {
+                    let popover = popover.downgrade();
+                    entry.connect_activate(move |_| {
+                        if let Some(p) = popover.upgrade() {
+                            p.popdown();
+                        }
+                    });
+                }
                 let ed2 = ed.clone();
                 entry.connect_changed(move |e| {
                     let text = e.text().to_string();
@@ -488,6 +613,7 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
             Some(MacroEvent::Wait { ms }) => {
                 let spin = gtk::SpinButton::with_range(0.0, 600_000.0, 10.0);
                 spin.set_value(ms as f64);
+                save_on_close(&popover, &spin);
                 let ed2 = ed.clone();
                 spin.connect_value_changed(move |s| {
                     let ms = s.value() as u32;
@@ -497,20 +623,13 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                 });
                 body.append(&spin);
             }
-            Some(MacroEvent::Action { action }) => {
-                let ed2 = ed.clone();
-                let on: OnChange = Rc::new(move |action: Action, _: How| {
-                    if let Some(step) = ed2.m.borrow_mut().steps.get_mut(i) {
-                        step.event = MacroEvent::Action { action };
-                    }
-                });
-                let path = format!("macro/{}/{i}", m.id);
+            Some(MacroEvent::Action { .. }) => {
+                let title = gtk::Label::new(None);
                 let group = gtk::ListBox::builder().css_classes(["boxed-list"]).build();
-                for row in rows_for(&ed.state, &path, &action, on) {
-                    group.append(&row);
-                }
-                body.append(&gtk::Label::new(Some(&describe(&action))));
+                body.append(&title);
                 body.append(&group);
+                let label = button.clone();
+                fill_action(ed, i, &group, &title, &label);
             }
             Some(MacroEvent::KeyDown { .. } | MacroEvent::KeyUp { .. }) => {
                 key_choices(ed, &popover, &body, &chip.steps);
@@ -547,8 +666,20 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                         }
                     }
                 };
-                body.append(&number_row("Down (minus is up)", dy, 100, set(ed, false)));
-                body.append(&number_row("Right (minus is left)", dx, 100, set(ed, true)));
+                body.append(&number_row(
+                    &popover,
+                    "Down (minus is up)",
+                    dy,
+                    100,
+                    set(ed, false),
+                ));
+                body.append(&number_row(
+                    &popover,
+                    "Right (minus is left)",
+                    dx,
+                    100,
+                    set(ed, true),
+                ));
             }
             Some(MacroEvent::MoveBy { dx, dy }) => {
                 let set = |ed: &Ed, across: bool| {
@@ -561,8 +692,20 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
                         }
                     }
                 };
-                body.append(&number_row("Right (minus is left)", dx, 10_000, set(ed, true)));
-                body.append(&number_row("Down (minus is up)", dy, 10_000, set(ed, false)));
+                body.append(&number_row(
+                    &popover,
+                    "Right (minus is left)",
+                    dx,
+                    10_000,
+                    set(ed, true),
+                ));
+                body.append(&number_row(
+                    &popover,
+                    "Down (minus is up)",
+                    dy,
+                    10_000,
+                    set(ed, false),
+                ));
             }
             Some(MacroEvent::MoveTo { .. }) => {
                 let again = gtk::Button::with_label("Pick the Spot Again…");
@@ -656,6 +799,7 @@ fn delay_popover(ed: &Ed, button: &gtk::Button, step: usize, ms: u32) {
     let popover = gtk::Popover::builder().child(&spin).build();
     popover.set_parent(button);
     ed.tidy(&popover);
+    save_on_close(&popover, &spin);
     let ed2 = ed.clone();
     spin.connect_value_changed(move |s| {
         if let Some(step) = ed2.m.borrow_mut().steps.get_mut(step) {
@@ -664,6 +808,9 @@ fn delay_popover(ed: &Ed, button: &gtk::Button, step: usize, ms: u32) {
     });
     popover.popup();
 }
+
+/// Shown when pointing at a step.
+const STEP_TIPS: &str = "Click to edit, drag to move\nCtrl+click to select, Shift+click to select a range\nCtrl+A selects every step";
 
 const PART_STRIDE: u32 = 100_000;
 
@@ -683,9 +830,95 @@ fn drag_index(code: u32, part: SequencePart) -> Option<usize> {
 }
 
 /// One step chip: click to edit, drag to reorder.
+/// "Steps", how selecting works, and buttons for all of them.
+fn steps_heading(ed: &Ed) -> gtk::Widget {
+    let heading = gtk::Box::builder().spacing(6).build();
+    heading.append(
+        &gtk::Label::builder()
+            .label("Steps")
+            .css_classes(["dim-label", "caption"])
+            .build(),
+    );
+    heading.append(
+        &gtk::Image::builder()
+            .icon_name("dialog-information-symbolic")
+            .pixel_size(14)
+            .css_classes(["dim-label"])
+            .tooltip_text(STEP_TIPS)
+            .build(),
+    );
+    let all = gtk::Button::builder()
+        .label("Select All")
+        .hexpand(true)
+        .halign(gtk::Align::End)
+        .css_classes(["flat", "macro-delay"])
+        .tooltip_text("Ctrl+A")
+        .build();
+    {
+        let ed = ed.clone();
+        all.connect_clicked(move |_| ed.select_all());
+    }
+    heading.append(&all);
+    let clear = gtk::Button::builder()
+        .label("Clear All")
+        .css_classes(["flat", "macro-delay"])
+        .build();
+    {
+        let ed = ed.clone();
+        clear.connect_clicked(move |_| confirm_clear(&ed));
+    }
+    heading.append(&clear);
+    heading.upcast()
+}
+
+/// Clear All, after asking.
+fn confirm_clear(ed: &Ed) {
+    let count = step_count(&ed.m.borrow());
+    if ed.m.borrow().steps.is_empty() {
+        return;
+    }
+    let alert = adw::AlertDialog::builder()
+        .heading("Clear All Steps?")
+        .body(format!(
+            "This removes {count}. Closing the window without saving brings them back."
+        ))
+        .close_response("cancel")
+        .build();
+    alert.add_response("cancel", "Cancel");
+    alert.add_response("clear", "Clear All");
+    alert.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+    let ed2 = ed.clone();
+    alert.connect_response(Some("clear"), move |_, _| ed2.edit(|m| m.steps.clear()));
+    alert.present(Some(&ed.window));
+}
+
+/// The app a Launch App chip opens: its id and name.
+fn app_of(ed: &Ed, chip: &Chip) -> Option<(String, String)> {
+    let m = ed.m.borrow();
+    let step = m.steps.get(*chip.steps.first()?)?;
+    let MacroEvent::Action {
+        action: Action::LaunchApp {
+            desktop_id: Some(id), ..
+        },
+    } = &step.event
+    else {
+        return None;
+    };
+    let apps = crate::ui::action_editor::installed_apps();
+    let app = apps.iter().find(|a| a.desktop_id == *id)?;
+    Some((id.clone(), app.name.clone()))
+}
+
 fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::Widget {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    content.append(&gtk::Image::from_icon_name(chip.icon));
+    let app = app_of(ed, chip);
+    match &app {
+        Some((id, name)) => {
+            let text = format!("Launch {name}");
+            content.append(&crate::ui::app_picker::app_label(Some(id), &text, 16));
+        }
+        None => content.append(&gtk::Image::from_icon_name(chip.icon)),
+    }
     let arrow = match chip.direction {
         Direction::Down => Some("go-down-symbolic"),
         Direction::Up => Some("go-up-symbolic"),
@@ -694,10 +927,13 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
     if let Some(arrow) = arrow {
         content.append(&gtk::Image::from_icon_name(arrow));
     }
-    content.append(&gtk::Label::new(Some(&chip.label)));
+    if app.is_none() {
+        content.append(&gtk::Label::new(Some(&chip.label)));
+    }
     let button = gtk::Button::builder()
         .child(&content)
         .css_classes(["macro-step"])
+        .tooltip_text(STEP_TIPS)
         .build();
     let first = chip.steps.first().copied().unwrap_or_default();
     if ed.selected.borrow().contains(&first) {
@@ -707,24 +943,41 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
         let (ed, chip) = (ed.clone(), chip.clone());
         button.connect_clicked(move |b| step_popover(&ed, b, &chip, index, part));
     }
-    // Ctrl+click selects instead of opening the step.
+    // Ctrl+click and Shift+click select instead of opening the step.
     let select = gtk::GestureClick::new();
     select.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let ed = ed.clone();
         select.connect_pressed(move |g, _, _, _| {
-            if !g.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
+            let held = g.current_event_state();
+            let (ctrl, shift) = (
+                held.contains(gdk::ModifierType::CONTROL_MASK),
+                held.contains(gdk::ModifierType::SHIFT_MASK),
+            );
+            if !ctrl && !shift {
+                ed.anchor.set(Some((part, index)));
                 return;
             }
             g.set_state(gtk::EventSequenceState::Claimed);
-            {
+            let from = match ed.anchor.get() {
+                Some((p, i)) if shift && p == part => i,
+                _ => index,
+            };
+            if shift {
+                let list = chips(&ed.m.borrow(), part);
+                let range = from.min(index)..=from.max(index);
+                let firsts = range.filter_map(|i| list.get(i)?.steps.first().copied());
+                ed.selected.borrow_mut().extend(firsts);
+            } else {
                 let mut selected = ed.selected.borrow_mut();
                 if !selected.remove(&first) {
                     selected.insert(first);
                 }
             }
-            let ed = ed.clone();
-            glib::idle_add_local_once(move || ed.changed());
+            if !shift {
+                ed.anchor.set(Some((part, index)));
+            }
+            ed.selection_changed();
         });
     }
     button.add_controller(select);
@@ -774,12 +1027,7 @@ fn draw_steps(ed: &Ed) {
         ed.steps.remove(&child);
     }
     let m = ed.m.borrow().clone();
-    let parts: &[SequencePart] = if m.trigger == Trigger::Sequence {
-        &[SequencePart::Press, SequencePart::Held, SequencePart::ReleaseKey]
-    } else {
-        &[SequencePart::Press]
-    };
-    for part in parts {
+    for part in ed.parts() {
         if m.trigger == Trigger::Sequence {
             ed.steps.append(
                 &gtk::Label::builder()
@@ -826,24 +1074,16 @@ fn draw_steps(ed: &Ed) {
             .build();
         {
             let ed = ed.clone();
-            let parts = parts.to_vec();
-            delete.connect_clicked(move |_| {
-                let selected = ed.selected.borrow().clone();
-                ed.edit(|m| remove_selected(m, &parts, &selected));
-            });
+            delete.connect_clicked(move |_| ed.delete_selected());
         }
         bar.append(&delete);
         let clear = gtk::Button::builder()
-            .label("Clear")
+            .label("Deselect")
             .css_classes(["flat"])
             .build();
         {
             let ed = ed.clone();
-            clear.connect_clicked(move |_| {
-                ed.selected.borrow_mut().clear();
-                let ed = ed.clone();
-                glib::idle_add_local_once(move || ed.changed());
-            });
+            clear.connect_clicked(move |_| ed.deselect());
         }
         bar.append(&clear);
         ed.steps.append(&bar);
@@ -1080,16 +1320,37 @@ fn feedback_row(ed: &Ed) -> gtk::Widget {
     let row = gtk::Box::builder().spacing(4).css_classes(["linked"]).build();
     let current = ed.m.borrow().feedback;
     let choices = [
-        ("Off", Feedback::Off),
-        ("Progress", Feedback::Progress),
-        ("3/7", Feedback::Count { show_total: true }),
-        ("3", Feedback::Count { show_total: false }),
-        ("Custom per Step", Feedback::Custom),
+        (
+            "Off",
+            Feedback::Off,
+            "The key doesn't change while the macro plays",
+        ),
+        (
+            "Progress Bar",
+            Feedback::Progress,
+            "A bar fills along the bottom of the key",
+        ),
+        (
+            "Step of Total",
+            Feedback::Count { show_total: true },
+            "The key counts through the steps, like 2/12",
+        ),
+        (
+            "Step Number",
+            Feedback::Count { show_total: false },
+            "The key shows the step it's on, like 2",
+        ),
+        (
+            "Custom per Step",
+            Feedback::Custom,
+            "Give each step its own label and image: click a step to set them",
+        ),
     ];
     let mut first: Option<gtk::ToggleButton> = None;
-    for (label, feedback) in choices {
+    for (label, feedback, tip) in choices {
         let b = gtk::ToggleButton::builder()
             .label(label)
+            .tooltip_text(tip)
             .active(current == feedback)
             .build();
         if let Some(f) = &first {
@@ -1259,8 +1520,12 @@ fn own_bar(ed: &Ed, save: &OnChange, library_name: Option<String>) -> gtk::Widge
     let name = ed.m.borrow().name.clone();
     bar.append(
         &gtk::Label::builder()
-            .label(format!("This key's own copy of {name}"))
+            .label(format!(
+                "{name} is this key's own copy. It only exists on this key, so it isn't in your \
+                 Macros list until you save it as a new macro."
+            ))
             .xalign(0.0)
+            .wrap(true)
             .css_classes(["dim-label"])
             .build(),
     );
@@ -1484,6 +1749,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         trying: Rc::default(),
         try_run: Rc::default(),
         selected: Rc::default(),
+        anchor: Rc::default(),
         opened_on: (state.profile_id(), state.editor.borrow().page()),
     };
     {
@@ -1501,6 +1767,23 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
         name.connect_changed(move |e| ed.m.borrow_mut().name = e.text().to_string());
     }
     let (record, record_panel) = recorder(&ed);
+    let keys = gtk::EventControllerKey::new();
+    {
+        let ed = ed.clone();
+        keys.connect_key_pressed(move |_, key, _, held| {
+            let any = !ed.selected.borrow().is_empty();
+            match key {
+                gdk::Key::a | gdk::Key::A if held.contains(gdk::ModifierType::CONTROL_MASK) => {
+                    ed.select_all();
+                }
+                gdk::Key::Delete if any => ed.delete_selected(),
+                gdk::Key::Escape if any => ed.deselect(),
+                _ => return glib::Propagation::Proceed,
+            }
+            glib::Propagation::Stop
+        });
+    }
+    window.add_controller(keys);
     let try_button = gtk::Button::with_label("Try It");
     {
         let ed = ed.clone();
@@ -1514,8 +1797,9 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     body.append(&record_panel);
 
     let id = ed.m.borrow().id;
+    let is_own = matches!(saving, Saving::Own(_));
     let in_library = state.editor.borrow().library().get(id).is_some();
-    if in_library {
+    if in_library && !is_own {
         let usage = gtk::Label::builder()
             .css_classes(["dim-label", "caption"])
             .build();
@@ -1598,22 +1882,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     body.append(&sentence);
     body.append(&trigger_option(&ed));
     body.append(&delays_row(&ed));
-    let heading = gtk::Box::builder().spacing(8).build();
-    heading.append(
-        &gtk::Label::builder()
-            .label("Steps")
-            .css_classes(["dim-label", "caption"])
-            .build(),
-    );
-    heading.append(
-        &gtk::Label::builder()
-            .label("Drag to rearrange, Ctrl+click to select several")
-            .css_classes(["dim-label", "caption"])
-            .hexpand(true)
-            .halign(gtk::Align::End)
-            .build(),
-    );
-    body.append(&heading);
+    body.append(&steps_heading(&ed));
     body.append(&ed.steps);
     body.append(&ed.warning);
     body.append(

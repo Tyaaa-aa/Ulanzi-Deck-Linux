@@ -128,6 +128,71 @@ thread_local! {
     static APPS: RefCell<Option<Rc<Vec<AppEntry>>>> = const { RefCell::new(None) };
 }
 
+/// Which macro a key runs, with a quick way to swap it, and Edit.
+fn macro_rows(ed: &Ed, state: &State, action: &Action) -> Vec<gtk::Widget> {
+    let mut macros = state.editor.borrow().library().macros.clone();
+    macros.sort_by_key(|m| m.name.to_lowercase());
+    let (current, own) = match action {
+        Action::Macro { id, own } => (*id, own.is_some()),
+        _ => (uuid::Uuid::nil(), false),
+    };
+    let at = macros.iter().position(|m| m.id == current && !own);
+    // When the key isn't on a library macro, the list opens on a line that says so.
+    let lead = at.is_none().then(|| match own {
+        true => "This Key's Own Copy",
+        false if current.is_nil() => "Choose a Macro",
+        false => "Macro Was Deleted",
+    });
+    let mut names: Vec<&str> = lead.into_iter().collect();
+    names.extend(macros.iter().map(|m| m.name.as_str()));
+    let shift = lead.map_or(0, |_| 1);
+    let choice = adw::ComboRow::builder()
+        .title("Macro")
+        .model(&gtk::StringList::new(&names))
+        .enable_search(macros.len() > 8)
+        .expression(gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<&gtk::Expression>,
+            "string",
+        ))
+        .selected(at.map_or(0, |i| (i + shift) as u32))
+        .build();
+    {
+        let on = ed.on.clone();
+        choice.connect_selected_notify(move |c| {
+            let Some(m) = (c.selected() as usize)
+                .checked_sub(shift)
+                .and_then(|i| macros.get(i))
+            else {
+                return;
+            };
+            let (id, on) = (m.id, on.clone());
+            // This rebuilds the panel the list sits in, so it waits for the list to finish.
+            gtk::glib::idle_add_local_once(move || {
+                on(Action::Macro { id, own: None }, How::Structure);
+            });
+        });
+    }
+    let edit = adw::ButtonRow::builder()
+        .title(if current.is_nil() && !own {
+            "New Macro"
+        } else {
+            "Edit Macro"
+        })
+        .build();
+    {
+        let (state, action, save) = (state.clone(), action.clone(), ed.on.clone());
+        edit.connect_activated(move |b| {
+            let target = crate::ui::macro_editor::MacroTarget::Action {
+                action: action.clone(),
+                save: save.clone(),
+            };
+            crate::ui::macro_editor::open(&state, b, target);
+        });
+    }
+    vec![choice.upcast(), edit.upcast()]
+}
+
 /// Installed apps, sorted by name (scanned once).
 pub fn installed_apps() -> Rc<Vec<AppEntry>> {
     APPS.with(|a| {
@@ -153,7 +218,7 @@ pub fn output_devices() -> Vec<(String, String)> {
 }
 
 /// The name of the macro `action` runs.
-fn macro_title(state: &State, action: &Action) -> String {
+pub(crate) fn macro_title(state: &State, action: &Action) -> String {
     match action {
         Action::Macro { own: Some(m), .. } => m.name.clone(),
         Action::Macro { id, own: None } => state
@@ -161,7 +226,7 @@ fn macro_title(state: &State, action: &Action) -> String {
             .borrow()
             .library()
             .get(*id)
-            .map_or_else(|| "New Macro".to_string(), |m| m.name.clone()),
+            .map_or_else(|| "No macro chosen".to_string(), |m| m.name.clone()),
         _ => String::new(),
     }
 }
@@ -1281,25 +1346,7 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         Action::Multi { steps } => multi_rows(&ed, state, path, steps),
         Action::Cycle { steps, show } => cycle_rows(&ed, state, path, steps, *show),
         Action::Timer { op } => timer_rows(&ed, *op),
-        Action::Macro { .. } => {
-            let row = adw::ActionRow::builder()
-                .title(macro_title(state, action))
-                .build();
-            let edit = gtk::Button::builder()
-                .label("Edit Macro")
-                .valign(gtk::Align::Center)
-                .build();
-            let (state, action, save) = (state.clone(), action.clone(), ed.on.clone());
-            edit.connect_clicked(move |b| {
-                let target = crate::ui::macro_editor::MacroTarget::Action {
-                    action: action.clone(),
-                    save: save.clone(),
-                };
-                crate::ui::macro_editor::open(&state, b, target);
-            });
-            row.add_suffix(&edit);
-            vec![row.upcast()]
-        }
+        Action::Macro { .. } => macro_rows(&ed, state, action),
         Action::StopMacros => Vec::new(),
         Action::NextPage
         | Action::PrevPage

@@ -18,6 +18,7 @@ pub mod library;
 pub mod macro_diagram;
 pub mod macro_editor;
 pub mod macro_steps;
+pub mod macros_window;
 pub mod onboarding;
 pub mod pick_spot;
 pub mod plugin_fields;

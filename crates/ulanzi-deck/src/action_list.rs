@@ -182,6 +182,16 @@ impl Catalog {
         self
     }
 
+    /// Without the Macro action, for places a macro can't go.
+    pub fn without_macros(mut self) -> Catalog {
+        for group in &mut self.groups {
+            group
+                .entries
+                .retain(|e| !matches!(e.action, Action::Macro { .. }));
+        }
+        self
+    }
+
     fn builtin_groups(&self) -> usize {
         self.groups.iter().filter(|g| !g.plugin).count()
     }
@@ -355,6 +365,19 @@ impl Default for Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macro_sits_in_system_and_stays_out_where_a_macro_cannot_go() {
+        let has_macro = |c: &Catalog| {
+            c.groups
+                .iter()
+                .any(|g| g.entries.iter().any(|e| matches!(e.action, Action::Macro { .. })))
+        };
+        let plain = Catalog::new(&Plugins::default(), true);
+        let system = plain.groups.iter().find(|g| g.title == "System").expect("System");
+        assert!(system.entries.iter().any(|e| e.title == "Macro"));
+        assert!(!has_macro(&plain.without_macros()));
+    }
     use crate::plugins::PluginRow;
     use ulanzi_core::plugin::Manifest;
 

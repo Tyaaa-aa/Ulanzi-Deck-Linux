@@ -1219,6 +1219,7 @@ fn slot_rows(
 fn card_subtitle(state: &State, a: &Action) -> String {
     let text = match a {
         Action::Plugin { plugin, .. } => state.plugins.borrow().plugin_name(plugin),
+        Action::Macro { .. } => action_editor::macro_title(state, a),
         _ => catalog::describe(a),
     };
     glib::markup_escape_text(&text).to_string()

@@ -213,6 +213,24 @@ pub fn remove_selected(m: &mut Macro, parts: &[SequencePart], selected: &BTreeSe
     }
 }
 
+/// What a macro's type is called.
+pub fn type_name(t: &Trigger) -> &'static str {
+    match t {
+        Trigger::Once { .. } => "Play Once",
+        Trigger::WhileHeld { .. } => "While Holding",
+        Trigger::Toggle => "Toggle",
+        Trigger::Sequence => "Sequence",
+    }
+}
+
+/// "1 step", "5 steps".
+pub fn step_count(m: &Macro) -> String {
+    match m.steps.len() {
+        1 => "1 step".to_string(),
+        n => format!("{n} steps"),
+    }
+}
+
 /// The one sentence on a type card.
 pub fn trigger_sentence(t: &Trigger) -> &'static str {
     match t {
