@@ -87,7 +87,8 @@ type Redraw = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 struct Ed {
     state: State,
     m: Rc<RefCell<Macro>>,
-    window: adw::Window,
+    /// Weak: the widgets of the window all hold this, and a strong one would keep the window for ever.
+    window: glib::WeakRef<adw::Window>,
     steps: gtk::Box,
     warning: gtk::Label,
     redraw: Redraw,
@@ -120,7 +121,9 @@ impl Ed {
     /// Close without asking: everything is saved.
     fn close_saved(&self) {
         *self.original.borrow_mut() = self.m.borrow().clone();
-        self.window.close();
+        if let Some(w) = self.window.upgrade() {
+            w.close();
+        }
     }
 
     /// Everything the editor's widgets hold of each other, so they go when the window does.
@@ -129,6 +132,7 @@ impl Ed {
         *self.stop_recording.borrow_mut() = None;
         *self.mark.borrow_mut() = None;
         *self.toggle_record.borrow_mut() = None;
+        crate::ui::set_window_toasts(None);
         while let Some(child) = self.steps.first_child() {
             self.steps.remove(&child);
         }
@@ -284,7 +288,7 @@ fn ask_text(ed: &Ed, heading: &str, value: &str, done: impl Fn(String) + 'static
     alert.set_close_response("cancel");
     alert.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
     alert.connect_response(Some("ok"), move |_, _| done(entry.text().to_string()));
-    alert.present(Some(&ed.window));
+    alert.present(ed.window.upgrade().as_ref());
 }
 
 fn ask_number(ed: &Ed, heading: &str, value: f64, max: f64, done: impl Fn(i32) + 'static) {
@@ -300,7 +304,7 @@ fn ask_number(ed: &Ed, heading: &str, value: f64, max: f64, done: impl Fn(i32) +
     alert.set_close_response("cancel");
     alert.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
     alert.connect_response(Some("ok"), move |_, _| done(spin.value() as i32));
-    alert.present(Some(&ed.window));
+    alert.present(ed.window.upgrade().as_ref());
 }
 
 fn ask_pick(ed: &Ed, heading: &str, names: Vec<String>, done: impl Fn(usize) + 'static) {
@@ -324,7 +328,7 @@ fn ask_pick(ed: &Ed, heading: &str, names: Vec<String>, done: impl Fn(usize) + '
     alert.set_close_response("cancel");
     alert.set_response_appearance("ok", adw::ResponseAppearance::Suggested);
     alert.connect_response(Some("ok"), move |_, _| done(drop.selected() as usize));
-    alert.present(Some(&ed.window));
+    alert.present(ed.window.upgrade().as_ref());
 }
 
 /// The **+** menu of one part.
@@ -340,9 +344,11 @@ fn add_menu(ed: &Ed, part: SequencePart) -> gtk::Widget {
         row.append(&gtk::Image::from_icon_name(icon));
         row.append(&gtk::Label::new(Some(label)));
         let b = gtk::Button::builder().child(&row).css_classes(["flat"]).build();
-        let p = popover.clone();
+        let p = popover.downgrade();
         b.connect_clicked(move |_| {
-            p.popdown();
+            if let Some(p) = p.upgrade() {
+                p.popdown();
+            }
             f();
         });
         list.append(&b);
@@ -498,6 +504,13 @@ const MOUSE_BUTTONS: [(&str, MouseButton); 5] = [
     ("Forward", MouseButton::Forward),
 ];
 
+/// Close a popover from something inside it, which must not keep it alive.
+fn close_popover(popover: &glib::WeakRef<gtk::Popover>) {
+    if let Some(p) = popover.upgrade() {
+        p.popdown();
+    }
+}
+
 /// A number typed into `spin` counts: Enter saves it and closes, and so does closing.
 fn save_on_close(popover: &gtk::Popover, spin: &gtk::SpinButton) {
     {
@@ -556,9 +569,9 @@ fn key_choices(ed: &Ed, popover: &gtk::Popover, body: &gtk::Box, steps: &[usize]
     for key in seen {
         let label = format!("Change {}…", ulanzi_core::catalog::pretty_combo(&key));
         let button = gtk::Button::with_label(&label);
-        let (ed, popover, steps) = (ed.clone(), popover.clone(), steps.to_vec());
+        let (ed, popover, steps) = (ed.clone(), popover.downgrade(), steps.to_vec());
         button.connect_clicked(move |_| {
-            popover.popdown();
+            close_popover(&popover);
             let names = ulanzi_core::keys::all_sendable();
             let (ed2, shown, old, steps) = (ed.clone(), names.clone(), key.clone(), steps.clone());
             ask_pick(&ed, "Choose a Key", shown, move |pick| {
@@ -784,9 +797,9 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
             }
             Some(MacroEvent::MoveTo { .. }) => {
                 let again = gtk::Button::with_label("Pick the Spot Again…");
-                let (ed2, popover2) = (ed.clone(), popover.clone());
+                let (ed2, popover2) = (ed.clone(), popover.downgrade());
                 again.connect_clicked(move |_| {
-                    popover2.popdown();
+                    close_popover(&popover2);
                     let ed3 = ed2.clone();
                     crate::ui::pick_spot::open(&ed2.state, move |x, y| {
                         if let Some(step) = ed3.m.borrow_mut().steps.get_mut(i) {
@@ -799,9 +812,9 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
             }
             Some(MacroEvent::RunMacro { .. }) => {
                 let again = gtk::Button::with_label("Run a Different Macro…");
-                let (ed2, popover2) = (ed.clone(), popover.clone());
+                let (ed2, popover2) = (ed.clone(), popover.downgrade());
                 again.connect_clicked(move |_| {
-                    popover2.popdown();
+                    close_popover(&popover2);
                     let choices = runnable(&ed2.state, &ed2.m.borrow());
                     if choices.is_empty() {
                         crate::ui::toast(&ed2.state, "No other macro to run");
@@ -858,9 +871,9 @@ fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: 
         .css_classes(["destructive-action"])
         .build();
     {
-        let (ed, popover) = (ed.clone(), popover.clone());
+        let (ed, popover) = (ed.clone(), popover.downgrade());
         delete.connect_clicked(move |_| {
-            popover.popdown();
+            close_popover(&popover);
             ed.edit(|m| remove_chip(m, part, index));
         });
     }
@@ -972,7 +985,7 @@ fn confirm_clear(ed: &Ed) {
     alert.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
     let ed2 = ed.clone();
     alert.connect_response(Some("clear"), move |_, _| ed2.edit(|m| m.steps.clear()));
-    alert.present(Some(&ed.window));
+    alert.present(ed.window.upgrade().as_ref());
 }
 
 /// The id of the app a Launch App chip opens.
@@ -1546,11 +1559,13 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
             }
             let stop = stop.clone();
             let lost = Rc::downgrade(&stop);
-            capture.begin(ed2.window.upcast_ref(), move || {
-                if let Some(stop) = lost.upgrade() {
-                    stop();
-                }
-            });
+            if let Some(window) = ed2.window.upgrade() {
+                capture.begin(window.upcast_ref(), move || {
+                    if let Some(stop) = lost.upgrade() {
+                        stop();
+                    }
+                });
+            }
             ed2.changed();
             // The recorder sits under the steps: bring it into view.
             let panel = panel.downgrade();
@@ -1596,7 +1611,9 @@ fn recorder(ed: &Ed) -> (gtk::Button, gtk::Widget) {
     keys.connect_key_released(move |c, k, code, _| {
         record_key(c, k, code, false);
     });
-    ed.window.add_controller(keys);
+    if let Some(window) = ed.window.upgrade() {
+        window.add_controller(keys);
+    }
 
     let button_of = |n: u32| match n {
         2 => MouseButton::Middle,
@@ -1752,7 +1769,7 @@ fn update_library(ed: &Ed, save: &OnChange) {
     alert.set_close_response("cancel");
     alert.set_response_appearance("update", adw::ResponseAppearance::Suggested);
     alert.connect_response(Some("update"), move |_, _| apply());
-    alert.present(Some(&ed.window));
+    alert.present(ed.window.upgrade().as_ref());
 }
 
 /// Save and stay open. False when it couldn't be saved.
@@ -1866,7 +1883,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     let ed = Ed {
         state: state.clone(),
         m: Rc::new(RefCell::new(m)),
-        window: window.clone(),
+        window: window.downgrade(),
         steps: gtk::Box::new(gtk::Orientation::Vertical, 6),
         warning: gtk::Label::builder()
             .css_classes(["warning", "caption"])
@@ -1978,7 +1995,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
                     ed3.close_saved();
                     open(&ed3.state, &parent3, MacroTarget::Library(id));
                 });
-                alert.present(Some(&ed2.window));
+                alert.present(ed2.window.upgrade().as_ref());
             });
             row.append(&restore);
         }
@@ -2038,9 +2055,11 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     let header = adw::HeaderBar::builder().title_widget(&title).build();
     let cancel = gtk::Button::with_label("Cancel");
     {
-        let window = window.clone();
+        let window = window.downgrade();
         cancel.connect_clicked(move |_| {
-            window.close();
+            if let Some(w) = window.upgrade() {
+                w.close();
+            }
         });
     }
     header.pack_start(&cancel);
@@ -2052,8 +2071,10 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
     {
         let (ed, saving) = (ed.clone(), saving.clone());
         done.connect_clicked(move |_| {
-            if save(&ed, &saving) {
-                ed.window.close();
+            if save(&ed, &saving)
+                && let Some(w) = ed.window.upgrade()
+            {
+                w.close();
             }
         });
     }
@@ -2100,7 +2121,10 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
             .child(&body)
             .build(),
     ));
-    window.set_content(Some(&view));
+    let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&view));
+    crate::ui::set_window_toasts(Some(&toasts));
+    window.set_content(Some(&toasts));
     {
         // Given up on closing: a handler on the window that kept this would keep the window.
         let held = RefCell::new(Some(ed.clone()));
@@ -2207,12 +2231,13 @@ mod tests {
                 "Default",
                 ulanzi_core::model::Model::D200X,
             ));
+            let window = adw::Window::new();
             let m = Macro::new("Kept");
             let id = m.id;
             let ed = Ed {
                 state: state.clone(),
                 m: Rc::new(RefCell::new(m.clone())),
-                window: adw::Window::new(),
+                window: window.downgrade(),
                 steps: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 warning: gtk::Label::new(None),
                 redraw: Rc::default(),
@@ -2257,45 +2282,44 @@ mod tests {
     }
 
     #[test]
-    /// Run by hand: `cargo test -- --ignored opening_and_closing --nocapture` prints the growth.
-    #[ignore]
-    fn opening_and_closing_costs_little() {
+    fn closing_the_editor_frees_it() {
         crate::ui::with_gtk(|| {
             let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
                 "Default",
                 ulanzi_core::model::Model::D200X,
             ));
             let parent = gtk::Window::new();
-            let rss = || {
-                std::fs::read_to_string("/proc/self/statm")
-                    .ok()
-                    .and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok())
-                    .unwrap_or(0)
-                    * 4
-            };
+            open(&state, &parent, MacroTarget::New);
+            let editor = gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|w| w.downcast::<adw::Window>().ok())
+                .next()
+                .expect("editor");
+            let weak = editor.downgrade();
+            // A widget holding something that holds it back never goes: catch that by name.
+            fn walk(w: &gtk::Widget, out: &mut Vec<(String, glib::WeakRef<gtk::Widget>)>) {
+                out.push((w.type_().name().to_string(), w.downgrade()));
+                let mut c = w.first_child();
+                while let Some(x) = c {
+                    walk(&x, out);
+                    c = x.next_sibling();
+                }
+            }
+            let mut all = Vec::new();
+            walk(editor.upcast_ref(), &mut all);
+            editor.close();
+            drop(editor);
             let context = glib::MainContext::default();
-            let cycle = || {
-                open(&state, &parent, MacroTarget::New);
-                while context.pending() {
-                    context.iteration(false);
-                }
-                for window in gtk::Window::list_toplevels() {
-                    if let Ok(w) = window.downcast::<adw::Window>() {
-                        w.close();
-                    }
-                }
-                while context.pending() {
-                    context.iteration(false);
-                }
-            };
-            for _ in 0..50 {
-                cycle();
+            while context.pending() {
+                context.iteration(false);
             }
-            let before = rss();
-            for _ in 0..200 {
-                cycle();
-            }
-            eprintln!("{} KiB per open", (rss() - before) / 200);
+            let left: Vec<&String> = all
+                .iter()
+                .filter(|(_, w)| w.upgrade().is_some())
+                .map(|(name, _)| name)
+                .collect();
+            assert!(left.is_empty(), "still alive: {left:?}");
+            assert!(weak.upgrade().is_none());
         });
     }
 

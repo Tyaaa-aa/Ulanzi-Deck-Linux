@@ -49,6 +49,13 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.2.0" date="2026-10-31">
+      <description>
+        <p>Macros: record keys, mouse input and text in a window made for it, arrange the steps in a
+        colour-coded grid, and put a macro on any key, with four ways to play it and live feedback
+        on the key.</p>
+      </description>
+    </release>
     <release version="2.1.1" date="2026-10-31">
       <description>
         <p>Update checks, What's New and self-update. Keys from newer versions are kept instead of failing the profile. The image picker opens at once.</p>

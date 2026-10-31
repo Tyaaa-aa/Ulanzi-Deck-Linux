@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-31
+
 ### Added
 
 - **Macros.** A library of macros with a recorder and an editor modelled on G Hub: key and mouse down
@@ -14,14 +16,20 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Key feedback while a macro plays: a progress bar, a step count, a look for each step, and
   `{macro.*}` label values.
 - A key's own copy of a macro, with Save as New Macro, Update and Use Library Version, all undoable.
+- A Macros window next to Plugins, a **Macro** action in **System**, and a list on each macro key to swap it.
 - Restore Previous Version on a library macro.
-- Tooltips in the action list say what each action does. Plugin actions can set `description`.
+- Plugin actions can set a `description`, shown when pointing at them in the action list.
 - **Stop All Macros** action, and `ulanzictl macro list` and `ulanzictl macro stop`.
 - Profiles and `.ulanzideck` files carry the macros they use, and backups hold the whole library.
 
 ### Changed
 
 - Development builds keep less debug data, so a build no longer fills the disk.
+- Tooltips in the action list say what an action does instead of how to drag it.
+
+### Fixed
+
+- Messages now appear on top of Preferences and other windows instead of behind them.
 
 ## [2.1.1] - 2026-10-31
 

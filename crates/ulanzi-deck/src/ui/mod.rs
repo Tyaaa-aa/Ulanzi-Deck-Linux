@@ -42,18 +42,40 @@ thread_local! {
     static TOASTS: RefCell<Option<adw::ToastOverlay>> = const { RefCell::new(None) };
 }
 
+thread_local! {
+    /// A window over the main one that shows toasts itself.
+    static WINDOW_TOASTS: RefCell<Option<adw::ToastOverlay>> = const { RefCell::new(None) };
+}
+
 /// Where toasts appear (set once by the window).
 pub fn set_toast_overlay(o: &adw::ToastOverlay) {
     TOASTS.with(|t| *t.borrow_mut() = Some(o.clone()));
 }
 
-/// Show a ready-made toast (e.g. one with an Undo button).
+/// Where toasts appear while a window sits over the main one, or back to the main window with `None`.
+pub fn set_window_toasts(o: Option<&adw::ToastOverlay>) {
+    WINDOW_TOASTS.with(|t| *t.borrow_mut() = o.cloned());
+}
+
+/// Show a ready-made toast (e.g. one with an Undo button), on top of whatever is in front.
 pub fn add_toast(t: adw::Toast) {
-    TOASTS.with(|o| {
-        if let Some(o) = o.borrow().as_ref() {
-            o.add_toast(t);
-        }
-    });
+    if let Some(o) = WINDOW_TOASTS.with(|o| o.borrow().clone()) {
+        o.add_toast(t);
+        return;
+    }
+    let Some(o) = TOASTS.with(|o| o.borrow().clone()) else {
+        return;
+    };
+    use adw::prelude::*;
+    let dialog = o
+        .root()
+        .and_downcast::<adw::ApplicationWindow>()
+        .and_then(|w| w.visible_dialog())
+        .and_downcast::<adw::PreferencesDialog>();
+    match dialog {
+        Some(d) => d.add_toast(t),
+        None => o.add_toast(t),
+    }
 }
 
 /// The text shown for a message seen `count` times in a row.
