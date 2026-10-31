@@ -101,6 +101,7 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
     let new = gtk::Button::builder()
         .label("New Macro")
         .valign(gtk::Align::Center)
+        .margin_start(18)
         .css_classes(["suggested-action"])
         .build();
     {
