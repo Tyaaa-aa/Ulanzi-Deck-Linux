@@ -1697,6 +1697,24 @@ mod tests {
     }
 
     #[test]
+    fn add_action_builds_its_list_when_opened() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            let button = picker_button(&state, "Add Action", false, false, |_| {});
+            assert!(button.popover().is_none());
+            let window = gtk::Window::new();
+            window.set_child(Some(&button));
+            window.present();
+            button.popup();
+            assert!(button.popover().is_some());
+            window.destroy();
+        });
+    }
+
+    #[test]
     /// Run by hand: `cargo test -- --ignored opening_and_closing --nocapture` prints the growth.
     #[ignore]
     fn opening_and_closing_costs_little() {
