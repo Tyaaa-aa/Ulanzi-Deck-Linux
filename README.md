@@ -43,6 +43,11 @@ widgets on the wide screen, and switch profiles with the app in focus.
 - Templates, `.ulanzideck` files for sharing setups, and daily automatic backups.
 - A background service and tray icon, so the deck keeps working with the window closed.
 
+## Roadmap
+
+Coming next: GIF keys and animated key effects. After that, live Home Assistant icons, Ulanzi Workshop
+icon packs, an instruments plugin and firmware updates on Linux. See the [roadmap](ROADMAP.md).
+
 ## Screenshots
 
 <table>
@@ -100,6 +105,7 @@ To build from source, see [Building](docs/technical.md#building) in the technica
 - [Technical guide](docs/technical.md): architecture, file formats, D-Bus API, CLI, building and packaging
 - [Writing plugins](docs/plugins.md): the plugin contract, manifest, permissions and an example
 - [Hardware notes](docs/hardware-notes.md): the USB protocol, as measured on the device
+- [Known firmware issues](docs/troubleshooting.md#known-firmware-issues): deck behaviour the app can't change
 - [Release testing](TESTING.md): the manual checklist used before each release
 
 ## Templates

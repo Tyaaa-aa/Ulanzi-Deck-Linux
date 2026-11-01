@@ -1,0 +1,27 @@
+# Roadmap
+
+What's planned for Ulanzi Deck, roughly in order. Plans can change, and nothing here has a date.
+
+## Next release
+
+- GIF keys, which play on the deck by themselves.
+- Key effects: Glow, Pulse, Chase and Fire, in any colour, with one effect per live state and one while
+  a key is held.
+- Saved colours in the colour picker.
+- Display Brightness for PC monitors, through KDE Plasma 6 or `ddcutil`.
+- Update All in the plugin store.
+
+## After that
+
+- **Home Assistant live icons:** icons that follow an entity's state, with a colour or icon you can
+  change for each state.
+- **Ulanzi Workshop icon packs:** use the packs from Ulanzi's workshop on your keys.
+- **Instruments plugin:** piano, drums and synth sounds played from the deck, as an optional plugin.
+- **Firmware updates on Linux:** update the deck from this app, using a copy of Ulanzi's installer that
+  you download yourself. Only firmware that has been tested would be allowed. This comes last among
+  these because a failed update could leave a deck unusable.
+- **Several decks at once:** each deck with its own profiles, told apart by serial number.
+- **More Ulanzi compatibility:** importing Ulanzi Studio profiles and running its plugins.
+
+Have an idea? Share it in
+[Discussions](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/discussions).

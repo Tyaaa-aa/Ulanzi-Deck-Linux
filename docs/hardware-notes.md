@@ -83,6 +83,7 @@ Measured on 2026-10-31 with `ulanzictl probe gif`.
   2026-11-01), so anything that plays once needs the app to swap it out in time.
 * Swapping a key's GIF usually took under 100 ms to write. A few writes stalled for 0.4 to 1 s: about
   1 in 10 with one upload per press, about 1 in 3 with a fade and a loop per press.
+* Fire at 40 ms a frame played on all 13 keys, at 1.6 MB in all (2026-11-02).
 * The deck's own label (`text` in the manifest) shows over a GIF, and the GIF keeps playing.
 * One key took 72 partial updates of a 1.3 KB PNG back to back at 30 updates a second, with no gap, no
   blinking and no glitches. Bigger pictures take longer: this is a best case, not a frame rate to
@@ -115,3 +116,10 @@ gone: a turn only wakes a screen that is off, and it restores the saved brightne
 isn't available to read, but it behaves like 5.3.1 (tested 2026-11-02 with `ulanzictl probe
 dial-brightness`, and with app builds 2.1.1 and current, before and after replugging). Sending the
 brightness back after each turn works, but it flickers, so the app doesn't do it.
+
+## Starting up
+
+For about five seconds after being plugged in, the deck shows up as USB device `18d1:d002` (maker
+`Zkswe`, product `ulanzi`, serial `0123456789ABCDEF`), then restarts as `2207:0019`, the id the app looks
+for, with its real serial number (seen in the kernel log, 2026-11-02).
+
