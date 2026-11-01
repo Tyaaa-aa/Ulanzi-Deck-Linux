@@ -269,8 +269,9 @@ Open the plugin manager with the **Plugins** button in the header bar.
 
 - **Discover** lists the plugins in the plugin store. Search or filter by category, then select
   **Install**. Store plugins are signed, and the signature is checked before installation. When a
-  newer version is available, **Update** appears. Plugins that need a newer version of Ulanzi Deck
-  state the required version.
+  newer version is available, **Update** appears, and **Update All** shows how many are waiting
+  when there is more than one. Plugins that need a newer version of Ulanzi Deck state the required
+  version.
 - **Installed** lists installed plugins with their status and an on/off switch; verified plugins
   have a check mark. Select a plugin to change its settings (such as an address, password or
   token), restart it or remove it.

@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+
+- **Update All** in Plugins → Discover, with the number of updates waiting, when two or more are.
+
 ## [2.2.0] - 2026-10-31
 
 ### Added

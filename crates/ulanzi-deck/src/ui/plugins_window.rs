@@ -3,7 +3,7 @@
 //! category chips that wrap, a card per plugin and one button that installs, updates or opens it.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
@@ -86,6 +86,7 @@ struct Discover {
     stack: gtk::Stack,
     error: adw::StatusPage,
     note: gtk::Label,
+    update_all: gtk::Button,
     listing: RefCell<Option<Listing>>,
     /// The chosen category; empty for All.
     category: RefCell<String>,
@@ -109,6 +110,13 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         .placeholder_text("Search plugins")
         .hexpand(true)
         .build();
+    let update_all = gtk::Button::builder()
+        .visible(false)
+        .css_classes(["suggested-action"])
+        .build();
+    let top = gtk::Box::builder().spacing(12).build();
+    top.append(&search);
+    top.append(&update_all);
     // Chips wrap onto more lines rather than scroll sideways.
     let chips = gtk::FlowBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -160,7 +168,7 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
     stack.add_named(&error, Some("error"));
     stack.add_named(&empty, Some("empty"));
     stack.add_named(&grid, Some("list"));
-    body.append(&search);
+    body.append(&top);
     body.append(&chips);
     body.append(&note);
     body.append(&stack);
@@ -176,6 +184,7 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         stack,
         error,
         note,
+        update_all: update_all.clone(),
         listing: RefCell::default(),
         category: RefCell::default(),
         busy: RefCell::default(),
@@ -196,6 +205,14 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         retry.connect_clicked(move |_| {
             if let Some(d) = weak.upgrade() {
                 d.fetch(true);
+            }
+        });
+    }
+    {
+        let weak = Rc::downgrade(&d);
+        update_all.connect_clicked(move |_| {
+            if let Some(d) = weak.upgrade() {
+                d.update_all();
             }
         });
     }
@@ -236,6 +253,25 @@ pub fn category_title(c: &str) -> String {
         .next()
         .map(|f| f.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
+}
+
+/// The plugins in `entries` with a newer version out, given what is `installed` (id, version).
+pub fn updatable<'a>(entries: &'a [StoreEntry], installed: &[(&str, &str)]) -> Vec<&'a StoreEntry> {
+    entries
+        .iter()
+        .filter(|e| {
+            let have = installed.iter().find(|(id, _)| *id == e.id).map(|(_, v)| *v);
+            e.offer(have) == Offer::Update
+        })
+        .collect()
+}
+
+/// What the toast says once `done` plugins have updated.
+pub fn updated_text(done: usize) -> String {
+    match done {
+        1 => "1 plugin updated".to_string(),
+        n => format!("{n} plugins updated"),
+    }
 }
 
 /// What the card's button says and whether it acts.
@@ -333,6 +369,10 @@ impl Discover {
             .set_label("The plugin store can’t be reached right now: this is the list from last time.");
         let (category, query) = (self.category.borrow().clone(), self.search.text().to_string());
         let installed = self.state.plugins.borrow().list.clone();
+        // One update has its own button on its card, and search and category don't change the count.
+        let waiting = self.waiting_updates().len();
+        self.update_all.set_label(&format!("Update All ({waiting})"));
+        self.update_all.set_visible(waiting > 1);
         let mut any = false;
         for e in listing
             .index
@@ -346,6 +386,87 @@ impl Discover {
         }
         self.stack
             .set_visible_child_name(if any { "list" } else { "empty" });
+    }
+
+    /// The plugins with an update that isn't already going in, as (id, name).
+    fn waiting_updates(&self) -> Vec<(String, String)> {
+        let listing = self.listing.borrow();
+        let Some(listing) = listing.as_ref() else {
+            return Vec::new();
+        };
+        let plugins = self.state.plugins.borrow();
+        let installed: Vec<_> = plugins
+            .list
+            .iter()
+            .map(|r| (r.id.as_str(), r.version.as_str()))
+            .collect();
+        let busy = self.busy.borrow();
+        updatable(&listing.index.plugins, &installed)
+            .into_iter()
+            .filter(|e| !busy.contains(&e.id))
+            .map(|e| (e.id.clone(), e.name.clone()))
+            .collect()
+    }
+
+    fn update_all(self: &Rc<Self>) {
+        let todo = self.waiting_updates();
+        self.busy
+            .borrow_mut()
+            .extend(todo.iter().map(|(id, _)| id.clone()));
+        self.render();
+        self.update_next(todo.into(), 0, Vec::new());
+    }
+
+    /// Update one plugin, then the next. Holds the page, so closing the window doesn't stop them.
+    fn update_next(
+        self: &Rc<Self>,
+        mut todo: VecDeque<(String, String)>,
+        done: usize,
+        mut failed: Vec<String>,
+    ) {
+        let client = self.state.client.borrow().clone();
+        let (Some((id, name)), Some(c)) = (todo.front().cloned(), client) else {
+            self.busy
+                .borrow_mut()
+                .retain(|b| !todo.iter().any(|(id, _)| id == b));
+            self.render();
+            self.updates_done(done, &failed);
+            return;
+        };
+        todo.pop_front();
+        let (d, wanted) = (self.clone(), id.clone());
+        runtime::run(async move { c.plugin_store_install(&wanted).await }, move |r| {
+            d.busy.borrow_mut().remove(&id);
+            d.last.borrow_mut().remove(&id);
+            crate::ui::window::refresh_plugins(&d.state);
+            d.render();
+            let done = match r {
+                Ok(_) => done + 1,
+                Err(e) => {
+                    failed.push(format!("{name}: {e}"));
+                    done
+                }
+            };
+            d.update_next(todo, done, failed);
+        });
+    }
+
+    fn updates_done(&self, done: usize, failed: &[String]) {
+        let Some(dialog) = self.dialog.upgrade() else {
+            return;
+        };
+        if failed.is_empty() {
+            dialog.add_toast(adw::Toast::new(&updated_text(done)));
+            return;
+        }
+        let alert = adw::AlertDialog::builder()
+            .heading("Some Plugins Didn’t Update")
+            .body(failed.join("\n"))
+            .default_response("close")
+            .close_response("close")
+            .build();
+        alert.add_response("close", "Close");
+        alert.present(Some(&dialog));
     }
 
     fn card(self: &Rc<Self>, e: &StoreEntry, listing: &Listing, installed: Option<&str>) -> gtk::Widget {
@@ -663,6 +784,32 @@ mod tests {
         assert_eq!(progress_words("checking", 0, 0).1, None, "no number: animated");
         assert_eq!(progress_words("installing", 0, 0).0, "Installing…");
         assert_eq!(progress_words("preparing", 0, 0).0, "Getting ready…");
+    }
+
+    #[test]
+    fn update_all_counts_only_what_can_update() {
+        let mut needs_app = entry("new", "Needs Newer App", &[]);
+        needs_app.min_app = Some("99.0.0".into());
+        let store = [
+            entry("ha", "Home Assistant", &[]),
+            entry("obs", "OBS Studio", &[]),
+            entry("same", "Up to Date", &[]),
+            entry("none", "Not Installed", &[]),
+            needs_app,
+        ];
+        let installed = [
+            ("ha", "1.1.0"),
+            ("obs", "1.1.9"),
+            ("same", "1.2.0"),
+            ("new", "1.0.0"),
+        ];
+        let ids: Vec<_> = updatable(&store, &installed)
+            .iter()
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(ids, ["ha", "obs"]);
+        assert_eq!(updated_text(1), "1 plugin updated");
+        assert_eq!(updated_text(2), "2 plugins updated");
     }
 
     #[test]
