@@ -284,9 +284,24 @@ pub fn plugin_image(plugin: &str, icon: Option<&str>, size: i32) -> gtk::Image {
     image
 }
 
+/// The About window's description, with the deck's firmware once it is known.
+pub fn about_comments(firmware: &str) -> String {
+    let what = "Configure the Ulanzi D200 and D200X stream decks on Linux.";
+    match firmware {
+        "" => what.to_string(),
+        version => format!("{what}\n\nDeck firmware {version}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_says_the_firmware_once_it_is_known() {
+        assert!(!about_comments("").contains("firmware"));
+        assert!(about_comments("5.2.3").ends_with("Deck firmware 5.2.3"));
+    }
 
     /// Whether a toast sits anywhere under `w`.
     fn holds_toast(w: &gtk::Widget) -> bool {

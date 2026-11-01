@@ -258,7 +258,7 @@ fn main() -> glib::ExitCode {
         }
         {
             let about = gio::SimpleAction::new("about", None);
-            let window = window.clone();
+            let (window, state) = (window.clone(), state.clone());
             about.connect_activate(move |_, _| {
                 let about = adw::AboutDialog::builder()
                     .application_name("Ulanzi Deck")
@@ -268,7 +268,7 @@ fn main() -> glib::ExitCode {
                     .license_type(gtk::License::MitX11)
                     .website("https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux")
                     .issue_url("https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues")
-                    .comments("Configure the Ulanzi D200 and D200X stream decks on Linux.")
+                    .comments(ui::about_comments(""))
                     .build();
                 about.add_acknowledgement_section(
                     Some("Protocol Notes"),
@@ -289,6 +289,14 @@ fn main() -> glib::ExitCode {
                          label your own keys; their use does not imply endorsement.",
                     ),
                 );
+                if let Some(client) = state.client.borrow().clone() {
+                    let shown = about.downgrade();
+                    ulanzi_deck::runtime::run(async move { client.firmware().await }, move |firmware| {
+                        if let (Some(about), Ok(version)) = (shown.upgrade(), firmware) {
+                            about.set_comments(&ui::about_comments(&version));
+                        }
+                    });
+                }
                 about.present(Some(&window));
             });
             app.add_action(&about);

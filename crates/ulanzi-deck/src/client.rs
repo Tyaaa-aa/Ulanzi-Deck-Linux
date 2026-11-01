@@ -588,6 +588,11 @@ impl Client {
         Ok(self.inner.proxy.call("UpdateWhatsNewShown", &(version,)).await?)
     }
 
+    /// The firmware the deck reported, empty until it has answered.
+    pub async fn firmware(&self) -> Result<String> {
+        Ok(self.inner.proxy.call("Firmware", &()).await?)
+    }
+
     /// The names of the connected PC monitors.
     pub async fn list_displays(&self) -> Result<Vec<String>> {
         Ok(self.inner.proxy.call("ListDisplays", &()).await?)
