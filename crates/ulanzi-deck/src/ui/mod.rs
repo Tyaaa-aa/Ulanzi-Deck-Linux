@@ -287,6 +287,43 @@ pub fn plugin_image(plugin: &str, icon: Option<&str>, size: i32) -> gtk::Image {
 mod tests {
     use super::*;
 
+    /// Whether a toast sits anywhere under `w`.
+    fn holds_toast(w: &gtk::Widget) -> bool {
+        use gtk::prelude::*;
+        if w.css_name() == "toast" {
+            return true;
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            if holds_toast(&c) {
+                return true;
+            }
+            child = c.next_sibling();
+        }
+        false
+    }
+
+    #[test]
+    fn a_toast_lands_on_the_dialog_in_front() {
+        use adw::prelude::*;
+        with_gtk(|| {
+            let window = adw::ApplicationWindow::builder().build();
+            let overlay = adw::ToastOverlay::new();
+            overlay.set_child(Some(&gtk::Label::new(Some("main"))));
+            window.set_content(Some(&overlay));
+            set_toast_overlay(&overlay);
+            // An editor another test left open would take the toast.
+            set_window_toasts(None);
+            window.present();
+            let dialog = adw::PreferencesDialog::new();
+            dialog.present(Some(&window));
+            show_toast("in front");
+            assert!(holds_toast(dialog.upcast_ref()), "not on the dialog");
+            assert!(!holds_toast(overlay.upcast_ref()), "on the main window");
+            window.close();
+        });
+    }
+
     #[test]
     fn gtk_tests_share_one_thread() {
         let mut seen = Vec::new();
