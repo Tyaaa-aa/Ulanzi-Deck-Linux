@@ -661,7 +661,16 @@ fn fill_action(ed: &Ed, i: usize, group: &gtk::ListBox, title: &gtk::Label, chip
     }
 }
 
-/// What opens when a step is clicked: its values, its look with Custom feedback, and Delete.
+/// A plain click: this step alone is selected, and a second click on it lets go.
+fn click_selects(selected: &mut BTreeSet<usize>, first: usize) {
+    let alone = selected.len() == 1 && selected.contains(&first);
+    selected.clear();
+    if !alone {
+        selected.insert(first);
+    }
+}
+
+/// What opens when a step is right-clicked: its values, its look with Custom feedback, and Delete.
 fn step_popover(ed: &Ed, button: &gtk::Button, chip: &Chip, index: usize, part: SequencePart) {
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1048,11 +1057,27 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
     if ed.selected.borrow().contains(&first) {
         button.add_css_class("selected");
     }
+    // A click selects the step; a right click opens it.
     {
-        let (ed, chip) = (ed.clone(), chip.clone());
-        button.connect_clicked(move |b| step_popover(&ed, b, &chip, index, part));
+        let ed = ed.clone();
+        button.connect_clicked(move |_| {
+            click_selects(&mut ed.selected.borrow_mut(), first);
+            ed.anchor.set(Some((part, index)));
+            ed.selection_changed();
+        });
     }
-    // Ctrl+click and Shift+click select instead of opening the step.
+    let open = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();
+    {
+        let (ed, chip, button) = (ed.clone(), chip.clone(), button.downgrade());
+        open.connect_pressed(move |g, _, _, _| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            if let Some(b) = button.upgrade() {
+                step_popover(&ed, &b, &chip, index, part);
+            }
+        });
+    }
+    button.add_controller(open);
+    // Ctrl+click and Shift+click add to the selection.
     let select = gtk::GestureClick::new();
     select.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
@@ -1064,7 +1089,6 @@ fn chip_widget(ed: &Ed, chip: &Chip, index: usize, part: SequencePart) -> gtk::W
                 held.contains(gdk::ModifierType::SHIFT_MASK),
             );
             if !ctrl && !shift {
-                ed.anchor.set(Some((part, index)));
                 return;
             }
             g.set_state(gtk::EventSequenceState::Claimed);
@@ -2175,6 +2199,15 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, target: MacroTarget) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_selects_one_step_and_a_second_click_lets_go() {
+        let mut selected = BTreeSet::from([1, 2]);
+        click_selects(&mut selected, 4);
+        assert_eq!(selected, BTreeSet::from([4]));
+        click_selects(&mut selected, 4);
+        assert!(selected.is_empty());
+    }
 
     fn all_drop_downs(w: &gtk::Widget, out: &mut Vec<gtk::DropDown>) {
         if let Some(d) = w.downcast_ref::<gtk::DropDown>() {
