@@ -306,6 +306,34 @@ states = [
 ]
 ```
 
+### Key effects
+
+From contract 1.3, an action can choose the border effects of its keys. An effect is `{ type, color,
+speed }`: `type` is `glow`, `pulse`, `chase`, `fire` or `none`, `color` is `#rrggbb` (optional) and
+`speed` is `slow`, `normal` or `fast` (optional). A plugin picks from these four; it can't draw its own.
+
+| Field of `[[actions]]` | Meaning |
+|---|---|
+| `states[].effect` | The effect while that state matches. |
+| `pressed_effect` | What a fresh key shows while held, in place of the default Pulse. |
+| `effect_presets` | Named sets the user can pick for a key: `name`, then any of `effect`, `pressed` and `states`. |
+
+```toml
+[[actions]]
+id = "climate"
+pressed_effect = { type = "pulse", color = "#4fc3f7" }
+states = [
+  { when = { value = "{ha.$entity_id}", is = ["off"] }, effect = { type = "fire" } },
+  { when = { value = "{ha.$entity_id}", is = ["cool"] }, effect = { type = "chase", color = "#4fc3f7" } },
+]
+effect_presets = [
+  { name = "Calm", effect = { type = "glow" }, pressed = { type = "glow" } },
+]
+```
+
+A key that has effects of its own keeps them through a plugin update. Set `min_app` to the first
+Ulanzi Deck that has key effects, so older versions don't show keys that do nothing.
+
 Picker searches should match every word of the query anywhere in the name, id or group, in any
 order. `ulanzi_plugin::matches_query` implements this.
 
@@ -699,8 +727,9 @@ start = 10        # whatever the plugin reads in init()
 | 1.0 | Timers, state, secrets, status, logging, WebSockets, TCP/TLS and HTTP. |
 | 1.1 | `list-items` and `[[pickers]]`. Components built against 1.0 still load (their `ulanzi:plugin/core@1.0.0` imports are served by 1.1) but have no lists. |
 | 1.2 | Manifest only, no interface changes: plugin icons and colour, ready-made keys (`[[key_sets]]`), live looks and label values (`states`, `labels`, `track`), `show_if`, `author` and `min_app`. |
+| 1.3 | Manifest only, no interface changes: key effects (`effect` in `states`, `pressed_effect`, `effect_presets`). |
 
-Future features will arrive as additive minor versions (1.3 and later), so existing plugins keep
+Future features will arrive as additive minor versions (1.4 and later), so existing plugins keep
 working. Planned:
 
 - Interfaces for network device discovery, sign-in flows, listening sockets, D-Bus and running

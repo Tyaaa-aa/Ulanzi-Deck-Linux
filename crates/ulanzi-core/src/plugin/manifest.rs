@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 use super::{Field, FieldKind};
 
 /// The plugin contract this host implements (major, minor).
-pub const CONTRACT: (u32, u32) = (1, 2);
+pub const CONTRACT: (u32, u32) = (1, 3);
 
 /// Contract 1.2 fields: plugins built for an older contract keep their promise, so these are
 /// accepted and ignored there (like `[[pickers]]` before 1.1).
 const TOP_LEVEL_1_2: [&str; 3] = ["symbolic_icon", "color", "key_sets"];
 const ACTION_1_2: [&str; 3] = ["states", "labels", "track"];
+/// Contract 1.3 fields, likewise.
+const ACTION_1_3: [&str; 2] = ["pressed_effect", "effect_presets"];
 
 /// A plugin's `plugin.toml`. Tables the host does not read yet (faces, widgets, variables,
 /// detect, auth) are accepted and ignored.
@@ -195,6 +197,64 @@ pub struct ManifestAction {
     /// published (`value` may use `$<param>`).
     #[serde(default)]
     pub track: Vec<Track>,
+    /// What a fresh key shows while held, in place of the default (contract 1.3).
+    #[serde(default)]
+    pub pressed_effect: Option<ManifestEffect>,
+    /// Named sets of effects the user can pick for a key (contract 1.3).
+    #[serde(default)]
+    pub effect_presets: Vec<ManifestEffectPreset>,
+}
+
+/// One of the built-in effects, with a colour and a speed if the plugin picks them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestEffect {
+    #[serde(rename = "type")]
+    pub kind: crate::model::EffectKind,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub speed: crate::model::EffectSpeed,
+}
+
+impl ManifestEffect {
+    pub fn to_effect(&self) -> crate::model::Effect {
+        crate::model::Effect {
+            kind: self.kind,
+            color: manifest_color(&self.color),
+            speed: self.speed,
+        }
+    }
+}
+
+/// A set of effects under one name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestEffectPreset {
+    pub name: String,
+    #[serde(default)]
+    pub effect: Option<ManifestEffect>,
+    #[serde(default)]
+    pub pressed: Option<ManifestEffect>,
+    #[serde(default)]
+    pub states: Vec<ManifestState>,
+}
+
+/// Fill in a key's effects from `preset`, which leaves them ordinary values the user can change.
+pub fn apply_preset(look: &mut crate::model::KeyLook, preset: &ManifestEffectPreset, plugin: &str) {
+    if let Some(e) = &preset.effect {
+        look.effect = e.to_effect();
+    }
+    if let Some(e) = &preset.pressed {
+        look.pressed = crate::model::PressedEffect::Own(e.to_effect());
+    }
+    if !preset.states.is_empty() {
+        look.states = preset.states.iter().map(|st| st.to_look(plugin)).collect();
+    }
+}
+
+fn manifest_color(c: &Option<String>) -> Option<crate::Color> {
+    c.as_deref()
+        .and_then(parse_color)
+        .map(|[r, g, b]| crate::Color([r, g, b, 255]))
 }
 
 impl ManifestAction {
@@ -220,6 +280,9 @@ pub struct ManifestState {
     pub background: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
+    /// The effect while this state matches (contract 1.3).
+    #[serde(default)]
+    pub effect: Option<ManifestEffect>,
 }
 
 /// A live value a key can show: its name in the app and the label text (`$<param>` allowed).
@@ -252,7 +315,7 @@ impl ManifestState {
                 foreground: color(&self.color),
                 background: color(&self.background),
                 label: self.label.clone(),
-                effect: None,
+                effect: self.effect.as_ref().map(ManifestEffect::to_effect),
             },
         }
     }
@@ -333,6 +396,9 @@ impl Manifest {
         }
         if version.is_some_and(|v| v < (1, 2)) {
             strip_1_2(&mut table);
+        }
+        if version.is_some_and(|v| v < (1, 3)) {
+            strip_1_3(&mut table);
         }
         let m: Manifest = table.try_into().map_err(parse_err)?;
         if !valid_id(&m.id) {
@@ -434,13 +500,30 @@ impl Manifest {
         let colors = |states: &[ManifestState]| {
             states
                 .iter()
-                .flat_map(|st| [&st.color, &st.background])
+                .flat_map(|st| {
+                    let effect = st.effect.as_ref().map(|e| &e.color).unwrap_or(&None);
+                    [&st.color, &st.background, effect]
+                })
                 .flatten()
                 .find(|c| parse_color(c).is_none())
                 .map(|c| ManifestError::BadColor(c.clone()))
         };
         for a in &self.actions {
             let scope = format!("action \"{}\"", a.id);
+            let chosen = a.pressed_effect.iter().chain(
+                a.effect_presets
+                    .iter()
+                    .flat_map(|p| p.effect.iter().chain(p.pressed.iter())),
+            );
+            if let Some(c) = chosen
+                .filter_map(|e| e.color.as_ref())
+                .find(|c| parse_color(c).is_none())
+            {
+                return Err(ManifestError::BadColor(c.clone()));
+            }
+            if let Some(e) = a.effect_presets.iter().find_map(|p| colors(&p.states)) {
+                return Err(e);
+            }
             check(&scope, &a.icon, true)?;
             for st in &a.states {
                 check(&scope, &st.icon, true)?;
@@ -687,6 +770,22 @@ fn strip_1_2(table: &mut toml::Table) {
                 a.remove(k);
             }
             strip_fields(a.get_mut("params"));
+        }
+    }
+}
+
+/// Drop the fields contract 1.3 added from an older manifest.
+fn strip_1_3(table: &mut toml::Table) {
+    if let Some(toml::Value::Array(actions)) = table.get_mut("actions") {
+        for a in actions.iter_mut().filter_map(toml::Value::as_table_mut) {
+            for k in ACTION_1_3 {
+                a.remove(k);
+            }
+            if let Some(toml::Value::Array(states)) = a.get_mut("states") {
+                for st in states.iter_mut().filter_map(toml::Value::as_table_mut) {
+                    st.remove("effect");
+                }
+            }
         }
     }
 }

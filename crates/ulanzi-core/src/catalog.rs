@@ -552,8 +552,9 @@ pub fn default_look(a: &Action) -> KeyLook {
     }
 }
 
-/// (plugin, action) → (icon, colour, live state looks).
-type PluginLooks = std::collections::BTreeMap<(String, String), (Option<String>, Color, Vec<LookState>)>;
+/// (plugin, action) → (icon, colour, live state looks, pressed effect).
+type PluginLook = (Option<String>, Color, Vec<LookState>, PressedEffect);
+type PluginLooks = std::collections::BTreeMap<(String, String), PluginLook>;
 
 /// How each installed plugin's actions look on a fresh key.
 static PLUGIN_LOOKS: std::sync::RwLock<PluginLooks> =
@@ -568,7 +569,11 @@ pub fn set_plugin_looks<'a>(manifests: impl IntoIterator<Item = &'a crate::plugi
         for a in &m.actions {
             let icon = a.icon.clone().filter(|i| crate::plugin::is_asset(i));
             let states = a.states.iter().map(|st| st.to_look(&m.id)).collect();
-            map.insert((m.id.clone(), a.id.clone()), (icon, fg, states));
+            let pressed = a
+                .pressed_effect
+                .as_ref()
+                .map_or(PressedEffect::Default, |e| PressedEffect::Own(e.to_effect()));
+            map.insert((m.id.clone(), a.id.clone()), (icon, fg, states, pressed));
         }
     }
     if let Ok(mut looks) = PLUGIN_LOOKS.write() {
@@ -598,12 +603,13 @@ fn plugin_look(plugin: &str, action: &str) -> KeyLook {
         .and_then(|l| l.get(&(plugin.to_string(), action.to_string())).cloned());
     match found {
         // The action's live looks are not copied: the key uses the plugin's current ones.
-        Some((icon, fg, _)) => KeyLook {
+        Some((icon, fg, _, pressed)) => KeyLook {
             source: icon.map_or(ImageSource::None, |icon| ImageSource::Plugin {
                 plugin: plugin.to_string(),
                 icon,
             }),
             foreground: fg,
+            pressed,
             ..KeyLook::default()
         },
         None => KeyLook::default(),
@@ -630,6 +636,9 @@ pub fn refresh_look(look: &mut KeyLook, old: Option<&Action>, new: &Action) {
     }
     if look.states == was.states {
         look.states = now.states;
+    }
+    if look.pressed == was.pressed {
+        look.pressed = now.pressed;
     }
 }
 

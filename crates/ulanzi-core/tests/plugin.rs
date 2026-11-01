@@ -1,8 +1,11 @@
 use std::net::IpAddr;
 
-use ulanzi_core::model::{Action, Key, Model, Profile, Settings, table_to_json};
+use ulanzi_core::model::{
+    Action, Effect, EffectKind, EffectSpeed, Key, KeyLook, Model, PressedEffect, Profile, Settings,
+    table_to_json,
+};
 use ulanzi_core::plugin::{
-    CONTRACT, Manifest, ManifestError, Permissions, PickItem, PickerStyle, host_allowed, is_lan,
+    CONTRACT, Manifest, ManifestError, Permissions, PickItem, PickerStyle, apply_preset, host_allowed, is_lan,
 };
 use ulanzi_core::store::parse_profile;
 
@@ -102,9 +105,9 @@ fn manifest_rejects() {
         Manifest::parse(&two),
         Err(ManifestError::Incompatible { needs }) if needs == "2.0"
     ));
-    let one_three = manifest("obs", "1.0.0", "1.3", "");
+    let one_four = manifest("obs", "1.0.0", "1.4", "");
     assert!(matches!(
-        Manifest::parse(&one_three),
+        Manifest::parse(&one_four),
         Err(ManifestError::Incompatible { .. })
     ));
     let dup = manifest(
@@ -637,12 +640,12 @@ fn params_cannot_use_a_multi_picker() {
 }
 
 #[test]
-fn contracts_up_to_1_2_load_and_1_3_does_not() {
-    assert_eq!(CONTRACT, (1, 2));
-    for ok in ["1.0", "1.1", "1.2"] {
+fn contracts_up_to_1_3_load_and_1_4_does_not() {
+    assert_eq!(CONTRACT, (1, 3));
+    for ok in ["1.0", "1.1", "1.2", "1.3"] {
         assert!(Manifest::parse(&manifest("obs", "1.0.0", ok, "")).is_ok(), "{ok}");
     }
-    for bad in ["1.3", "2.0", "0.9"] {
+    for bad in ["1.4", "2.0", "0.9"] {
         assert!(
             matches!(
                 Manifest::parse(&manifest("obs", "1.0.0", bad, "")),
@@ -811,5 +814,92 @@ fn contract_1_2_fields_and_min_app() {
         Err(ManifestError::NeedsApp("99.0.0".into()))
     );
     assert!(m("1.2", "min_app = \"two\"\n").is_err());
-    assert!(m("1.3", "").is_err(), "a newer contract than this app has");
+    assert!(m("1.4", "").is_err(), "a newer contract than this app has");
+}
+
+const CLIMATE: &str = r##"
+id = "ha"
+name = "Home"
+version = "1.0.0"
+contract = "1.3"
+color = "#18bcf2"
+
+[[actions]]
+id = "climate"
+name = "Climate"
+pressed_effect = { type = "pulse", color = "#4fc3f7" }
+states = [
+  { when = { value = "{ha.x}", is = ["off"] }, effect = { type = "fire" } },
+  { when = { value = "{ha.x}", is = ["cool"] }, effect = { type = "chase", color = "#4fc3f7", speed = "fast" } },
+]
+effect_presets = [
+  { name = "Calm", effect = { type = "glow" }, pressed = { type = "glow" } },
+]
+"##;
+
+fn climate_key() -> Action {
+    Action::Plugin {
+        plugin: "ha".into(),
+        action: "climate".into(),
+        params: toml::Table::new(),
+    }
+}
+
+#[test]
+fn contract_1_3_fields_load_and_reach_a_new_key() {
+    let m = Manifest::parse(CLIMATE).expect("parses");
+    ulanzi_core::catalog::set_plugin_looks([&m]);
+    let look = ulanzi_core::catalog::default_look(&climate_key());
+    let blue = "#4fc3f7".parse().expect("colour");
+    match look.pressed {
+        PressedEffect::Own(e) => assert_eq!((e.kind, e.color), (EffectKind::Pulse, Some(blue))),
+        other => panic!("{other:?}"),
+    }
+    let states = ulanzi_core::catalog::plugin_states("ha", "climate");
+    assert_eq!(states[0].look.effect.map(|e| e.kind), Some(EffectKind::Fire));
+    let chase = states[1].look.effect.expect("effect");
+    assert_eq!((chase.kind, chase.speed), (EffectKind::Chase, EffectSpeed::Fast));
+    ulanzi_core::catalog::set_plugin_looks([]);
+}
+
+#[test]
+fn a_bad_colour_in_an_effect_is_refused_like_other_manifest_colours() {
+    let bad = CLIMATE.replace("{ type = \"fire\" }", "{ type = \"fire\", color = \"red\" }");
+    assert!(matches!(Manifest::parse(&bad), Err(ManifestError::BadColor(_))));
+    let bad = CLIMATE.replace(
+        "pressed = { type = \"glow\" }",
+        "pressed = { type = \"glow\", color = \"x\" }",
+    );
+    assert!(matches!(Manifest::parse(&bad), Err(ManifestError::BadColor(_))));
+}
+
+#[test]
+fn a_plugin_built_for_1_2_gets_none_of_this() {
+    let m = Manifest::parse(&CLIMATE.replace("contract = \"1.3\"", "contract = \"1.2\"")).expect("parses");
+    let a = &m.actions[0];
+    assert!(a.pressed_effect.is_none() && a.effect_presets.is_empty());
+    assert!(a.states.iter().all(|s| s.effect.is_none()));
+}
+
+#[test]
+fn a_preset_fills_the_rows_and_stays_editable() {
+    let m = Manifest::parse(CLIMATE).expect("parses");
+    let mut look = KeyLook::default();
+    apply_preset(&mut look, &m.actions[0].effect_presets[0], "ha");
+    assert_eq!(look.effect.kind, EffectKind::Glow);
+    assert_eq!(look.pressed, PressedEffect::Own(Effect::of(EffectKind::Glow)));
+    look.effect = Effect::of(EffectKind::Chase);
+    assert_eq!(look.effect.kind, EffectKind::Chase);
+}
+
+#[test]
+fn changing_a_keys_action_keeps_its_chosen_effects() {
+    let mut look = KeyLook {
+        pressed: PressedEffect::Own(Effect::of(EffectKind::Fire)),
+        effect: Effect::of(EffectKind::Chase),
+        ..KeyLook::default()
+    };
+    ulanzi_core::catalog::refresh_look(&mut look, None, &Action::Back);
+    assert_eq!(look.pressed, PressedEffect::Own(Effect::of(EffectKind::Fire)));
+    assert_eq!(look.effect.kind, EffectKind::Chase);
 }

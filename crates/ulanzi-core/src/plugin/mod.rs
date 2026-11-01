@@ -9,6 +9,7 @@ pub mod store;
 pub use field::{Choice, Field, FieldKind, ShowIf, UNBOUNDED};
 pub use manifest::{
     CONTRACT, Inspected, KeySet, KeySetKey, KeySetVariant, MAX_KEY_SET_KEYS, Manifest, ManifestAction,
-    ManifestError, ManifestLabel, ManifestState, Permissions, PickItem, Picker, PickerStyle, Track, is_asset,
+    ManifestEffect, ManifestEffectPreset, ManifestError, ManifestLabel, ManifestState, Permissions, PickItem,
+    Picker, PickerStyle, Track, apply_preset, is_asset,
 };
 pub use permission::{describe, host_allowed, is_lan};
