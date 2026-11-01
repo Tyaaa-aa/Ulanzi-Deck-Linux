@@ -7,6 +7,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ### Added
 
+- The keys in the app now show their live state and cycle step, as the deck does, so a fan that is on looks on.
+- A new page shows on the deck straight away.
 - **Update All** in Plugins → Discover, with the number of updates waiting, when two or more are.
 - **Display Brightness** action for PC monitors, through KDE Plasma 6 or `ddcutil` on any other desktop: one monitor or all, brighter, dimmer
   or a set level. Keys remember a monitor by name, so changing display numbers don't break them.

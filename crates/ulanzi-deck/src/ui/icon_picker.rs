@@ -712,7 +712,10 @@ fn show(
     let file_page = adw::StatusPage::builder()
         .icon_name("image-x-generic-symbolic")
         .title("Use Your Own Picture")
-        .description("PNG, JPEG, WebP, GIF or SVG. You can also drop a file straight onto a key.")
+        .description(
+            "PNG, JPEG, WebP, GIF or SVG. GIFs can be up to 16 MB and 500 frames, and the app cuts \
+             frames from big ones to fit the deck. You can also drop a file straight onto a key.",
+        )
         .css_classes(["compact"])
         .build();
     let choose = gtk::Button::builder()

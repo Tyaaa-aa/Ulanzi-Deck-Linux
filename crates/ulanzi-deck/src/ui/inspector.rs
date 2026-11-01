@@ -273,6 +273,11 @@ impl Panel {
             // Only a plugin change the editor shows is worth a rebuild (not a plugin retrying).
             let known_plugins = RefCell::new(state.plugins.borrow().clone());
             state.on(move |c| match c {
+                Change::Live => {
+                    for r in ctx.refreshers.borrow().iter() {
+                        r();
+                    }
+                }
                 Change::Plugins => {
                     let now = ctx.state.plugins.borrow().clone();
                     if known_plugins.borrow().editor_differs(&now) {
@@ -453,7 +458,7 @@ fn shown_look(state: &State, k: u8) -> KeyLook {
     let Some(key) = e.key(k) else {
         return KeyLook::default();
     };
-    let mut look = key.shown_look();
+    let mut look = state.live_look(k, key);
     look.label.text = state
         .plugins
         .borrow()
@@ -651,7 +656,8 @@ fn key_preview(ctx: &C, k: u8) -> gtk::Widget {
             let dir = canvas::profile_dir(&state);
             let tex = canvas::key_texture(&look, &dir);
             picture.set_paintable(tex.as_ref());
-            let effect = effect_for(&look, held.get(), state.settings.borrow().key_effects);
+            let shows = state.editor.borrow().key(k).is_some_and(|k| k.shows_press());
+            let effect = effect_for(&look, held.get() && shows, state.settings.borrow().key_effects);
             let shown = picture.downgrade();
             canvas::animate(picture.upcast_ref(), &running, &look, effect, &dir, move |t| {
                 if let Some(p) = shown.upgrade() {
@@ -1022,15 +1028,15 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     group.add(&effect_section(ctx, keys.clone()));
     if let [k] = keys[..] {
         let note = adw::ActionRow::builder()
-            .title("This GIF was shortened to fit the deck")
             .css_classes(["dim-label"])
             .visible(false)
             .build();
         let look_now = key_look(&state, k);
         look.add_row(&note);
         if matches!(&look_now.source, ImageSource::Image { path } if path.to_lowercase().ends_with(".gif")) {
-            canvas::lost_frames(&look_now, &canvas::profile_dir(&state), move |lost| {
-                note.set_visible(lost)
+            canvas::find_gif_note(&look_now, &canvas::profile_dir(&state), move |text| {
+                note.set_visible(text.is_some());
+                note.set_title(&glib::markup_escape_text(&text.unwrap_or_default()));
             });
         }
     }
@@ -1109,6 +1115,11 @@ fn effect_view(state: &State, keys: &[u8]) -> effects_rows::View {
     effects_rows::View {
         resting: e.shared_look(keys, |l| l.effect),
         pressed: e.shared_look(keys, |l| l.pressed),
+        default_pulses: state.settings.borrow().key_effects
+            && keys
+                .iter()
+                .filter_map(|k| e.key(*k))
+                .any(|k| k.tap.is_some() || k.hold.is_some()),
         states: one.map_or(Vec::new(), |k| {
             effects_rows::state_rows(&key_states(k), k.look.dynamic)
         }),

@@ -37,6 +37,8 @@ pub enum Edit {
 pub struct View {
     pub resting: Mixed<Effect>,
     pub pressed: Mixed<PressedEffect>,
+    /// The Default look of a held key is a Pulse here, not nothing.
+    pub default_pulses: bool,
     /// One entry per live state: its row's title and effect.
     pub states: Vec<(String, Option<Effect>)>,
     pub presets: Vec<String>,
@@ -181,7 +183,7 @@ pub fn summary(view: &View) -> String {
         .any(|s| s.1.is_some())
         .then(|| "By state".to_string());
     let pressed = match view.pressed {
-        Mixed::One(PressedEffect::Default) => Some("Pulse when held".to_string()),
+        Mixed::One(PressedEffect::Default) if view.default_pulses => Some("Pulse when held".to_string()),
         Mixed::One(PressedEffect::Own(e)) if !e.is_none() => Some(format!("{} when held", name(e.kind))),
         _ => None,
     };
@@ -376,9 +378,19 @@ mod tests {
         View {
             resting: Mixed::One(Effect::default()),
             pressed: Mixed::One(PressedEffect::Default),
+            default_pulses: true,
             states: Vec::new(),
             presets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_key_that_wont_pulse_doesnt_say_it_will() {
+        let v = View {
+            default_pulses: false,
+            ..view()
+        };
+        assert_eq!(summary(&v), "None");
     }
 
     fn titles(v: View) -> Vec<String> {

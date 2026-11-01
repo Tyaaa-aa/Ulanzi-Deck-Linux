@@ -232,14 +232,54 @@ impl Key {
     /// The look before any press: a cycling key shows its last step, or its first when it shows
     /// the next one.
     pub fn shown_look(&self) -> KeyLook {
+        self.live_look(&LiveKey::default())
+    }
+
+    /// The look at a moment the service told the app about.
+    pub fn live_look(&self, live: &LiveKey) -> KeyLook {
         let mut look = self.look.clone();
         if let Some(Action::Cycle { steps, show }) = &self.tap
             && !steps.is_empty()
         {
-            steps[show.step(0, steps.len())].look.apply(&mut look);
+            let at = live.step.unwrap_or_else(|| show.step(0, steps.len()));
+            if let Some(step) = steps.get(at) {
+                step.look.apply(&mut look);
+            }
+        }
+        if look.dynamic
+            && let Some(state) = live.state.and_then(|at| self.live_states().into_iter().nth(at))
+        {
+            state.look.apply(&mut look);
         }
         look
     }
+
+    /// The live states this key follows: its own, else those its plugin action declares.
+    pub fn live_states(&self) -> Vec<super::LookState> {
+        match &self.tap {
+            Some(Action::Plugin { plugin, action, .. }) if self.look.states.is_empty() => {
+                crate::catalog::plugin_states(plugin, action)
+            }
+            _ => self.look.states.clone(),
+        }
+    }
+}
+
+/// Where a key stands right now, which only the service knows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LiveKey {
+    /// The cycle step it shows.
+    pub step: Option<usize>,
+    /// The live state that holds.
+    pub state: Option<usize>,
+}
+
+/// Where the keys of the page on the deck stand. Keys left out have nothing live going on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveKeys {
+    pub profile: Uuid,
+    pub page: usize,
+    pub keys: BTreeMap<u8, LiveKey>,
 }
 
 impl Profile {

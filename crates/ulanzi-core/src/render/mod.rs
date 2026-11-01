@@ -10,6 +10,7 @@ pub mod screen;
 mod text;
 
 pub use animation::{Animation, Encoded, animation_hash, encode_fit, is_animated, render_animation};
+pub(crate) use animation::{MAX_SOURCE_BYTES, MAX_SOURCE_FRAMES, MAX_SOURCE_SIDE};
 pub use effects::{GIF_TARGET, LOOP_FRAMES, draw_effect, effect_color, frame_ms};
 pub use fonts::{Fonts, TextStyle};
 pub use icons::IconLibrary;

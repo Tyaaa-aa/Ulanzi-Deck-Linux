@@ -67,7 +67,7 @@ fn gif(frames: u32) -> Vec<u8> {
         let mut enc = GifEncoder::new(&mut out);
         enc.set_repeat(Repeat::Infinite).expect("test setup");
         for f in 0..frames {
-            let img = RgbaImage::from_pixel(32, 32, Rgba([f as u8 * 40, 30, 30, 255]));
+            let img = RgbaImage::from_pixel(32, 32, Rgba([(f % 5) as u8 * 40, 30, 30, 255]));
             let frame = Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1));
             enc.encode_frame(frame).expect("test setup");
         }
@@ -119,8 +119,33 @@ fn a_gif_too_big_to_play_is_refused() {
     std::fs::write(&src, &bytes).expect("test setup");
     assert!(matches!(
         import_image(&src, dir.path()),
+        Err(ImportError::GifTooBig)
+    ));
+}
+
+#[test]
+fn a_gif_with_a_huge_canvas_is_refused() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let src = dir.path().join("wide.gif");
+    let mut bytes = gif(2);
+    bytes[6..10].fill(0xff);
+    std::fs::write(&src, &bytes).expect("test setup");
+    assert!(matches!(
+        import_image(&src, dir.path()),
         Err(ImportError::TooLarge)
     ));
+}
+
+#[test]
+fn a_gif_with_too_many_frames_is_refused() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let src = dir.path().join("long.gif");
+    std::fs::write(&src, gif(501)).expect("test setup");
+    let err = import_image(&src, dir.path()).expect_err("refused");
+    assert!(matches!(err, ImportError::GifTooBig));
+    assert!(err.to_string().contains("500 frames"));
+    std::fs::write(&src, gif(500)).expect("test setup");
+    assert!(import_image(&src, dir.path()).is_ok());
 }
 
 #[test]

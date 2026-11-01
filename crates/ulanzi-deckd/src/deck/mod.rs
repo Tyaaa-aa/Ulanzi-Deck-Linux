@@ -16,8 +16,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use ulanzi_core::Color;
 use ulanzi_core::model::{
-    Action, AudioTarget, BrightnessOp, ClockStyle, Feedback, Key, Macro, MacroLibrary, Model, MouseButton,
-    Profile, ScreenConfig, Settings, Slot, Trigger,
+    Action, AudioTarget, BrightnessOp, ClockStyle, Feedback, Key, LiveKeys, Macro, MacroLibrary, Model,
+    MouseButton, Profile, ScreenConfig, Settings, Slot, Trigger,
 };
 use ulanzi_core::render::{IconLibrary, RenderCtx};
 use ulanzi_core::store::{ProfileLoad, Store};
@@ -130,6 +130,8 @@ pub enum DeckEvent {
     },
     /// The deck changed settings itself (auto-switch toggle, brightness keys).
     SettingsChanged,
+    /// A key on the deck moved to another live state or cycle step.
+    Live(LiveKeys),
 }
 
 /// Current state, for `Hello` and `ulanzictl status`.
@@ -145,6 +147,8 @@ pub struct DeckSnapshot {
     pub auto_switch: bool,
     /// Firmware version the deck reported, once it answered the info request.
     pub firmware: Option<String>,
+    /// Where the keys on the deck stand.
+    pub live: LiveKeys,
 }
 
 /// Start the deck. Profiles are read from `store`; if there are none a default one is created.
@@ -310,6 +314,8 @@ struct Deck {
     /// The pending upload must be a full page (a connect or page change asked for it).
     pending_full: bool,
     firmware: Option<String>,
+    /// What the app last heard about the keys.
+    live: LiveKeys,
     /// Counts partial uploads, for fresh image names.
     upload_seq: u32,
     /// The window in front, as last reported by the desktop.
@@ -408,6 +414,7 @@ impl Deck {
             upload_pending: false,
             pending_full: false,
             firmware: None,
+            live: LiveKeys::default(),
             upload_seq: 0,
             focused: None,
             screen: ScreenRuntime::new(now),
@@ -659,6 +666,7 @@ impl Deck {
                         list
                     },
                     firmware: self.firmware.clone(),
+                    live: self.live_keys(),
                     auto_switch: self.settings.auto_switch,
                 });
             }
@@ -798,7 +806,39 @@ impl Deck {
     /// (or with `force`), otherwise only the changed keys. After each upload the deck needs time to
     /// unpack it ([`upload_cooldown`]); a request inside that time is remembered and sent, with the
     /// latest state, when it ends.
+    /// The live values, with those of the current page and profile.
+    fn page_dynamic(&self) -> DynamicState {
+        let mut dynamic = self.dynamic.clone();
+        dynamic
+            .vars
+            .insert("page".into(), (self.nav.page + 1).to_string());
+        let name = self.profile().name.clone();
+        dynamic.vars.insert("profile".into(), name);
+        dynamic
+    }
+
+    /// Where the keys of the current page stand.
+    fn live_keys(&self) -> LiveKeys {
+        let profile = self.profile();
+        let keys = profile
+            .pages
+            .get(self.nav.page)
+            .map(|p| push::live_keys(p, &self.page_dynamic()))
+            .unwrap_or_default();
+        LiveKeys {
+            profile: profile.id,
+            page: self.nav.page,
+            keys,
+        }
+    }
+
     async fn push_page(&mut self, force: bool) {
+        // First, as the app follows along with no deck plugged in.
+        let live = self.live_keys();
+        if live != self.live {
+            self.live = live.clone();
+            self.emit(DeckEvent::Live(live));
+        }
         // Before the deck is ready, deck_ready() does the upload.
         if self.transport.is_none() || self.awaiting_info.is_some() {
             return;
@@ -813,6 +853,7 @@ impl Deck {
             return;
         }
         let force = force || std::mem::take(&mut self.pending_full);
+        let press = std::mem::take(&mut self.press_upload);
         self.upload_pending = false;
         let hidden;
         let mut profile = &self.profiles[self.active];
@@ -829,11 +870,7 @@ impl Deck {
             profile_dir: &dir,
             icons: IconLibrary::bundled(),
         };
-        let mut dynamic = self.dynamic.clone();
-        dynamic
-            .vars
-            .insert("page".into(), (self.nav.page + 1).to_string());
-        dynamic.vars.insert("profile".into(), profile.name.clone());
+        let mut dynamic = self.page_dynamic();
         let here = (profile.id, self.nav.page);
         // A key held through a page change is let go: the next page has no press to show.
         if self.shown.as_ref().is_some_and(|s| s.at != here) {
@@ -891,7 +928,6 @@ impl Deck {
             let page = self.profile().pages.get(self.nav.page).map(|p| p.id);
             let showing = self.playing.values().any(|p| p.shows && Some(p.page) == page);
             // The gap runs from the last packet, which may be a while off.
-            let press = std::mem::take(&mut self.press_upload);
             self.upload_gap = Some(if partial && press {
                 Duration::ZERO
             } else if partial && showing && !has_gif {
@@ -931,6 +967,7 @@ impl Deck {
         self.player.stop_all();
         self.macro_down.clear();
         self.held.clear();
+        self.press_upload = false;
         self.pressing.clear();
         self.transport = None;
         self.outgoing.clear();

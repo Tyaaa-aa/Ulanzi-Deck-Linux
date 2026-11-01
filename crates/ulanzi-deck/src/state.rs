@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ulanzi_core::edit::{Editor, Selection, Slot};
-use ulanzi_core::model::{Model, Profile, Settings};
+use ulanzi_core::model::{Key, KeyLook, LiveKey, LiveKeys, Model, Profile, Settings};
 use uuid::Uuid;
 
 use crate::client::Client;
@@ -35,6 +35,8 @@ pub enum Change {
     Drag,
     /// The plugin list, a plugin's status or the manifests changed.
     Plugins,
+    /// A key on the deck moved to another live state or cycle step.
+    Live,
 }
 
 /// Device / service status shown in the header pill and banner.
@@ -90,6 +92,8 @@ pub struct AppState {
     pub expanded: RefCell<std::collections::HashSet<String>>,
     /// The daemon's plugins and their manifests.
     pub plugins: RefCell<crate::plugins::Plugins>,
+    /// Where the keys on the deck stand.
+    pub live: RefCell<LiveKeys>,
     /// Counts plugin list fetches (and service losses), so only the newest fetch is stored.
     plugins_gen: Cell<u64>,
     /// What the service sees playing (for the Now Playing preview); `None` when nothing plays.
@@ -146,6 +150,7 @@ impl AppState {
             rules: RefCell::new(std::collections::HashMap::new()),
             expanded: RefCell::new(std::collections::HashSet::new()),
             plugins: RefCell::default(),
+            live: RefCell::default(),
             plugins_gen: Cell::new(0),
             now_playing: RefCell::default(),
             weather: RefCell::default(),
@@ -301,6 +306,20 @@ impl AppState {
         if self.editor.borrow_mut().redo() {
             self.after_edit();
         }
+    }
+
+    /// What key `i` of the current page shows on the deck.
+    pub fn live_look(&self, i: u8, key: &Key) -> KeyLook {
+        let live = self.live.borrow();
+        let e = self.editor.borrow();
+        let here = live.profile == e.profile().id && live.page == e.page();
+        let at = live.keys.get(&i).filter(|_| here);
+        key.live_look(at.unwrap_or(&LiveKey::default()))
+    }
+
+    pub fn set_live(&self, live: LiveKeys) {
+        *self.live.borrow_mut() = live;
+        self.notify(Change::Live);
     }
 
     /// Show a page here and on the deck.

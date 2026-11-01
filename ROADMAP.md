@@ -14,6 +14,8 @@ What's planned for Ulanzi Deck, roughly in order. Plans can change, and nothing 
 ## After that
 
 - **Upload progress:** show in the app how far a page or effect upload to the deck has got.
+- **Effects per Cycle step:** give each step of a Cycle Through Actions key its own effect, so a key that
+  steps through modes can show which one it is on.
 - **Home Assistant live icons:** icons that follow an entity's state, with a colour or icon you can
   change for each state.
 - **Ulanzi Workshop icon packs:** use the packs from Ulanzi's workshop on your keys.

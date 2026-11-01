@@ -94,6 +94,16 @@ fn export_all_with_settings_drops_plugin_passwords() {
 }
 
 /// A ZIP with the given (name, declared bytes) entries.
+#[test]
+fn a_profile_too_big_to_import_cant_be_exported() {
+    let d = tempfile::tempdir().expect("dir");
+    let s = store(d.path());
+    let p = profile_with_icon(&s, "Big");
+    let icons = s.profile_dir(p.id).join("icons");
+    std::fs::write(icons.join("big.gif"), vec![0u8; 201 * 1024 * 1024]).expect("write");
+    assert!(matches!(export(&s, &[p.id], false), Err(BundleError::TooLarge)));
+}
+
 fn zip_of(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
     let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -130,7 +140,7 @@ fn rejects_unsafe_bundles() {
         (base(("/etc/evil", b"x".to_vec())), "unsafe"),
         (base((&format!("{dir}/icons/../../x"), b"x".to_vec())), "unsafe"),
         (
-            base((&format!("{dir}/icons/big.png"), vec![0u8; 60 * 1024 * 1024])),
+            base((&format!("{dir}/icons/big.png"), vec![0u8; 201 * 1024 * 1024])),
             "large",
         ),
         (

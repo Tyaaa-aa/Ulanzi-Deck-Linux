@@ -109,7 +109,7 @@ never discarded silently.
 
 A `.ulanzideck` bundle is a ZIP archive containing `manifest.toml`, optionally `settings.toml`
 (without plugin secrets), and `profiles/<uuid>/{profile.toml, icons/…}`. Imports validate every
-path, limit the total size to 50 MB and decode every image before accepting it.
+path, limit the total size to 200 MB and decode every image before accepting it.
 
 ## Profile format
 
@@ -173,7 +173,7 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). To inspect it, run
 | Plugin store | `PluginStoreIndex` (refresh; the signed index as JSON, from cache when recent), `PluginStoreInstall` (id; reports `PluginInstallProgress`), `PluginVerified` and `PluginOfficial` (ids of installed plugins that are signed, and signed as official) |
 | Plugins | `PluginList` (id, name, version, status, detail), `PluginInstallDir` (an absolute path; needs Developer mode), `PluginRemove`, `PluginSetEnabled`, `PluginRestart`, `PluginManifests` (JSON `{id: Manifest}`), `PluginInspectDir` (absolute path; JSON `Inspected`; works without Developer mode), `PluginInstallFile` / `PluginInspectFile` (the same for a `.ulanziplugin` package: an absolute path; installing needs Developer mode, inspecting does not; the package is unpacked into a hidden `.unpack-*` folder inside the plugins folder, limits 64 MiB file, 1000 entries, 64 MiB unpacked), `PluginListItems` (id, picker, query, group; JSON array of `PickItem`; starts the plugin if needed; NotFound for an unknown plugin, Invalid for an undeclared picker, Unavailable with the plugin's own message), `PluginSecretKeys` (which declared secrets are set), `PluginSetSecret` / `PluginClearSecret` (write-only: also remove the key from `[plugins.<id>.settings]`). `GetSettings` shows every secret-kind plugin setting as `••••`; `ApplySettings` keeps the stored value for it, or drops the key when the secret has moved to the store |
 
-Signals: `DeviceStateChanged`, `PageChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
+Signals: `DeviceStateChanged`, `PageChanged`, `LiveKeysChanged`, `InputEvent`, `ProfilesChanged`, `SettingsChanged`,
 `ActionFailed`, `PluginsChanged`, and `PluginInstallProgress` (id, stage, bytes done, bytes total;
 stage is `preparing`, `downloading`, `checking` or `installing`).
 

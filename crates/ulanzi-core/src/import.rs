@@ -4,19 +4,17 @@
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use image::AnimationDecoder;
 use image::codecs::gif::GifDecoder;
+use image::{AnimationDecoder, ImageDecoder};
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 
-use crate::render::KEY_PX;
+use crate::render::{KEY_PX, MAX_SOURCE_BYTES, MAX_SOURCE_FRAMES, MAX_SOURCE_SIDE};
 
 /// Largest side accepted when importing (big photos are downscaled, not refused).
 const MAX_IMPORT_PX: u32 = 16_384;
 const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
-/// The most a key's GIF can weigh to start with.
-const MAX_GIF_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
@@ -24,6 +22,8 @@ pub enum ImportError {
     NotAnImage,
     #[error("That image is too large")]
     TooLarge,
+    #[error("That GIF is too big: a key can take up to 16 MB and 500 frames")]
+    GifTooBig,
     #[error("Couldn't read the file: {0}")]
     Read(#[from] std::io::Error),
     #[error("Couldn't save the image: {0}")]
@@ -48,15 +48,23 @@ fn read_head(src: &Path) -> Result<[u8; 4], ImportError> {
 
 /// A GIF is kept as it is, frames and all: the key draws from the file itself.
 fn import_gif(src: &Path, profile_dir: &Path) -> Result<String, ImportError> {
-    if std::fs::metadata(src)?.len() > MAX_GIF_BYTES {
-        return Err(ImportError::TooLarge);
+    if std::fs::metadata(src)?.len() > MAX_SOURCE_BYTES {
+        return Err(ImportError::GifTooBig);
     }
     let bytes = std::fs::read(src)?;
     let decoder = GifDecoder::new(Cursor::new(&bytes)).map_err(|_| ImportError::NotAnImage)?;
-    match decoder.into_frames().next() {
-        Some(Ok(_)) => store(profile_dir, &bytes, "gif"),
-        _ => Err(ImportError::NotAnImage),
+    let (w, h) = decoder.dimensions();
+    if w.max(h) > MAX_SOURCE_SIDE {
+        return Err(ImportError::TooLarge);
     }
+    let mut frames = decoder.into_frames();
+    if !matches!(frames.next(), Some(Ok(_))) {
+        return Err(ImportError::NotAnImage);
+    }
+    if frames.take(MAX_SOURCE_FRAMES).count() == MAX_SOURCE_FRAMES {
+        return Err(ImportError::GifTooBig);
+    }
+    store(profile_dir, &bytes, "gif")
 }
 
 /// Store `bytes` under `icons/`, named by their content.

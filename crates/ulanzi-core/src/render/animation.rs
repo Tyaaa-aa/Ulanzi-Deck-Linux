@@ -6,15 +6,16 @@ use std::path::{Path, PathBuf};
 
 use image::codecs::gif::{GifDecoder, GifEncoder, Repeat};
 use image::imageops::FilterType;
-use image::{AnimationDecoder, Delay, DynamicImage, Frame, RgbaImage};
+use image::{AnimationDecoder, Delay, DynamicImage, Frame, ImageDecoder, RgbaImage};
 
 use super::effects::{LOOP_FRAMES, draw_effect, frame_ms};
 use super::key::{KEY_PX, RenderCtx, key_image, look_hash};
 use crate::Color;
 use crate::model::{Effect, ImageSource, KeyLook};
 
-const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_SOURCE_FRAMES: usize = 500;
+pub(crate) const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_SOURCE_FRAMES: usize = 500;
+pub(crate) const MAX_SOURCE_SIDE: u32 = 4096;
 /// A frame time under this means "as fast as you like", which old GIFs ask for with 0.
 const MIN_DELAY_MS: u32 = 20;
 const NO_DELAY_MS: u32 = 100;
@@ -49,7 +50,12 @@ fn decoder(path: &Path) -> Result<GifDecoder<Cursor<Vec<u8>>>, String> {
         return Err("a GIF can be up to 16 MB".into());
     }
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    GifDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())
+    let decoder = GifDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let (w, h) = decoder.dimensions();
+    if w.max(h) > MAX_SOURCE_SIDE {
+        return Err(format!("a GIF can be up to {MAX_SOURCE_SIDE} pixels across"));
+    }
+    Ok(decoder)
 }
 
 fn read_gif(path: &Path) -> Result<Vec<(RgbaImage, u32)>, String> {

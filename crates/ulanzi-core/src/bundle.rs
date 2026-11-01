@@ -18,7 +18,7 @@ const FORMAT_NEWER_PARTS: u32 = 2;
 /// The highest format this version reads.
 pub const MAX_FORMAT: u32 = FORMAT_NEWER_PARTS;
 /// Largest total (uncompressed) size accepted.
-pub const MAX_TOTAL: u64 = 50 * 1024 * 1024;
+pub const MAX_TOTAL: u64 = 200 * 1024 * 1024;
 const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "svg"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,7 +70,7 @@ pub struct Bundle {
 pub enum BundleError {
     #[error("That file isn't an Ulanzi Deck profile file")]
     NotABundle,
-    #[error("That file is too large (over 50 MB)")]
+    #[error("That file is too large (over 200 MB)")]
     TooLarge,
     #[error("That file contains something it shouldn't: {0}")]
     UnsafePath(String),
@@ -200,6 +200,11 @@ pub fn export_with(
             }
         }
         out.push(BundleProfile { profile, icons });
+    }
+    // Import refuses it, so say so now and not when restoring a backup.
+    let size: usize = out.iter().flat_map(|p| &p.icons).map(|i| i.1.len()).sum();
+    if size as u64 > MAX_TOTAL {
+        return Err(BundleError::TooLarge);
     }
     let settings = if include_settings {
         let mut s = store.load_settings()?;

@@ -997,3 +997,38 @@ fn a_page_counts_its_moving_keys() {
     page.keys.insert(2, key);
     assert_eq!(page.moving_keys(), 2);
 }
+
+#[test]
+fn a_key_shows_the_live_state_the_service_reports() {
+    let yellow = Color::rgb(0xff, 0xc9, 0x4a);
+    let key = Key {
+        look: KeyLook {
+            states: vec![LookState {
+                when: When {
+                    value: "{ha.fan}".into(),
+                    is: vec!["on".into()],
+                    not: Vec::new(),
+                },
+                look: LookOverride {
+                    foreground: Some(yellow),
+                    effect: Some(Effect::of(EffectKind::Glow)),
+                    ..LookOverride::default()
+                },
+            }],
+            ..KeyLook::default()
+        },
+        ..Key::default()
+    };
+    let at = |state| LiveKey {
+        state,
+        ..LiveKey::default()
+    };
+    assert_eq!(key.shown_look().foreground, Color::WHITE);
+    assert_eq!(key.live_look(&at(Some(0))).foreground, yellow);
+    assert_eq!(key.live_look(&at(Some(0))).effect.kind, EffectKind::Glow);
+    assert_eq!(
+        key.live_look(&at(Some(4))).foreground,
+        Color::WHITE,
+        "a stale state"
+    );
+}

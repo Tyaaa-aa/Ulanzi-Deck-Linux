@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use ulanzi_core::model::{
-    Action, BrightnessOp, Macro, MacroLibrary, Model, Profile, Settings, is_plugin_secret,
+    Action, BrightnessOp, LiveKey, LiveKeys, Macro, MacroLibrary, Model, Profile, Settings, is_plugin_secret,
 };
 use ulanzi_core::store::{ProfileLoad, Store, parse_profile};
 
@@ -388,6 +388,11 @@ impl DeckService {
 
     async fn switch_profile(&self, id: String) -> Result<()> {
         self.send(DeckMsg::SwitchProfile(Self::id(&id)?)).await
+    }
+
+    /// Where the keys on the deck stand: profile, page, then each key's cycle step and live state.
+    async fn live_keys(&self) -> Result<LiveWire> {
+        Ok(live_wire(&self.snapshot().await?.live))
     }
 
     async fn set_page(&self, index: u32) -> Result<()> {
@@ -1196,6 +1201,16 @@ impl DeckService {
     #[zbus(signal)]
     async fn page_changed(e: &SignalEmitter<'_>, profile: &str, page: u32) -> zbus::Result<()>;
 
+    /// A key on the deck moved to another live state or cycle step.
+    #[zbus(signal)]
+    async fn live_keys_changed(
+        e: &SignalEmitter<'_>,
+        profile: &str,
+        page: u32,
+        steps: BTreeMap<u8, u32>,
+        states: BTreeMap<u8, u32>,
+    ) -> zbus::Result<()>;
+
     /// Settings changed outside the app (tray, deck keys): read them again.
     #[zbus(signal)]
     async fn settings_changed(e: &SignalEmitter<'_>) -> zbus::Result<()>;
@@ -1222,6 +1237,22 @@ impl DeckService {
 
     #[zbus(signal)]
     async fn action_failed(e: &SignalEmitter<'_>, control: &str, message: &str) -> zbus::Result<()>;
+}
+
+/// [`LiveKeys`] as D-Bus sends it.
+type LiveWire = (String, u32, BTreeMap<u8, u32>, BTreeMap<u8, u32>);
+
+fn live_wire(live: &LiveKeys) -> LiveWire {
+    let of = |f: fn(&LiveKey) -> Option<usize>| -> BTreeMap<u8, u32> {
+        let at = live.keys.iter();
+        at.filter_map(|(i, k)| Some((*i, f(k)? as u32))).collect()
+    };
+    (
+        live.profile.to_string(),
+        live.page as u32,
+        of(|k| k.step),
+        of(|k| k.state),
+    )
 }
 
 fn kind_name(k: InputKind) -> &'static str {
@@ -1285,6 +1316,10 @@ pub async fn forward_signals(conn: Connection, mut events: broadcast::Receiver<D
                 DeckService::action_failed(&emitter, &control, &message).await
             }
             DeckEvent::SettingsChanged => DeckService::settings_changed(&emitter).await,
+            DeckEvent::Live(live) => {
+                let (profile, page, steps, states) = live_wire(&live);
+                DeckService::live_keys_changed(&emitter, &profile, page, steps, states).await
+            }
         };
         if let Err(e) = r {
             tracing::debug!("signal not sent: {e}");

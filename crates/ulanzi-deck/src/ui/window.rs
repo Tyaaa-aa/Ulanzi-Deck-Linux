@@ -700,6 +700,7 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
                     state.notify(Change::Profiles);
                     state.notify(Change::Settings);
                     refresh_plugins(&state);
+                    fetch_live(&state);
                 }
                 Err(e) => {
                     tracing::warn!("{e}");
@@ -779,6 +780,7 @@ fn follow_events(state: &State, c: &Client) {
                 } => crate::ui::plugins_window::install_progress(&id, &stage, done, total),
                 ClientEvent::Reconnected => {
                     refresh_plugins(&state);
+                    fetch_live(&state);
                     let s = state.clone();
                     if let Some(c) = state.client.borrow().clone() {
                         runtime::run(async move { c.hello().await }, move |h| {
@@ -806,6 +808,7 @@ fn follow_events(state: &State, c: &Client) {
                     }
                 }
                 ClientEvent::Page { profile, .. } => open_profile(&state, profile, false),
+                ClientEvent::Live(live) => state.set_live(live),
                 ClientEvent::ProfilesChanged => {
                     let s = state.clone();
                     if let Some(c) = state.client.borrow().clone() {
@@ -838,6 +841,18 @@ fn follow_events(state: &State, c: &Client) {
             }
         }
     });
+}
+
+/// Ask the service where the keys stand, as nothing else says so after connecting.
+fn fetch_live(state: &State) {
+    if let Some(c) = state.client.borrow().clone() {
+        let state = state.clone();
+        runtime::run(async move { c.live_keys().await }, move |live| {
+            if let Ok(live) = live {
+                state.set_live(live);
+            }
+        });
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,8 @@ use std::path::Path;
 
 use ulanzi_core::Color;
 use ulanzi_core::model::{
-    Action, Effect, Feedback, ImageSource, Key, KeyLook, LookOverride, MediaControl, Profile, effect_for,
+    Action, Effect, Feedback, ImageSource, Key, KeyLook, LiveKey, LookOverride, MediaControl, Page, Profile,
+    effect_for,
 };
 use ulanzi_core::render::{
     GIF_TARGET, IconLibrary, RenderCtx, animation_hash, effect_color, encode_fit, is_animated, look_hash,
@@ -286,11 +287,7 @@ fn live_look(
     };
     if !states.is_empty() {
         let empty = toml::Table::new();
-        look = look.with_states(states, params_of(tap).unwrap_or(&empty), |t| {
-            // A value nobody published yet counts as empty.
-            let v = resolve_vars(t, vars);
-            if v.contains('{') { String::new() } else { v }
-        });
+        look = look.with_states(states, params_of(tap).unwrap_or(&empty), |t| state_value(t, vars));
     }
     if dynamic.playing == Some(true) && is_play_pause(tap) {
         swap_icon(&mut look, "play", "pause");
@@ -342,6 +339,38 @@ fn key_vars<'a>(
     } else {
         Cow::Borrowed(vars)
     }
+}
+
+/// What a live state compares. A value nobody published yet counts as empty.
+fn state_value(text: &str, vars: &BTreeMap<String, String>) -> String {
+    let v = resolve_vars(text, vars);
+    if v.contains('{') { String::new() } else { v }
+}
+
+/// Where the keys of `page` stand, for the app to show what the deck shows.
+pub fn live_keys(page: &Page, dynamic: &DynamicState) -> BTreeMap<u8, LiveKey> {
+    let vars = dynamic.label_vars();
+    let empty = toml::Table::new();
+    let mut live = BTreeMap::new();
+    for (i, key) in &page.keys {
+        let at = cycle_key(page.id, &format!("key:{i}"));
+        let step = match &key.tap {
+            Some(Action::Cycle { steps, show }) if !steps.is_empty() => {
+                let next = dynamic.cycles.get(&at).copied().unwrap_or(0);
+                Some(show.step(next, steps.len()))
+            }
+            _ => None,
+        };
+        let vars = key_vars(key, dynamic.macros.get(&at), &vars);
+        let params = params_of(&key.tap).unwrap_or(&empty);
+        let state = key
+            .look
+            .matching_state(&key.live_states(), params, |t| state_value(t, &vars));
+        if step.is_some() || state.is_some() {
+            live.insert(*i, LiveKey { step, state });
+        }
+    }
+    live
 }
 
 /// The look `key` shows now, with its parameters filled in.
@@ -586,7 +615,10 @@ pub fn build_page(
     entries.insert(SCREEN_INDEX, screen);
     cache.images.retain(|lh, _| used.contains(lh));
     cache.warned.retain(|lh| used.contains(lh));
-    cache.moves.retain(|lh, _| used.contains(lh));
+    // Not by `used`: these hashes leave out the label the deck draws.
+    if cache.moves.len() > MAX_TRIED {
+        cache.moves.clear();
+    }
     BuiltPage {
         entries,
         images,
@@ -626,6 +658,47 @@ pub fn with_fresh_names(
         })
         .collect();
     (entries, out_images)
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use ulanzi_core::model::{LookState, When};
+
+    #[test]
+    fn the_app_hears_which_state_and_step_a_key_is_on() {
+        let on = LookState {
+            when: When {
+                value: "{ha.fan}".into(),
+                is: vec!["on".into()],
+                not: Vec::new(),
+            },
+            look: LookOverride::default(),
+        };
+        let mut page = Page::new("P");
+        let mut fan = Key::default();
+        fan.look.states = vec![on];
+        page.keys.insert(5, fan);
+        let step = ulanzi_core::model::CycleStep {
+            action: Action::Back,
+            look: LookOverride::default(),
+        };
+        let cycle = Key {
+            tap: Some(Action::Cycle {
+                steps: vec![step.clone(), step],
+                show: ulanzi_core::model::CycleShows::Next,
+            }),
+            ..Key::default()
+        };
+        page.keys.insert(6, cycle);
+        let mut d = DynamicState::default();
+        d.cycles.insert(cycle_key(page.id, "key:6"), 1);
+        assert_eq!(live_keys(&page, &d).get(&5), None, "nothing published yet");
+        d.set_plugin_var("ha", "fan", "on".into());
+        let live = live_keys(&page, &d);
+        assert_eq!(live[&5].state, Some(0));
+        assert_eq!(live[&6].step, Some(1));
+    }
 }
 
 #[cfg(test)]
@@ -745,6 +818,22 @@ mod tests {
             },
         );
         p
+    }
+
+    #[test]
+    fn a_gif_is_read_once_however_many_times_the_page_is_built() {
+        let mut p = profile();
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.source = ImageSource::Image {
+            path: "icons/a.gif".into(),
+        };
+        key.look.label.text = "Label".into();
+        let mut cache = RenderCache::default();
+        let d = DynamicState::default();
+        for _ in 0..2 {
+            build_page(&p, 0, &ctx(), &d, &mut cache);
+        }
+        assert_eq!(cache.moves.len(), 1);
     }
 
     #[test]

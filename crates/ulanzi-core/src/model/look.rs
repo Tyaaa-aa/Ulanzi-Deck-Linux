@@ -213,21 +213,30 @@ impl KeyLook {
         resolve: impl Fn(&str) -> String,
     ) -> KeyLook {
         let mut look = self.clone();
-        if !self.dynamic {
-            return look;
+        if let Some(at) = self.matching_state(states, params, resolve) {
+            states[at].look.apply(&mut look);
         }
-        let holds = |st: &&LookState| {
+        look
+    }
+
+    /// Which of `states` [`KeyLook::with_states`] puts in, if any.
+    pub fn matching_state(
+        &self,
+        states: &[LookState],
+        params: &toml::Table,
+        resolve: impl Fn(&str) -> String,
+    ) -> Option<usize> {
+        if !self.dynamic {
+            return None;
+        }
+        states.iter().position(|st| {
             let when = When {
                 value: fill_params(&st.when.value, params),
                 is: st.when.is.iter().map(|v| fill_params(v, params)).collect(),
                 not: st.when.not.iter().map(|v| fill_params(v, params)).collect(),
             };
             when.holds(&resolve(&when.value))
-        };
-        if let Some(st) = states.iter().find(holds) {
-            st.look.apply(&mut look);
-        }
-        look
+        })
     }
 }
 

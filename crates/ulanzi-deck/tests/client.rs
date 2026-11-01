@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ulanzi_core::model::{Model, Page, Profile, Settings};
+use ulanzi_core::model::{Action, CycleShows, CycleStep, Key, LookOverride, Model, Page, Profile, Settings};
 use ulanzi_core::store::Store;
 use ulanzi_deck::client::{Client, ClientError, ClientEvent, ImportChoice};
 use ulanzi_deckd::actions::Executor;
@@ -157,6 +157,32 @@ async fn switching_to_a_page_just_added_waits_for_its_save() {
     c.apply(p);
     c.set_page(at).await.expect("set page");
     assert_eq!(c.hello().await.expect("hello").active_page, at);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_app_hears_where_a_cycling_key_stands() {
+    let Some(r) = rig().await else { return };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    let mut p = c.profile(r.profile.id).await.expect("profile");
+    let step = CycleStep {
+        action: Action::Back,
+        look: LookOverride::default(),
+    };
+    p.pages[0].keys.insert(
+        3,
+        Key {
+            tap: Some(Action::Cycle {
+                steps: vec![step.clone(), step],
+                show: CycleShows::Last,
+            }),
+            ..Key::default()
+        },
+    );
+    c.apply(p);
+    c.flush().await;
+    let live = c.live_keys().await.expect("live");
+    assert_eq!((live.profile, live.page), (r.profile.id, 0));
+    assert_eq!(live.keys[&3].step, Some(1), "the last of two steps");
 }
 
 #[tokio::test(flavor = "multi_thread")]

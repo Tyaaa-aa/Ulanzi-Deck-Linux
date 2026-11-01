@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use tokio::sync::{Notify, broadcast};
-use ulanzi_core::model::{Macro, MacroLibrary, Profile, Settings};
+use ulanzi_core::model::{LiveKey, LiveKeys, Macro, MacroLibrary, Profile, Settings};
 use ulanzi_core::plugin::{Inspected, Manifest, PickItem};
 use ulanzi_core::store::{parse_profile, profile_to_toml};
 use ulanzi_core::update::UpdateStatus;
@@ -106,6 +106,24 @@ pub struct Hello {
     pub active_page: u32,
 }
 
+/// [`LiveKeys`] as D-Bus sends it: profile, page, cycle steps and live states.
+type LiveWire = (String, u32, BTreeMap<u8, u32>, BTreeMap<u8, u32>);
+
+fn live_keys((profile, page, steps, states): LiveWire) -> Option<LiveKeys> {
+    let mut keys: BTreeMap<u8, LiveKey> = BTreeMap::new();
+    for (i, at) in steps {
+        keys.entry(i).or_default().step = Some(at as usize);
+    }
+    for (i, at) in states {
+        keys.entry(i).or_default().state = Some(at as usize);
+    }
+    Some(LiveKeys {
+        profile: Uuid::parse_str(&profile).ok()?,
+        page: page as usize,
+        keys,
+    })
+}
+
 /// Things the GUI reacts to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClientEvent {
@@ -125,6 +143,8 @@ pub enum ClientEvent {
         control: String,
         message: String,
     },
+    /// A key on the deck moved to another live state or cycle step.
+    Live(LiveKeys),
     ProfilesChanged,
     /// Settings changed outside the app.
     SettingsChanged,
@@ -706,6 +726,12 @@ impl Client {
             .await?)
     }
 
+    /// Where the keys on the deck stand.
+    pub async fn live_keys(&self) -> Result<LiveKeys> {
+        let wire: LiveWire = self.inner.proxy.call("LiveKeys", &()).await?;
+        live_keys(wire).ok_or_else(|| ClientError::Protocol("bad live keys".into()))
+    }
+
     /// Show a page on the deck. Any queued save goes first, as the page may be one it adds.
     pub async fn set_page(&self, index: u32) -> Result<()> {
         self.flush().await;
@@ -858,6 +884,11 @@ impl Client {
                             .ok()
                             .map(|profile| ClientEvent::Page { profile, page })
                     }),
+                    "LiveKeysChanged" => body
+                        .deserialize::<LiveWire>()
+                        .ok()
+                        .and_then(live_keys)
+                        .map(ClientEvent::Live),
                     "ProfilesChanged" => Some(ClientEvent::ProfilesChanged),
                     "SettingsChanged" => Some(ClientEvent::SettingsChanged),
                     "PluginsChanged" => Some(ClientEvent::PluginsChanged),

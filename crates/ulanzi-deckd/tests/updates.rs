@@ -301,6 +301,10 @@ fn an_unwritable_folder_reports_it() {
     std::fs::write(&target, b"old").expect("write");
     std::fs::write(&new, b"new").expect("write");
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    // Root writes anywhere, and CI runs as root.
+    if std::fs::write(dir.join("probe"), b"").is_ok() {
+        return;
+    }
     let r = download::swap_appimage(&new, &target);
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     assert_eq!(r, Err(UpdateError::NotWritable));

@@ -483,21 +483,29 @@ pub fn animate(
     });
 }
 
-/// Whether a key's GIF lost frames on its way to the deck.
-pub fn lost_frames(look: &KeyLook, dir: &std::path::Path, done: impl FnOnce(bool) + 'static) {
+/// A word about a key's GIF, if the deck can't play all of it.
+fn gif_note(look: &KeyLook, dir: &std::path::Path) -> Option<String> {
+    let ctx = RenderCtx {
+        profile_dir: dir,
+        icons: IconLibrary::bundled(),
+    };
+    match render_animation(look, &look.effect, None, &ctx) {
+        Ok(a) if encode_fit(&a, GIF_TARGET).lost_frames => {
+            Some("This GIF was shortened to fit the deck".into())
+        }
+        Ok(_) => None,
+        Err(e) => Some(format!("This GIF won't play: {e}")),
+    }
+}
+
+/// [`gif_note`] off the main thread.
+pub fn find_gif_note(look: &KeyLook, dir: &std::path::Path, done: impl FnOnce(Option<String>) + 'static) {
     let (look, dir) = (look.clone(), dir.to_path_buf());
     crate::runtime::run(
         async move {
-            tokio::task::spawn_blocking(move || {
-                let ctx = RenderCtx {
-                    profile_dir: &dir,
-                    icons: IconLibrary::bundled(),
-                };
-                render_animation(&look, &look.effect, None, &ctx)
-                    .is_ok_and(|a| encode_fit(&a, GIF_TARGET).lost_frames)
-            })
-            .await
-            .unwrap_or(false)
+            tokio::task::spawn_blocking(move || gif_note(&look, &dir))
+                .await
+                .unwrap_or(None)
         },
         done,
     );
@@ -1064,6 +1072,7 @@ pub fn build(state: &State) -> Canvas {
             | Change::Preview
             | Change::Plugins
             | Change::Macros
+            | Change::Live
             | Change::Profiles => {
                 let dir = profile_dir(&state);
                 let hide = state.settings.borrow().hide_labels;
@@ -1090,7 +1099,12 @@ pub fn build(state: &State) -> Canvas {
                     };
                     match key {
                         Some(key) => {
-                            let mut shown = key.shown_look();
+                            // A hovered colour goes on the key's own look, not a live state's.
+                            let mut shown = if previewed.is_some() {
+                                key.shown_look()
+                            } else {
+                                state.live_look(i as u8, key)
+                            };
                             shown.label.text = state
                                 .plugins
                                 .borrow()
@@ -1311,6 +1325,18 @@ fn key_menu() -> gio::Menu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gif_that_cant_play_says_why() {
+        let look = KeyLook {
+            source: ulanzi_core::model::ImageSource::Image {
+                path: "missing.gif".into(),
+            },
+            ..KeyLook::default()
+        };
+        let note = gif_note(&look, std::path::Path::new("/nonexistent"));
+        assert!(note.is_some_and(|n| n.starts_with("This GIF won't play")));
+    }
 
     #[test]
     fn a_note_appears_once_a_page_has_many_moving_keys() {
