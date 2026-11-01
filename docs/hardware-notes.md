@@ -73,8 +73,17 @@ Measured on 2026-10-31 with `ulanzictl probe gif`.
   host traffic, in both a full-page upload and a partial update (0x000d).
 * **The file name decides.** The same GIF under a `.png` name left the key blank, so the deck goes by
   the extension, not the content.
-* Two GIFs of about 7.5 KB each ran side by side. Thirteen at once, large files and labels over a GIF
-  are untested.
+* Thirteen ran at once (`ulanzictl probe gif-limits`, 2026-11-01), at 74 KB in all and at 2.7 MB in
+  all, with no reboot. The last key looked the choppiest both times.
+* **One GIF can't go over about 300 KB.** Files of 265 KB and less played; files of 357 KB and more
+  showed the deck's yellow question mark, alone or among others, with no reboot. Frame count, frame
+  time and encoder speed made no difference (`ulanzictl probe fire-variants`, 2026-11-01). Fewer
+  colours is the way to keep the frames: 24 frames of Fire fell from 397 KB to 123 KB and played.
+* The deck ignores a GIF's loop count: a one-shot fade started over at its end (`ulanzictl probe fade`,
+  2026-11-01), so anything that plays once needs the app to swap it out in time.
+* Swapping a key's GIF usually took under 100 ms to write. A few writes stalled for 0.4 to 1 s: about
+  1 in 10 with one upload per press, about 1 in 3 with a fade and a loop per press.
+* The deck's own label (`text` in the manifest) shows over a GIF, and the GIF keeps playing.
 * One key took 72 partial updates of a 1.3 KB PNG back to back at 30 updates a second, with no gap, no
   blinking and no glitches. Bigger pictures take longer: this is a best case, not a frame rate to
   count on.
