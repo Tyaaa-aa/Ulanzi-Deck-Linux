@@ -1,9 +1,11 @@
 //! Bringing the user's own pictures into a profile: decoded with limits, sized for a key and stored
 //! under the profile's `icons/` directory by content hash.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
+use image::AnimationDecoder;
+use image::codecs::gif::GifDecoder;
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 
@@ -13,6 +15,8 @@ use crate::render::KEY_PX;
 const MAX_IMPORT_PX: u32 = 16_384;
 const MAX_IMPORT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// The most a key's GIF can weigh to start with.
+const MAX_GIF_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
@@ -28,7 +32,44 @@ pub enum ImportError {
 
 /// Import `src` into `profile_dir`, returning the path to store in the profile (relative to it).
 pub fn import_image(src: &Path, profile_dir: &Path) -> Result<String, ImportError> {
+    let head = read_head(src)?;
+    if head.starts_with(b"GIF8") {
+        return import_gif(src, profile_dir);
+    }
     import_sized(src, profile_dir, (KEY_PX, KEY_PX))
+}
+
+fn read_head(src: &Path) -> Result<[u8; 4], ImportError> {
+    let mut head = [0; 4];
+    let read = std::fs::File::open(src)?.read(&mut head)?;
+    head[read..].fill(0);
+    Ok(head)
+}
+
+/// A GIF is kept as it is, frames and all: the key draws from the file itself.
+fn import_gif(src: &Path, profile_dir: &Path) -> Result<String, ImportError> {
+    if std::fs::metadata(src)?.len() > MAX_GIF_BYTES {
+        return Err(ImportError::TooLarge);
+    }
+    let bytes = std::fs::read(src)?;
+    let decoder = GifDecoder::new(Cursor::new(&bytes)).map_err(|_| ImportError::NotAnImage)?;
+    match decoder.into_frames().next() {
+        Some(Ok(_)) => store(profile_dir, &bytes, "gif"),
+        _ => Err(ImportError::NotAnImage),
+    }
+}
+
+/// Store `bytes` under `icons/`, named by their content.
+fn store(profile_dir: &Path, bytes: &[u8], ext: &str) -> Result<String, ImportError> {
+    let rel = format!("icons/{:016x}.{ext}", fnv1a(bytes));
+    let dest = profile_dir.join(&rel);
+    if !dest.exists() {
+        std::fs::create_dir_all(profile_dir.join("icons"))?;
+        let tmp = dest.with_extension(format!("{ext}.tmp"));
+        std::fs::write(&tmp, bytes)?;
+        std::fs::rename(&tmp, &dest)?;
+    }
+    Ok(rel)
 }
 
 /// Size of pictures for the wide screen (twice its 458×196, so they stay sharp in the app too).
@@ -55,16 +96,7 @@ fn import_sized(src: &Path, profile_dir: &Path, (w, h): (u32, u32)) -> Result<St
     let mut png = Cursor::new(Vec::new());
     img.write_to(&mut png, image::ImageFormat::Png)
         .map_err(|e| ImportError::Save(e.to_string()))?;
-    let png = png.into_inner();
-    let rel = format!("icons/{:016x}.png", fnv1a(&png));
-    let dest = profile_dir.join(&rel);
-    if !dest.exists() {
-        std::fs::create_dir_all(profile_dir.join("icons"))?;
-        let tmp = dest.with_extension("png.tmp");
-        std::fs::write(&tmp, &png)?;
-        std::fs::rename(&tmp, &dest)?;
-    }
-    Ok(rel)
+    store(profile_dir, &png.into_inner(), "png")
 }
 
 fn decode_raster(bytes: &[u8], (w, h): (u32, u32)) -> Result<image::RgbaImage, ImportError> {

@@ -58,3 +58,67 @@ fn screen_pictures_are_screen_sized() {
     let saved = image::open(profile.join(&rel)).expect("open");
     assert_eq!((saved.width(), saved.height()), (916, 392));
 }
+
+fn gif(frames: u32) -> Vec<u8> {
+    use image::codecs::gif::{GifEncoder, Repeat};
+    use image::{Delay, Frame, Rgba, RgbaImage};
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new(&mut out);
+        enc.set_repeat(Repeat::Infinite).expect("test setup");
+        for f in 0..frames {
+            let img = RgbaImage::from_pixel(32, 32, Rgba([f as u8 * 40, 30, 30, 255]));
+            let frame = Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1));
+            enc.encode_frame(frame).expect("test setup");
+        }
+    }
+    out
+}
+
+#[test]
+fn a_gif_stays_a_gif() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let src = dir.path().join("moving.gif");
+    let bytes = gif(3);
+    std::fs::write(&src, &bytes).expect("test setup");
+    let rel = import_image(&src, dir.path()).expect("imports");
+    assert!(rel.starts_with("icons/") && rel.ends_with(".gif"), "{rel}");
+    assert_eq!(std::fs::read(dir.path().join(&rel)).expect("copied"), bytes);
+}
+
+#[test]
+fn a_gif_is_told_by_its_content_not_its_name() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let src = dir.path().join("really.png");
+    std::fs::write(&src, gif(2)).expect("test setup");
+    assert!(import_image(&src, dir.path()).expect("imports").ends_with(".gif"));
+    let fake = dir.path().join("fake.gif");
+    std::fs::write(&fake, png(8, 8)).expect("test setup");
+    assert!(
+        import_image(&fake, dir.path())
+            .expect("imports")
+            .ends_with(".png")
+    );
+}
+
+#[test]
+fn a_broken_gif_is_refused() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let src = dir.path().join("cut.gif");
+    let whole = gif(2);
+    std::fs::write(&src, &whole[..20]).expect("test setup");
+    assert!(import_image(&src, dir.path()).is_err());
+}
+
+#[test]
+fn a_gif_too_big_to_play_is_refused() {
+    let dir = tempfile::tempdir().expect("test setup");
+    let src = dir.path().join("huge.gif");
+    let mut bytes = gif(2);
+    bytes.resize(16 * 1024 * 1024 + 1, 0);
+    std::fs::write(&src, &bytes).expect("test setup");
+    assert!(matches!(
+        import_image(&src, dir.path()),
+        Err(ImportError::TooLarge)
+    ));
+}
