@@ -244,6 +244,7 @@ fn bundles_list_the_commands_they_would_run() {
             created: String::new(),
             includes_settings: false,
             min_app: None,
+            looks: Default::default(),
             profiles: vec![],
         },
         profiles: vec![ulanzi_core::bundle::BundleProfile {
@@ -340,4 +341,31 @@ fn commands_inside_foreign_keys_are_shown_before_import() {
     s.save_profile(&p).expect("save");
     let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
     assert!(ulanzi_core::bundle::commands(&b).contains(&"rm x".to_string()));
+}
+
+#[test]
+fn a_profiles_look_travels_with_it() {
+    let a = tempfile::tempdir().expect("dir");
+    let source = store(a.path());
+    let p = profile_with_icon(&source, "Looks");
+    let look = ProfileLook {
+        source: Some(ImageSource::Image {
+            path: "icons/a.png".into(),
+        }),
+        color: Some(ulanzi_core::Color::rgb(9, 8, 7)),
+        from_app: None,
+    };
+    source.save_profile_look(p.id, &look).expect("save");
+    let bytes = export(&source, &[p.id], false).expect("export");
+    let b = tempfile::tempdir().expect("dir");
+    let target = store(b.path());
+    let bundle = read(&bytes).expect("read");
+    let opts = ImportOptions {
+        conflict: Conflict::KeepBoth,
+        keep_rules: true,
+        settings: false,
+        device: None,
+    };
+    import(&target, &bundle, &opts).expect("import");
+    assert_eq!(target.profile_look(p.id), look);
 }

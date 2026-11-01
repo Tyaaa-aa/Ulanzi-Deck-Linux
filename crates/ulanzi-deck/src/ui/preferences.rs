@@ -299,6 +299,7 @@ fn device_page(state: &State) -> adw::PreferencesPage {
             change(&state, |s| s.sleep_brightness = v)
         });
     }
+    dim.add_css_class("dependent-row");
     display.add(&dim);
     let overlay = adw::SwitchRow::builder()
         .title("Show Volume Changes")

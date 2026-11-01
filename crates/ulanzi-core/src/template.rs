@@ -90,6 +90,7 @@ pub fn instantiate(t: &Template) -> Result<Bundle, BundleError> {
                     created: String::new(),
                     includes_settings: false,
                     min_app: None,
+                    looks: Default::default(),
                     profiles: vec![ManifestProfile {
                         id: p.id,
                         name: p.name.clone(),

@@ -98,23 +98,29 @@ fn kind_names() -> Vec<&'static str> {
     KINDS.iter().map(|k| k.1).collect()
 }
 
-/// Colour and Speed for `effect`; `send` gets the whole effect after each change.
-fn options(out: &mut Vec<gtk::Widget>, value: Rc<Cell<Effect>>, send: Rc<dyn Fn(Effect, bool)>) {
+/// The colour on the effect's own row, then a Speed row under it. `send` gets the whole effect after
+/// each change.
+fn options(
+    out: &mut Vec<gtk::Widget>,
+    row: &adw::ComboRow,
+    value: Rc<Cell<Effect>>,
+    send: Rc<dyn Fn(Effect, bool)>,
+) {
     let effect = value.get();
     if !shows_options(effect.kind) {
         return;
     }
-    let color = adw::ActionRow::builder().title("Colour").build();
-    let describe = |e: &Effect| e.color.map_or("Automatic".to_string(), |c| c.to_string());
-    color.set_subtitle(&describe(&effect));
+    let describe = |e: &Effect| e.color.map_or("Automatic colour".to_string(), |c| c.to_string());
+    row.set_subtitle(&describe(&effect));
     let automatic = gtk::Button::builder()
-        .label("Automatic")
+        .icon_name("edit-undo-symbolic")
+        .tooltip_text("Back to the automatic colour")
         .css_classes(["flat"])
         .valign(gtk::Align::Center)
         .visible(effect.color.is_some())
         .build();
     let button = {
-        let (value, send, row, automatic) = (value.clone(), send.clone(), color.clone(), automatic.clone());
+        let (value, send, row, automatic) = (value.clone(), send.clone(), row.clone(), automatic.clone());
         color_button(
             effect.color,
             |_| {},
@@ -141,13 +147,13 @@ fn options(out: &mut Vec<gtk::Widget>, value: Rc<Cell<Effect>>, send: Rc<dyn Fn(
             send(e, true);
         });
     }
-    color.add_suffix(&automatic);
-    color.add_suffix(&button);
-    out.push(color.upcast());
+    row.add_suffix(&automatic);
+    row.add_suffix(&button);
 
     let names: Vec<&str> = SPEEDS.iter().map(|s| s.1).collect();
     let at = SPEEDS.iter().position(|s| s.0 == effect.speed).unwrap_or(1) as u32;
     let speed = combo("Speed", &names, at, false);
+    speed.add_css_class("dependent-row");
     speed.connect_selected_notify(move |r| {
         let e = Effect {
             speed: SPEEDS
@@ -159,6 +165,32 @@ fn options(out: &mut Vec<gtk::Widget>, value: Rc<Cell<Effect>>, send: Rc<dyn Fn(
         send(e, false);
     });
     out.push(speed.upcast());
+}
+
+/// One line on what the effects are, for the section while it is closed.
+pub fn summary(view: &View) -> String {
+    let name = |kind| KINDS.iter().find(|k| k.0 == kind).map_or("None", |k| k.1);
+    let resting = match view.resting {
+        Mixed::One(e) if !e.is_none() => Some(format!("{} at rest", name(e.kind))),
+        Mixed::Mixed => Some("Mixed".to_string()),
+        _ => None,
+    };
+    let live = view
+        .states
+        .iter()
+        .any(|s| s.1.is_some())
+        .then(|| "By state".to_string());
+    let pressed = match view.pressed {
+        Mixed::One(PressedEffect::Default) => Some("Pulse when pressed".to_string()),
+        Mixed::One(PressedEffect::Own(e)) if !e.is_none() => Some(format!("{} when pressed", name(e.kind))),
+        _ => None,
+    };
+    let parts: Vec<String> = [live.or(resting), pressed].into_iter().flatten().collect();
+    if parts.is_empty() {
+        "None".to_string()
+    } else {
+        parts.join(", ")
+    }
 }
 
 fn effect_row(
@@ -190,8 +222,8 @@ fn effect_row(
             )
         });
     }
-    out.push(row.upcast());
-    options(out, value, send);
+    out.push(row.clone().upcast());
+    options(out, &row, value, send);
 }
 
 /// A live state's effect: its own, or whatever Otherwise says.
@@ -216,9 +248,9 @@ fn state_row(
             send(chosen, true);
         });
     }
-    out.push(row.upcast());
+    out.push(row.clone().upcast());
     if effect.is_some() {
-        options(out, value, Rc::new(move |e, again| send(Some(e), again)));
+        options(out, &row, value, Rc::new(move |e, again| send(Some(e), again)));
     }
 }
 
@@ -282,11 +314,11 @@ pub fn rows(view: View, commit: Rc<dyn Fn(Edit, bool)>) -> Vec<gtk::Widget> {
             commit(Edit::Pressed(chosen), true);
         });
     }
-    out.push(row.upcast());
+    out.push(row.clone().upcast());
     if matches!(shown, PressedEffect::Own(_)) {
         let send: Rc<dyn Fn(Effect, bool)> =
             Rc::new(move |e, again| commit(Edit::Pressed(PressedEffect::Own(e)), again));
-        options(&mut out, value, send);
+        options(&mut out, &row, value, send);
     }
     out
 }
@@ -359,6 +391,22 @@ mod tests {
     }
 
     #[test]
+    fn the_summary_says_what_a_key_does() {
+        assert_eq!(summary(&view()), "Pulse when pressed");
+        let v = View {
+            resting: Mixed::One(Effect::of(EffectKind::Fire)),
+            pressed: Mixed::One(PressedEffect::Own(Effect::default())),
+            ..view()
+        };
+        assert_eq!(summary(&v), "Fire at rest");
+        let v = View {
+            pressed: Mixed::One(PressedEffect::Own(Effect::default())),
+            ..view()
+        };
+        assert_eq!(summary(&v), "None");
+    }
+
+    #[test]
     fn a_plain_key_has_two_rows() {
         crate::ui::with_gtk(|| assert_eq!(titles(view()), ["Effect", "When Pressed"]));
     }
@@ -370,7 +418,7 @@ mod tests {
                 resting: Mixed::One(Effect::of(EffectKind::Fire)),
                 ..view()
             };
-            assert_eq!(titles(v), ["Effect", "Colour", "Speed", "When Pressed"]);
+            assert_eq!(titles(v), ["Effect", "Speed", "When Pressed"]);
         });
     }
 
@@ -427,7 +475,7 @@ mod tests {
                 let seen = seen.clone();
                 rows(v, Rc::new(move |e, _| seen.set(Some(e))))
             };
-            list[2]
+            list[1]
                 .downcast_ref::<adw::ComboRow>()
                 .expect("speed")
                 .set_selected(2);

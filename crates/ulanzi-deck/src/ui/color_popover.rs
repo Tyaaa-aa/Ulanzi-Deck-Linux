@@ -146,7 +146,11 @@ fn change_saved(f: impl FnOnce(&mut Settings)) {
 }
 
 /// A swatch that previews on hover and applies on click.
-fn swatch_button(c: Color, preview: &Rc<dyn Fn(Option<Color>)>, apply: &Rc<dyn Fn(Color)>) -> gtk::Button {
+pub fn swatch_button(
+    c: Color,
+    preview: &Rc<dyn Fn(Option<Color>)>,
+    apply: &Rc<dyn Fn(Color)>,
+) -> gtk::Button {
     let (area, v) = swatch(26);
     v.set(Some(c));
     let b = gtk::Button::builder()
@@ -172,21 +176,20 @@ fn swatch_button(c: Color, preview: &Rc<dyn Fn(Option<Color>)>, apply: &Rc<dyn F
 /// Show the saved colours, each with a small remove button on its top corner.
 fn fill_saved(
     row: &gtk::Grid,
-    save: &gtk::Button,
     preview: &Rc<dyn Fn(Option<Color>)>,
     apply: &Rc<dyn Fn(Color)>,
     refill: Option<Rc<dyn Fn()>>,
-) {
+) -> Vec<(Color, gtk::Button)> {
     while let Some(child) = row.first_child() {
         row.remove(&child);
     }
     let colors = saved_colors();
-    save.set_sensitive(colors.len() < MAX_SAVED_COLORS);
     row.set_visible(!colors.is_empty());
+    let mut buttons = Vec::new();
     for (i, c) in colors.into_iter().enumerate() {
-        let overlay = gtk::Overlay::builder()
-            .child(&swatch_button(c, preview, apply))
-            .build();
+        let swatch = swatch_button(c, preview, apply);
+        buttons.push((c, swatch.clone()));
+        let overlay = gtk::Overlay::builder().child(&swatch).build();
         let remove = gtk::Button::builder()
             .icon_name("window-close-symbolic")
             .css_classes(["circular", "osd", "saved-colour-remove"])
@@ -204,6 +207,12 @@ fn fill_saved(
         overlay.add_overlay(&remove);
         row.attach(&overlay, (i % 8) as i32, (i / 8) as i32, 1, 1);
     }
+    buttons
+}
+
+/// Whether `current` can go in the saved colours: it isn't among the `known` swatches and there's room.
+fn can_save(known: &[Color], saved: usize, current: Option<Color>) -> bool {
+    current.is_some_and(|c| !known.contains(&c)) && saved < MAX_SAVED_COLORS
 }
 
 /// A colour button. `preview(Some(c))` while a swatch is hovered, `preview(None)` when it is left;
@@ -222,13 +231,18 @@ pub fn color_button(
         .build();
     let preview: Rc<dyn Fn(Option<Color>)> = Rc::new(preview);
     let pick: Rc<dyn Fn(Color)> = Rc::new(pick);
+    // Marks the swatch for the current colour and says whether it can be saved.
+    let sync: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
     // Applying also updates the button's own face.
     let apply: Rc<dyn Fn(Color)> = {
-        let (face, face_value, pick) = (face.clone(), face_value.clone(), pick.clone());
+        let (face, face_value, pick, sync) = (face.clone(), face_value.clone(), pick.clone(), sync.clone());
         Rc::new(move |c| {
             face_value.set(Some(c));
             face.queue_draw();
             pick(c);
+            if let Some(sync) = sync.borrow().upgrade() {
+                sync();
+            }
         })
     };
 
@@ -238,9 +252,11 @@ pub fn color_button(
     column.set_margin_start(6);
     column.set_margin_end(6);
     let grid = gtk::Grid::builder().row_spacing(6).column_spacing(6).build();
+    let built_in: Rc<RefCell<Vec<(Color, gtk::Button)>>> = Rc::default();
     for (i, hex) in PALETTE.iter().enumerate() {
         let Ok(c) = hex.parse::<Color>() else { continue };
         let b = swatch_button(c, &preview, &apply);
+        built_in.borrow_mut().push((c, b.clone()));
         grid.attach(&b, (i % 8) as i32, (i / 8) as i32, 1, 1);
     }
     column.append(&grid);
@@ -276,15 +292,47 @@ pub fn color_button(
     row.append(&save);
     row.append(&custom);
     column.append(&row);
+    let saved_buttons: Rc<RefCell<Vec<(Color, gtk::Button)>>> = Rc::default();
+    let update_marks: Rc<dyn Fn()> = {
+        let (built_in, saved_buttons, save, face_value) = (
+            built_in.clone(),
+            saved_buttons.clone(),
+            save.clone(),
+            face_value.clone(),
+        );
+        Rc::new(move || {
+            let current = face_value.get();
+            for (c, b) in built_in.borrow().iter().chain(saved_buttons.borrow().iter()) {
+                if current == Some(*c) {
+                    b.add_css_class("swatch-current");
+                } else {
+                    b.remove_css_class("swatch-current");
+                }
+            }
+            let known = built_in
+                .borrow()
+                .iter()
+                .map(|b| b.0)
+                .chain(saved_colors())
+                .collect::<Vec<_>>();
+            save.set_sensitive(can_save(&known, saved_colors().len(), current));
+        })
+    };
+    *sync.borrow_mut() = Rc::downgrade(&update_marks);
     let refill: Rc<dyn Fn()> = {
-        let (saved_row, save, preview, apply) =
-            (saved_row.clone(), save.clone(), preview.clone(), apply.clone());
+        let (saved_row, preview, apply, update_marks) = (
+            saved_row.clone(),
+            preview.clone(),
+            apply.clone(),
+            update_marks.clone(),
+        );
         let this: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
         let refill: Rc<dyn Fn()> = {
             let this = this.clone();
             Rc::new(move || {
                 let again = this.borrow().upgrade();
-                fill_saved(&saved_row, &save, &preview, &apply, again);
+                *saved_buttons.borrow_mut() = fill_saved(&saved_row, &preview, &apply, again);
+                update_marks();
             })
         };
         *this.borrow_mut() = Rc::downgrade(&refill);
@@ -451,6 +499,15 @@ pub fn color_button(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_new_colour_can_be_saved() {
+        let (a, b) = (Color::rgb(1, 2, 3), Color::rgb(4, 5, 6));
+        assert!(can_save(&[a], 1, Some(b)));
+        assert!(!can_save(&[a], 1, Some(a)), "already there");
+        assert!(!can_save(&[a], 1, None));
+        assert!(!can_save(&[a], MAX_SAVED_COLORS, Some(b)), "full");
+    }
 
     #[test]
     fn hsv_round_trips() {

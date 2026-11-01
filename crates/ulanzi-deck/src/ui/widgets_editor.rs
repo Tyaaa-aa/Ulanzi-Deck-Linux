@@ -1049,7 +1049,10 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
     match background.clone() {
         Background::Theme => {}
         Background::Solid { color } => {
-            let row = adw::ActionRow::builder().title("Colour").build();
+            let row = adw::ActionRow::builder()
+                .title("Colour")
+                .css_classes(["dependent-row"])
+                .build();
             let e = edit.clone();
             row.add_suffix(&color_button(
                 Some(color),
@@ -1059,7 +1062,10 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
             look.add(&row);
         }
         Background::Gradient { from, to } => {
-            let row_from = adw::ActionRow::builder().title("Top Left").build();
+            let row_from = adw::ActionRow::builder()
+                .title("Top Left")
+                .css_classes(["dependent-row"])
+                .build();
             let e = edit.clone();
             row_from.add_suffix(&color_button(
                 Some(from),
@@ -1067,7 +1073,10 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
                 move |c| set_background(&e, How::Structure, Background::Gradient { from: c, to }),
             ));
             look.add(&row_from);
-            let row_to = adw::ActionRow::builder().title("Bottom Right").build();
+            let row_to = adw::ActionRow::builder()
+                .title("Bottom Right")
+                .css_classes(["dependent-row"])
+                .build();
             let e = edit.clone();
             row_to.add_suffix(&color_button(
                 Some(to),
@@ -1079,6 +1088,7 @@ pub fn groups(state: &State, screen: &ScreenConfig, edit: EditScreen) -> Vec<adw
         Background::Picture { path } => {
             let row = adw::ActionRow::builder()
                 .title("Picture")
+                .css_classes(["dependent-row"])
                 .subtitle(if path.is_empty() {
                     "None chosen yet"
                 } else {

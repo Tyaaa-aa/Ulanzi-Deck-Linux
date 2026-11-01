@@ -179,8 +179,9 @@ row:selected .page-number {
 }
 
 .app-badge {
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 32px;
+  min-height: 32px;
+  -gtk-icon-size: 18px;
   border-radius: 8px;
   background-color: alpha(@window_fg_color, 0.08);
 }
@@ -389,3 +390,21 @@ row.drop-target {
   padding: 0;
   -gtk-icon-size: 10px;
 }
+
+/* A row that only means something with the row above it. */
+.dependent-row {
+  background-image: image(alpha(currentColor, 0.2));
+  background-repeat: no-repeat;
+  background-size: 2px 60%;
+  background-position: 18px center;
+}
+
+.dependent-row > box.header {
+  margin-left: 28px;
+}
+
+.swatch-button.swatch-current {
+  outline: 2px solid @accent_color;
+  outline-offset: 1px;
+}
+

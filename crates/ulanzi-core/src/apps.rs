@@ -371,6 +371,27 @@ pub fn find_icon(name: &str, roots: &[PathBuf], themes: &[&str]) -> Option<PathB
 }
 
 /// Icon file for an installed application.
+/// The colour an app's icon is mostly, for tinting something that belongs to the app.
+pub fn app_color(desktop_id: &str) -> Option<crate::Color> {
+    let png = crate::render::icon_file_png(&app_icon(desktop_id)?, 48, None)?;
+    dominant_color(&image::load_from_memory(&png).ok()?.to_rgba8())
+}
+
+/// The average of an image's most colourful pixels. `None` for a grey or empty image.
+pub fn dominant_color(img: &image::RgbaImage) -> Option<crate::Color> {
+    let chroma = |p: &image::Rgba<u8>| {
+        let [r, g, b, _] = p.0;
+        r.max(g).max(b) - r.min(g).min(b)
+    };
+    let colourful: Vec<&image::Rgba<u8>> = img.pixels().filter(|p| p.0[3] > 128 && chroma(p) > 48).collect();
+    if colourful.is_empty() {
+        return None;
+    }
+    let n = colourful.len() as u32;
+    let mean = |i: usize| (colourful.iter().map(|p| p.0[i] as u32).sum::<u32>() / n) as u8;
+    Some(crate::Color::rgb(mean(0), mean(1), mean(2)))
+}
+
 pub fn app_icon(desktop_id: &str) -> Option<PathBuf> {
     let icon = lookup(desktop_id)?.icon?;
     let themes = current_icon_themes();

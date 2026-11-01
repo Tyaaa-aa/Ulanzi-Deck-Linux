@@ -2,6 +2,7 @@
 //! ZIP. Used for sharing, templates and snapshots. Reading checks everything before anything is
 //! written: paths, sizes and every picture.
 
+use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
@@ -33,6 +34,10 @@ pub struct Manifest {
     /// The oldest app that reads all of this file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_app: Option<String>,
+    /// Each profile's look, by id. Here because older versions refuse a file they don't know in a
+    /// bundle, and ignore this.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub looks: BTreeMap<String, crate::model::ProfileLook>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -215,6 +220,11 @@ pub fn export_with(
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         includes_settings: include_settings,
+        looks: out
+            .iter()
+            .map(|bp| (bp.profile.id.to_string(), store.profile_look(bp.profile.id)))
+            .filter(|(_, look)| !look.is_default())
+            .collect(),
         profiles: out
             .iter()
             .map(|bp| ManifestProfile {
@@ -514,6 +524,9 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
             ));
         }
         write_profile(store, &p, &bp.icons)?;
+        if let Some(look) = bundle.manifest.looks.get(&bp.profile.id.to_string()) {
+            store.save_profile_look(p.id, look)?;
+        }
         names.push(p.name.clone());
         if !p.foreign.is_empty() {
             report.foreign.push(ForeignNote {

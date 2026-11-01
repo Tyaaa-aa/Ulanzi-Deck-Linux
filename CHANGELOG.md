@@ -14,6 +14,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Key effects**: Glow, Pulse, Chase and Fire, in any colour, one per live state and one while held. Keys
   pulse while pressed by default; **Preferences → Key Effects** turns that off.
 - **Saved colours** in the colour picker.
+- **Profile icons and colours**, and Ctrl+1 to Ctrl+9 to go to a profile.
+- The deck's firmware version and **Restart Service** in the status menu at the top left.
 - Plugin contract 1.3: plugins can set default effects and offer effect presets.
 
 ### Compatibility

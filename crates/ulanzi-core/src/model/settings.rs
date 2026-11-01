@@ -65,6 +65,39 @@ pub struct Settings {
     pub extra: toml::Table,
 }
 
+/// How a profile looks in the sidebar, in `look.toml` beside `profile.toml`: older versions refuse a
+/// profile with anything new at its top level. `None` keeps the default.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProfileLook {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<super::ImageSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<crate::Color>,
+    /// The auto-switch app this look came from, until the user changes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_app: Option<String>,
+}
+
+impl ProfileLook {
+    pub fn is_default(&self) -> bool {
+        *self == ProfileLook::default()
+    }
+
+    /// This look after the profile's auto-switch apps became `apps`: one the user chose stays, and
+    /// one from an app goes with it, to the next app's (`made`) or back to plain.
+    pub fn follow_apps(&self, apps: &[String], made: impl Fn(&str) -> ProfileLook) -> ProfileLook {
+        if !self.is_default() && self.from_app.is_none() {
+            return self.clone();
+        }
+        match apps.first() {
+            None => ProfileLook::default(),
+            Some(app) if self.from_app.as_deref() == Some(app) => self.clone(),
+            Some(app) => made(app),
+        }
+    }
+}
+
 /// One plugin's entry in `settings.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

@@ -40,6 +40,7 @@ const GROUPS: &[(&str, &[(&str, &str)])] = &[
             ("Undo", "<Ctrl>z"),
             ("Redo", "<Ctrl><Shift>z"),
             ("Search the actions", "<Ctrl>l"),
+            ("Go to a profile", "Ctrl + 1 to 9"),
             ("Preferences", "<Ctrl>comma"),
             ("Keyboard shortcuts", "<Ctrl>question"),
         ],

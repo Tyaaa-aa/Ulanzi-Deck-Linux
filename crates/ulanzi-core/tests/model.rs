@@ -917,3 +917,55 @@ fn saved_colours_survive_a_save_and_load() {
         [Color::rgb(10, 20, 30)]
     );
 }
+
+#[test]
+fn a_profiles_look_is_kept_beside_it() {
+    let (_d, store) = store();
+    let id = Uuid::new_v4();
+    assert!(store.profile_look(id).is_default());
+    let look = ProfileLook {
+        source: Some(ImageSource::Emoji { ch: "🔥".into() }),
+        color: Some(Color::rgb(1, 2, 3)),
+        from_app: None,
+    };
+    store.save_profile_look(id, &look).expect("save");
+    assert_eq!(store.profile_look(id), look);
+    store
+        .save_profile_look(id, &ProfileLook::default())
+        .expect("reset");
+    assert!(!store.profile_dir(id).join("look.toml").exists());
+}
+
+fn from(app: &str) -> ProfileLook {
+    ProfileLook {
+        source: Some(ImageSource::App {
+            desktop_id: app.into(),
+        }),
+        color: Some(Color::rgb(1, 1, 1)),
+        from_app: Some(app.into()),
+    }
+}
+
+#[test]
+fn a_look_from_an_app_follows_the_apps() {
+    let apps = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let plain = ProfileLook::default();
+    assert_eq!(plain.follow_apps(&apps(&["a"]), from), from("a"), "first app");
+    assert_eq!(
+        from("a").follow_apps(&apps(&["a", "b"]), from),
+        from("a"),
+        "still there"
+    );
+    assert_eq!(from("a").follow_apps(&apps(&["b"]), from), from("b"), "changed");
+    assert_eq!(from("a").follow_apps(&[], from), plain, "gone");
+}
+
+#[test]
+fn a_look_the_user_chose_stays_put() {
+    let chosen = ProfileLook {
+        color: Some(Color::rgb(9, 9, 9)),
+        ..ProfileLook::default()
+    };
+    assert_eq!(chosen.follow_apps(&[], from), chosen);
+    assert_eq!(chosen.follow_apps(&["a".to_string()], from), chosen);
+}

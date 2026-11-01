@@ -12,13 +12,16 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use crate::CoreError;
-use crate::model::{FORMAT_VERSION, MacroLibrary, Profile, Settings};
+use crate::model::{FORMAT_VERSION, MacroLibrary, Profile, ProfileLook, Settings};
 
 pub const PROFILE_FILE: &str = "profile.toml";
 pub const SETTINGS_FILE: &str = "settings.toml";
 pub const MACROS_FILE: &str = "macros.toml";
 /// The first version that reads macros.
 const MACROS_MIN_APP: &str = "2.2.0";
+
+/// A profile's sidebar look, beside its `profile.toml`.
+const LOOK_FILE: &str = "look.toml";
 
 /// Config, state and cache roots for the app.
 #[derive(Debug, Clone)]
@@ -118,6 +121,25 @@ impl Store {
 
     pub fn profile_dir(&self, id: Uuid) -> PathBuf {
         self.profiles_dir().join(id.to_string())
+    }
+
+    /// How a profile looks in the sidebar. A missing or unreadable file is the default look.
+    pub fn profile_look(&self, id: Uuid) -> ProfileLook {
+        fs::read_to_string(self.profile_dir(id).join(LOOK_FILE))
+            .ok()
+            .and_then(|t| toml::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_profile_look(&self, id: Uuid, look: &ProfileLook) -> Result<(), CoreError> {
+        let path = self.profile_dir(id).join(LOOK_FILE);
+        if look.is_default() {
+            return match fs::remove_file(&path) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(CoreError::io(&path, e)),
+                _ => Ok(()),
+            };
+        }
+        write_atomic(&path, to_toml(look)?.as_bytes()).map_err(|e| CoreError::io(&path, e))
     }
 
     /// Missing file means defaults.

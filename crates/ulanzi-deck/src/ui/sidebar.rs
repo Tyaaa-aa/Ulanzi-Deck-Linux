@@ -2,6 +2,11 @@
 
 use adw::prelude::*;
 use gtk::glib;
+use std::rc::Rc;
+
+use ulanzi_core::Color;
+use ulanzi_core::model::{IconSet, ImageSource, KeyLook, ProfileLook};
+use ulanzi_core::store::Store;
 
 use crate::runtime;
 use crate::state::{Change, State};
@@ -9,10 +14,11 @@ use crate::state::{Change, State};
 /// Labels of the "+" menu, the profile right-click menu and the page right-click menu.
 /// Menu items never end in an ellipsis (the menu_labels test enforces it).
 pub(crate) const NEW_PROFILE_MENU: [&str; 3] = ["Empty Profile", "From Template", "Import File"];
-pub(crate) const PROFILE_MENU: [&str; 7] = [
+pub(crate) const PROFILE_MENU: [&str; 8] = [
     "Move Up",
     "Move Down",
     "Auto-Switch",
+    "Icon and Colour",
     "Export",
     "Save as Template",
     "Rename",
@@ -93,7 +99,274 @@ fn profiles_heading(state: &State) -> gtk::Box {
     row
 }
 
-fn profile_row(name: &str, subtitle: &str, active: bool) -> gtk::ListBoxRow {
+const TILE_PX: i32 = 32;
+const TILE_ICON_SCALE: f32 = 0.7;
+
+/// Colours that read well on a row in both light and dark themes.
+const TINTS: [(&str, &str); 9] = [
+    ("Blue", "#3584e4"),
+    ("Teal", "#2190a4"),
+    ("Green", "#3a944a"),
+    ("Yellow", "#c88800"),
+    ("Orange", "#ed5b00"),
+    ("Red", "#e62d42"),
+    ("Pink", "#d56199"),
+    ("Purple", "#9141ac"),
+    ("Slate", "#6f8396"),
+];
+
+fn store() -> Option<Store> {
+    Store::xdg().ok()
+}
+
+/// The picture on a profile's tile, or `None` for the plain one.
+fn tile_texture(id: uuid::Uuid, chosen: &ProfileLook) -> Option<gtk::gdk::Texture> {
+    if chosen.is_default() {
+        return None;
+    }
+    let dark = adw::StyleManager::default().is_dark();
+    let look = KeyLook {
+        source: chosen.source.clone().unwrap_or(ImageSource::Icon {
+            set: IconSet::Lucide,
+            name: "layout-grid".into(),
+        }),
+        background: Color([0, 0, 0, 0]),
+        foreground: chosen
+            .color
+            .unwrap_or(if dark { Color::WHITE } else { Color::BLACK }),
+        icon_scale: TILE_ICON_SCALE,
+        ..KeyLook::default()
+    };
+    crate::ui::canvas::key_texture(&look, &store()?.profile_dir(id))
+}
+
+/// The name of the style that tints a row with `color`, added to the app's styles once. It's a thin
+/// layer of the colour, so it sits well on light and dark themes alike.
+fn tint_class(color: Color) -> Option<String> {
+    let [r, g, b, _] = color.0;
+    let name = format!("profile-tint-{r:02x}{g:02x}{b:02x}");
+    let new = LOADED_TINTS.with(|t| t.borrow_mut().insert(name.clone()));
+    if new {
+        let hex = format!("#{r:02x}{g:02x}{b:02x}");
+        let css = gtk::CssProvider::new();
+        css.load_from_string(&format!(
+            "row.{name} {{ background-color: alpha({hex}, 0.16); }}\n\
+             row.{name}:hover {{ background-color: alpha({hex}, 0.24); }}\n\
+             row.{name}:selected {{ background-color: alpha({hex}, 0.32); }}"
+        ));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default()?,
+            &css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+    Some(name)
+}
+
+thread_local! {
+    static LOADED_TINTS: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
+/// Change a profile's look and show it.
+fn set_profile_look(state: &State, id: uuid::Uuid, f: impl FnOnce(&mut ProfileLook)) {
+    let Some(store) = store() else { return };
+    let mut look = store.profile_look(id);
+    f(&mut look);
+    if let Err(e) = store.save_profile_look(id, &look) {
+        crate::ui::show_toast(&format!("Couldn't save the look: {e}"));
+    }
+    state.notify(Change::Profiles);
+}
+
+/// Change a profile's look by hand: from now on it's the user's, not an app's.
+fn choose_profile_look(state: &State, id: uuid::Uuid, f: impl FnOnce(&mut ProfileLook)) {
+    set_profile_look(state, id, |l| {
+        l.from_app = None;
+        f(l);
+    });
+}
+
+/// After a profile's auto-switch apps change, let its look follow them.
+pub fn follow_apps(state: &State, id: uuid::Uuid, apps: &[String]) {
+    let current = store().map(|s| s.profile_look(id)).unwrap_or_default();
+    let next = current.follow_apps(apps, |app| ProfileLook {
+        source: Some(ImageSource::App {
+            desktop_id: app.to_string(),
+        }),
+        color: ulanzi_core::apps::app_color(app),
+        from_app: Some(app.to_string()),
+    });
+    if next != current {
+        set_profile_look(state, id, |l| *l = next);
+    }
+}
+
+/// A picture chosen for profile `id` lands in the open profile: copy it to the one it's for, whose
+/// exports carry it, as they do a key's pictures.
+fn keep_with_profile(state: &State, id: uuid::Uuid, source: &ImageSource) {
+    if let (ImageSource::Image { path }, Some(store)) = (source, store())
+        && id != state.profile_id()
+    {
+        let (from, to) = (
+            store.profile_dir(state.profile_id()).join(path),
+            store.profile_dir(id).join(path),
+        );
+        let copied = to
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::copy(&from, &to).map(|_| ()));
+        if let Err(e) = copied {
+            crate::ui::show_toast(&format!("Couldn't copy the picture: {e}"));
+        }
+    }
+}
+
+/// Reset asks first: the choice can't be got back.
+fn confirm_look_reset(state: &State, near: &gtk::Button, id: uuid::Uuid, redraw: Rc<dyn Fn()>) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Reset the Look?")
+        .body("This profile goes back to the plain icon and no colour.")
+        .default_response("cancel")
+        .close_response("cancel")
+        .build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("reset", "Reset")]);
+    dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+    let state = state.clone();
+    dialog.connect_response(Some("reset"), move |_, _| {
+        choose_profile_look(&state, id, |l| *l = ProfileLook::default());
+        redraw();
+    });
+    dialog.present(Some(near));
+}
+
+/// Choose a profile's icon and colour. Changes apply as they're made, so there's nothing to save.
+fn look_dialog(state: &State, near: &impl IsA<gtk::Widget>, id: uuid::Uuid, name: &str) {
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(18)
+        .margin_top(6)
+        .margin_bottom(18)
+        .margin_start(18)
+        .margin_end(18)
+        .build();
+    let preview = gtk::ListBox::builder()
+        .css_classes(["navigation-sidebar"])
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    body.append(&preview);
+    let swatches = gtk::Grid::builder()
+        .row_spacing(6)
+        .column_spacing(6)
+        .halign(gtk::Align::Center)
+        .build();
+    let marks: Rc<std::cell::RefCell<Vec<(Color, gtk::Button)>>> = Rc::default();
+    let redraw: Rc<dyn Fn()> = {
+        let (name, preview, marks) = (name.to_string(), preview.clone(), marks.clone());
+        Rc::new(move || {
+            let look = store().map(|s| s.profile_look(id)).unwrap_or_default();
+            preview.remove_all();
+            preview.append(&profile_row(&name, "", false, &look, id));
+            for (c, b) in marks.borrow().iter() {
+                if look.color == Some(*c) {
+                    b.add_css_class("swatch-current");
+                } else {
+                    b.remove_css_class("swatch-current");
+                }
+            }
+        })
+    };
+
+    let list = gtk::ListBox::builder()
+        .css_classes(["boxed-list"])
+        .selection_mode(gtk::SelectionMode::None)
+        .build();
+    let icon = adw::ActionRow::builder().title("Icon").build();
+    let choose = gtk::Button::builder()
+        .label("Choose…")
+        .valign(gtk::Align::Center)
+        .build();
+    {
+        let (state, redraw) = (state.clone(), redraw.clone());
+        choose.connect_clicked(move |b| {
+            let saved = store().and_then(|s| s.profile_look(id).source);
+            let (st, redraw) = (state.clone(), redraw.clone());
+            crate::ui::icon_picker::choose(&state, b, saved, move |source| {
+                keep_with_profile(&st, id, &source);
+                choose_profile_look(&st, id, |l| l.source = Some(source));
+                redraw();
+            });
+        });
+    }
+    icon.add_suffix(&choose);
+    list.append(&icon);
+    let custom = adw::ActionRow::builder().title("Custom Colour").build();
+    {
+        let (state, redraw) = (state.clone(), redraw.clone());
+        let current = store().and_then(|s| s.profile_look(id).color);
+        custom.add_suffix(&crate::ui::color_popover::color_button(
+            current,
+            |_| {},
+            move |c| {
+                choose_profile_look(&state, id, |l| l.color = Some(c));
+                redraw();
+            },
+        ));
+    }
+    list.append(&custom);
+
+    let no_preview: Rc<dyn Fn(Option<Color>)> = Rc::new(|_| {});
+    for (i, (tint, hex)) in TINTS.iter().enumerate() {
+        let Ok(c) = hex.parse::<Color>() else { continue };
+        let apply: Rc<dyn Fn(Color)> = {
+            let (state, redraw) = (state.clone(), redraw.clone());
+            Rc::new(move |c| {
+                choose_profile_look(&state, id, |l| l.color = Some(c));
+                redraw();
+            })
+        };
+        let b = crate::ui::color_popover::swatch_button(c, &no_preview, &apply);
+        b.set_tooltip_text(Some(tint));
+        marks.borrow_mut().push((c, b.clone()));
+        swatches.attach(&b, i as i32, 0, 1, 1);
+    }
+    body.append(&swatches);
+    body.append(&list);
+    redraw();
+
+    let reset = gtk::Button::builder()
+        .child(
+            &adw::ButtonContent::builder()
+                .icon_name("edit-undo-symbolic")
+                .label("Reset")
+                .build(),
+        )
+        .halign(gtk::Align::Center)
+        .css_classes(["destructive-action", "pill"])
+        .build();
+    {
+        let state = state.clone();
+        reset.connect_clicked(move |b| confirm_look_reset(&state, b, id, redraw.clone()));
+    }
+    body.append(&reset);
+
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&body));
+    adw::Dialog::builder()
+        .title("Icon and Colour")
+        .content_width(380)
+        .child(&view)
+        .build()
+        .present(Some(near));
+}
+
+fn profile_row(
+    name: &str,
+    subtitle: &str,
+    active: bool,
+    look: &ProfileLook,
+    id: uuid::Uuid,
+) -> gtk::ListBoxRow {
     let b = gtk::Box::builder()
         .spacing(12)
         .margin_top(8)
@@ -104,7 +377,14 @@ fn profile_row(name: &str, subtitle: &str, active: bool) -> gtk::ListBoxRow {
     let badge = gtk::Image::builder()
         .icon_name("view-grid-symbolic")
         .css_classes(["app-badge"])
+        .valign(gtk::Align::Center)
+        .halign(gtk::Align::Center)
+        .pixel_size(TILE_PX)
         .build();
+    if let Some(tile) = tile_texture(id, look) {
+        badge.set_paintable(Some(&tile));
+    }
+    badge.set_overflow(gtk::Overflow::Hidden);
     let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
     text.append(
         &gtk::Label::builder()
@@ -132,7 +412,11 @@ fn profile_row(name: &str, subtitle: &str, active: bool) -> gtk::ListBoxRow {
                 .build(),
         );
     }
-    gtk::ListBoxRow::builder().child(&b).build()
+    let row = gtk::ListBoxRow::builder().child(&b).build();
+    if let Some(class) = look.color.and_then(tint_class) {
+        row.add_css_class(&class);
+    }
+    row
 }
 
 fn page_row(n: usize, name: &str, keys: usize) -> gtk::ListBoxRow {
@@ -270,7 +554,8 @@ pub fn build(state: &State) -> gtk::Box {
                         state.rules.borrow().get(id).cloned()
                     };
                     let sub = crate::ui::autoswitch::summary(rule.as_ref(), default == Some(*id));
-                    let row = profile_row(name, &sub, *id == current);
+                    let look = store().map(|s| s.profile_look(*id)).unwrap_or_default();
+                    let row = profile_row(name, &sub, *id == current, &look, *id);
                     attach_profile_menu(&state, &row, *id, name, i, list.len());
                     let st = state.clone();
                     reorderable(&row, "profile", i, move |from, to| move_profile(&st, from, to));
@@ -280,7 +565,13 @@ pub fn build(state: &State) -> gtk::Box {
                     }
                 }
                 for name in state.too_new.borrow().iter() {
-                    let row = profile_row(name, "Needs a newer version", false);
+                    let row = profile_row(
+                        name,
+                        "Needs a newer version",
+                        false,
+                        &ProfileLook::default(),
+                        uuid::Uuid::nil(),
+                    );
                     row.set_activatable(false);
                     row.add_css_class("dim-label");
                     if state
@@ -390,10 +681,7 @@ fn attach_profile_menu(
         let st = state.clone();
         add_move_buttons(&menu, index, count, move |from, to| move_profile(&st, from, to));
     }
-    let auto = gtk::Button::builder()
-        .label(PROFILE_MENU[2])
-        .css_classes(["flat"])
-        .build();
+    let auto = menu_item(PROFILE_MENU[2], "view-refresh-symbolic", &["flat"]);
     menu.append(&auto);
     {
         let (state, name) = (state.clone(), name.to_string());
@@ -407,10 +695,21 @@ fn attach_profile_menu(
             crate::ui::autoswitch::open(&state, b, id, &name);
         });
     }
-    let export = gtk::Button::builder()
-        .label(PROFILE_MENU[3])
-        .css_classes(["flat"])
-        .build();
+    let look = menu_item(PROFILE_MENU[3], "applications-graphics-symbolic", &["flat"]);
+    menu.append(&look);
+    {
+        let (state, name) = (state.clone(), name.to_string());
+        look.connect_clicked(move |b| {
+            if let Some(pop) = b
+                .ancestor(gtk::Popover::static_type())
+                .and_downcast::<gtk::Popover>()
+            {
+                pop.popdown();
+            }
+            look_dialog(&state, b, id, &name);
+        });
+    }
+    let export = menu_item(PROFILE_MENU[4], "document-send-symbolic", &["flat"]);
     menu.append(&export);
     {
         let state = state.clone();
@@ -424,10 +723,7 @@ fn attach_profile_menu(
             crate::ui::bundle_dialogs::open_export(&state, b, Some(id));
         });
     }
-    let save_template = gtk::Button::builder()
-        .label(PROFILE_MENU[4])
-        .css_classes(["flat"])
-        .build();
+    let save_template = menu_item(PROFILE_MENU[5], "document-save-symbolic", &["flat"]);
     menu.append(&save_template);
     {
         let (state, name) = (state.clone(), name.to_string());
@@ -441,14 +737,8 @@ fn attach_profile_menu(
             crate::ui::templates::save_as_template(&state, id, &name);
         });
     }
-    let rename = gtk::Button::builder()
-        .label(PROFILE_MENU[5])
-        .css_classes(["flat"])
-        .build();
-    let delete = gtk::Button::builder()
-        .label(PROFILE_MENU[6])
-        .css_classes(["flat", "error"])
-        .build();
+    let rename = menu_item(PROFILE_MENU[6], "document-edit-symbolic", &["flat"]);
+    let delete = menu_item(PROFILE_MENU[7], "user-trash-symbolic", &["flat", "error"]);
     menu.append(&rename);
     menu.append(&delete);
     let pop = gtk::Popover::builder().child(&menu).has_arrow(true).build();
@@ -590,18 +880,30 @@ fn delete_dialog(state: &State, near: &impl IsA<gtk::Widget>, id: uuid::Uuid, na
     dialog.present(Some(near));
 }
 
+/// A right-click menu item: an icon, then its label.
+fn menu_item(label: &str, icon: &str, classes: &[&str]) -> gtk::Button {
+    let content = gtk::Box::builder().spacing(10).build();
+    content.append(&gtk::Image::from_icon_name(icon));
+    content.append(&gtk::Label::new(Some(label)));
+    gtk::Button::builder()
+        .child(&content)
+        .css_classes(classes)
+        .build()
+}
+
 /// "Move Up" and "Move Down" buttons for a list menu.
 fn add_move_buttons(menu: &gtk::Box, index: usize, count: usize, on_move: impl Fn(usize, usize) + 'static) {
     let on_move = std::rc::Rc::new(on_move);
-    for (label, to) in [
-        ("Move Up", index.checked_sub(1)),
-        ("Move Down", Some(index + 1).filter(|t| *t < count)),
+    for (label, icon, to) in [
+        ("Move Up", "go-up-symbolic", index.checked_sub(1)),
+        (
+            "Move Down",
+            "go-down-symbolic",
+            Some(index + 1).filter(|t| *t < count),
+        ),
     ] {
-        let b = gtk::Button::builder()
-            .label(label)
-            .css_classes(["flat"])
-            .sensitive(to.is_some())
-            .build();
+        let b = menu_item(label, icon, &["flat"]);
+        b.set_sensitive(to.is_some());
         let on_move = on_move.clone();
         b.connect_clicked(move |b| {
             if let Some(pop) = b
@@ -709,10 +1011,7 @@ fn attach_page_menu(state: &State, row: &gtk::ListBoxRow, index: usize, count: u
         let st = state.clone();
         add_move_buttons(&menu, index, count, move |from, to| move_page(&st, from, to));
     }
-    let rename = gtk::Button::builder()
-        .label(PAGE_MENU[2])
-        .css_classes(["flat"])
-        .build();
+    let rename = menu_item(PAGE_MENU[2], "document-edit-symbolic", &["flat"]);
     let delete = gtk::Button::builder()
         .label(PAGE_MENU[3])
         .css_classes(["flat", "error"])

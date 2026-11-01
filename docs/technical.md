@@ -87,6 +87,7 @@ album art, plugin store), ksni (tray), x11rb (X11 focus) and evdev (virtual keyb
 | `~/.config/ulanzi-deck/before-2.1/` | Copies of 2.0 configuration files, made once before they are upgraded to file format 2 |
 | `~/.config/ulanzi-deck/profiles/<uuid>/profile.toml` | One profile |
 | `~/.config/ulanzi-deck/profiles/<uuid>/icons/` | Pictures used by that profile |
+| `~/.config/ulanzi-deck/profiles/<uuid>/look.toml` | The profile's icon and colour in the sidebar. Bundles carry it in `manifest.toml` under `looks`, which older versions ignore |
 | `~/.local/state/ulanzi-deck/snapshots/` | Backups (`YYYYmmdd-HHMMSS-NNN-reason.ulanzideck`, newest 20 kept) |
 | `~/.config/ulanzi-deck/macros.toml` | The macro library |
 | `~/.local/state/ulanzi-deck/updates.toml` | Update check state: whether to check, the last check, the release on offer, the skipped version |

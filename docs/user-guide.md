@@ -90,9 +90,11 @@ next.
 
 Keys can move. Pick a GIF in **Look → Image**, or give a key a border effect:
 
+Open the **Effects** section under **Look**:
+
 - **Effect** is what the key shows at rest: **Glow**, **Pulse**, **Chase** or **Fire**.
 - **When Pressed** is what it shows while held. **Default** is a Pulse, and **None** keeps the key plain.
-- Choosing an effect adds **Colour** and **Speed**. **Automatic** uses the key's own colour, or your
+- Choosing an effect adds a colour button and **Speed**. The automatic colour uses the key's own colour, or your
   desktop's accent colour if that's too dark to see. Every effect can be any colour, Fire included.
 
 With **Show Live State** on, a key that has live states gets one Effect row per state, so an air
@@ -288,7 +290,7 @@ application name. To turn this off, disable **Show Volume Changes** in Preferenc
 ## Profiles, pages and folders
 
 - A **profile** is a complete configuration. Create one with **+** next to Profiles, either empty
-  or from a template. Right-click a profile to rename, export or delete it, save it as a template,
+  or from a template. Right-click a profile to give it an icon and colour, rename, export or delete it. A profile set to follow an app takes that app's icon and colour unless you've chosen your own, and both travel with exports, save it as a template,
   or set its auto-switch applications. A backup is made before a profile is deleted. Drag profiles
   to reorder them, or double-click to rename.
 - A profile can have several **pages**. Switch pages with the **‹ ›** buttons on the deck or with
@@ -423,6 +425,7 @@ brightness, toggle auto-switch, open the window or quit the background service.
 | Ctrl+A / Escape | Select all keys / clear selection and close the editor |
 | Delete | Clear the selected keys |
 | Ctrl+L | Search actions |
+| Ctrl+1 to Ctrl+9 | Go to that profile in the sidebar |
 | Ctrl+O / Ctrl+E | Import / export `.ulanzideck` files |
 | Ctrl+, | Preferences |
 | Ctrl+? | Show all shortcuts |

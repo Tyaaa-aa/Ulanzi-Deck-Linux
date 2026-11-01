@@ -17,6 +17,40 @@ pub struct Window {
     pub inner_split: adw::OverlaySplitView,
 }
 
+/// The profile Ctrl+`n` goes to: the `n`th in the sidebar.
+fn profile_for_shortcut<T>(profiles: &[(uuid::Uuid, T)], n: usize) -> Option<uuid::Uuid> {
+    profiles.get(n.checked_sub(1)?).map(|p| p.0)
+}
+
+/// Restarting stops the keys for a moment, so it asks first: it's for when something is stuck.
+fn confirm_restart(near: &gtk::Button) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Restart the Service?")
+        .body("Your keys stop for a moment while it restarts. You only need this if the deck is stuck.")
+        .default_response("cancel")
+        .close_response("cancel")
+        .build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("restart", "Restart")]);
+    dialog.set_response_appearance("restart", adw::ResponseAppearance::Destructive);
+    dialog.connect_response(Some("restart"), |_, _| {
+        runtime::run(
+            async {
+                tokio::process::Command::new("systemctl")
+                    .args(["--user", "restart", "ulanzi-deckd"])
+                    .status()
+                    .await
+            },
+            |_| {},
+        );
+    });
+    dialog.present(Some(near));
+}
+
+/// The status menu's firmware line, once the deck has said.
+fn firmware_line(version: &str) -> Option<String> {
+    (!version.is_empty()).then(|| format!("Firmware {version}"))
+}
+
 fn status_pill(state: &State) -> gtk::MenuButton {
     let dot = gtk::Box::builder()
         .css_classes(["status-dot"])
@@ -43,7 +77,44 @@ fn status_pill(state: &State) -> gtk::MenuButton {
         .margin_end(12)
         .build();
     popover_box.append(&detail);
+    let firmware = gtk::Label::builder()
+        .css_classes(["dim-label"])
+        .xalign(0.0)
+        .visible(false)
+        .build();
+    popover_box.append(&firmware);
+    let restart = gtk::Button::builder()
+        .child(
+            &adw::ButtonContent::builder()
+                .icon_name("view-refresh-symbolic")
+                .label("Restart Service")
+                .build(),
+        )
+        .tooltip_text("Reconnects to the deck. Your keys stop for a moment.")
+        .build();
+    popover_box.append(&restart);
     let popover = gtk::Popover::builder().child(&popover_box).build();
+    {
+        let state = state.clone();
+        popover.connect_show(move |_| {
+            let Some(client) = state.client.borrow().clone() else {
+                return firmware.set_visible(false);
+            };
+            let label = firmware.clone();
+            runtime::run(async move { client.firmware().await }, move |version| {
+                let line = firmware_line(version.as_deref().unwrap_or_default());
+                label.set_visible(line.is_some());
+                label.set_label(line.as_deref().unwrap_or_default());
+            });
+        });
+    }
+    {
+        let popover = popover.clone();
+        restart.connect_clicked(move |b| {
+            popover.popdown();
+            confirm_restart(b);
+        });
+    }
 
     let button = gtk::MenuButton::builder()
         .child(&content)
@@ -265,6 +336,25 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         });
         window.add_action(&a);
         app.set_accels_for_action("win.library", &["<Ctrl>l"]);
+    }
+    // Ctrl+1 to Ctrl+9: the profiles, in the sidebar's order.
+    for n in 1..=9usize {
+        let name = format!("profile-{n}");
+        let a = gio::SimpleAction::new(&name, None);
+        let (state, win) = (state.clone(), window.downgrade());
+        a.connect_activate(move |_, _| {
+            if let Some(w) = win.upgrade()
+                && !crate::ui::key_routing::window_wide_acts(crate::ui::key_routing::window_focus(&w))
+            {
+                return;
+            }
+            let chosen = profile_for_shortcut(&state.profiles.borrow(), n);
+            if let Some(id) = chosen.filter(|id| *id != state.profile_id()) {
+                open_profile(&state, id, true);
+            }
+        });
+        window.add_action(&a);
+        app.set_accels_for_action(&format!("win.{name}"), &[&format!("<Ctrl>{n}")]);
     }
     // Window buttons belong to the rightmost header: the inspector's while it is shown beside the
     // canvas, the content header's otherwise.
@@ -753,6 +843,22 @@ fn follow_events(state: &State, c: &Client) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctrl_and_a_number_finds_that_profile() {
+        let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+        let list = [(a, "A"), (b, "B")];
+        assert_eq!(profile_for_shortcut(&list, 1), Some(a));
+        assert_eq!(profile_for_shortcut(&list, 2), Some(b));
+        assert_eq!(profile_for_shortcut(&list, 3), None);
+        assert_eq!(profile_for_shortcut(&list, 0), None);
+    }
+
+    #[test]
+    fn the_firmware_shows_once_the_deck_has_said() {
+        assert_eq!(firmware_line(""), None);
+        assert_eq!(firmware_line("5.2.3").as_deref(), Some("Firmware 5.2.3"));
+    }
 
     #[test]
     fn main_menu_labels_have_no_ellipsis() {

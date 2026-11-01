@@ -101,6 +101,12 @@ fn combo_row(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Marks a row as belonging to the one above it.
+fn dependent(row: gtk::Widget) -> gtk::Widget {
+    row.add_css_class("dependent-row");
+    row
+}
+
 fn spin_row(
     ed: &Ed,
     title: &str,
@@ -771,7 +777,7 @@ fn volume_rows(ed: &Ed, target: &AudioTarget, op: VolumeOp, step: u8, limit_100:
     );
     match op {
         VolumeOp::Up | VolumeOp::Down => {
-            rows.push(spin_row(
+            rows.push(dependent(spin_row(
                 ed,
                 "Step",
                 "Percent per press or dial click",
@@ -783,7 +789,7 @@ fn volume_rows(ed: &Ed, target: &AudioTarget, op: VolumeOp, step: u8, limit_100:
                         *step = v as u8;
                     }
                 },
-            ));
+            )));
             if op == VolumeOp::Up {
                 rows.push(switch_row(
                     ed,
@@ -798,7 +804,7 @@ fn volume_rows(ed: &Ed, target: &AudioTarget, op: VolumeOp, step: u8, limit_100:
                 ));
             }
         }
-        VolumeOp::Set { percent } => rows.push(spin_row(
+        VolumeOp::Set { percent } => rows.push(dependent(spin_row(
             ed,
             "Volume",
             "Percent",
@@ -810,7 +816,7 @@ fn volume_rows(ed: &Ed, target: &AudioTarget, op: VolumeOp, step: u8, limit_100:
                     *op = VolumeOp::Set { percent: v as u8 };
                 }
             },
-        )),
+        ))),
         VolumeOp::Mute => {}
     }
     rows
@@ -853,7 +859,7 @@ fn brightness_rows(ed: &Ed, op: BrightnessOp) -> Vec<gtk::Widget> {
             };
         }
     });
-    vec![combo.upcast(), spin]
+    vec![combo.upcast(), dependent(spin)]
 }
 
 /// The Do and Step rows of a Display Brightness key; quick steps suit a monitor, so 2% to start.
@@ -894,7 +900,7 @@ fn display_op_rows(ed: &Ed, op: BrightnessOp) -> Vec<gtk::Widget> {
             };
         }
     });
-    vec![combo.upcast(), spin]
+    vec![combo.upcast(), dependent(spin)]
 }
 
 /// Which monitor a Display Brightness key changes. The list arrives from the service, and the row
@@ -1556,6 +1562,7 @@ fn plugin_rows(state: &State, ed: &Ed, plugin: &str, action: &str, params: &toml
                 on,
             );
             if let Some(cond) = &f.show_if {
+                row.add_css_class("dependent-row");
                 conditional.borrow_mut().push((cond.clone(), row.clone()));
             }
             row
@@ -1591,7 +1598,7 @@ fn timer_rows(ed: &Ed, op: TimerOp) -> Vec<gtk::Widget> {
         .upcast(),
     ];
     if let TimerOp::Add { minutes } = op {
-        rows.push(spin_row(
+        rows.push(dependent(spin_row(
             ed,
             "Minutes",
             "",
@@ -1603,7 +1610,7 @@ fn timer_rows(ed: &Ed, op: TimerOp) -> Vec<gtk::Widget> {
                     *op = TimerOp::Add { minutes: v as u32 };
                 }
             },
-        ));
+        )));
     }
     rows
 }

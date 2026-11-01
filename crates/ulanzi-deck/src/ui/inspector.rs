@@ -5,7 +5,7 @@
 //! so typing and dragging keep focus.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::glib;
@@ -819,8 +819,11 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     look.add_row(&image);
 
     // Colours
-    for (title, value, is_bg) in [("Background", bg, true), ("Icon and Text", fg, false)] {
-        let row = adw::ActionRow::builder().title(title).build();
+    let colours = adw::ActionRow::builder()
+        .title("Colours")
+        .subtitle("Background and icon")
+        .build();
+    for (tooltip, value, is_bg) in [("Background", bg, true), ("Icon and Text", fg, false)] {
         let field = move |c: Color| {
             if is_bg {
                 Field::Background(c)
@@ -831,7 +834,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         let current = match value {
             Mixed::One(c) => Some(c),
             _ => {
-                row.set_subtitle("Mixed");
+                colours.set_subtitle("Mixed");
                 None
             }
         };
@@ -843,17 +846,14 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
             }
         };
         let pick = {
-            let (set, r) = (set.clone(), row.clone());
-            move |c: Color| {
-                r.set_subtitle("");
-                set(How::Typing(if is_bg { "bg" } else { "fg" }), field(c));
-            }
+            let set = set.clone();
+            move |c: Color| set(How::Typing(if is_bg { "bg" } else { "fg" }), field(c))
         };
         let button = crate::ui::color_popover::color_button(current, preview, pick);
-        row.add_suffix(&button);
-        row.set_activatable_widget(Some(&button));
-        look.add_row(&row);
+        button.set_tooltip_text(Some(tooltip));
+        colours.add_suffix(&button);
     }
+    look.add_row(&colours);
 
     // Label text with a variables menu.
     // A cycling key shows each step's label; this one only when a step has none.
@@ -1014,14 +1014,12 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
 
     let live = adw::SwitchRow::builder()
         .title("Show Live State")
-        .subtitle("The icon and colour follow what the key controls (on, off, playing, cooling)")
+        .subtitle("Follow what the key controls, like on and off")
         .active(dynamic != Mixed::One(false))
         .build();
     live.connect_active_notify(move |r| set(How::Set, Field::Dynamic(r.is_active())));
     look.add_row(&live);
-    for row in effects_rows::rows(effect_view(&state, &keys), effect_commit(ctx, keys.clone())) {
-        look.add_row(&row);
-    }
+    group.add(&effect_section(ctx, keys.clone()));
     if let [k] = keys[..] {
         let note = adw::ActionRow::builder()
             .title("This GIF was shortened to fit the deck")
@@ -1037,6 +1035,48 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         }
     }
     (group, label_group)
+}
+
+/// The Effects section. Its rows are rebuilt in place, so changing one leaves the panel where it is.
+fn effect_section(ctx: &C, keys: Rc<Vec<u8>>) -> adw::ExpanderRow {
+    let section = adw::ExpanderRow::builder().title("Effects").build();
+    section.add_prefix(&gtk::Image::from_icon_name("starred-symbolic"));
+    ctx.state.remember_expanded(&section, "effects");
+    let rows: Rc<RefCell<Vec<gtk::Widget>>> = Rc::default();
+    let again: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
+    let fill: Rc<dyn Fn()> = {
+        let (ctx, section, again) = (ctx.clone(), section.clone(), again.clone());
+        Rc::new(move || {
+            for row in rows.borrow_mut().drain(..) {
+                section.remove(&row);
+            }
+            let view = effect_view(&ctx.state, &keys);
+            section.set_subtitle(&effects_rows::summary(&view));
+            let refill: Rc<dyn Fn()> = {
+                let again = again.clone();
+                Rc::new(move || {
+                    // Not inside the row's own change: it is about to be taken away.
+                    let weak = again.borrow().clone();
+                    glib::idle_add_local_once(move || {
+                        if let Some(fill) = weak.upgrade() {
+                            fill();
+                        }
+                    });
+                })
+            };
+            for row in effects_rows::rows(view, effect_commit(&ctx, keys.clone(), refill)) {
+                section.add_row(&row);
+                rows.borrow_mut().push(row);
+            }
+        })
+    };
+    *again.borrow_mut() = Rc::downgrade(&fill);
+    fill();
+    // Lives as long as these rows do: the next rebuild of the panel lets it go.
+    ctx.on_refresh(move || {
+        let _ = &fill;
+    });
+    section
 }
 
 /// A key's looks for live states: its own, or those its plugin action declares.
@@ -1078,15 +1118,14 @@ fn effect_view(state: &State, keys: &[u8]) -> effects_rows::View {
     }
 }
 
-fn effect_commit(ctx: &C, keys: Rc<Vec<u8>>) -> Rc<dyn Fn(Edit, bool)> {
+fn effect_commit(ctx: &C, keys: Rc<Vec<u8>>, refill: Rc<dyn Fn()>) -> Rc<dyn Fn(Edit, bool)> {
     let ctx = ctx.clone();
     Rc::new(move |edit, again| {
-        let how = if again { How::Structure } else { How::Set };
         let key = keys
             .first()
             .and_then(|k| ctx.state.editor.borrow().key(*k).cloned());
         let presets = key.as_ref().map_or(Vec::new(), |k| key_presets(&ctx.state, k));
-        ctx.commit(how, |e| match edit {
+        ctx.commit(How::Set, |e| match edit {
             Edit::Resting(effect) => e.set_field(&keys, Field::Effect(effect)),
             Edit::Pressed(p) => e.set_field(&keys, Field::Pressed(p)),
             Edit::State(n, effect) => {
@@ -1111,6 +1150,9 @@ fn effect_commit(ctx: &C, keys: Rc<Vec<u8>>) -> Rc<dyn Fn(Edit, bool)> {
                 e.set_field(&keys, Field::States(look.states));
             }
         });
+        if again {
+            refill();
+        }
     })
 }
 

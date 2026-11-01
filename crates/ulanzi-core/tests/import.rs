@@ -122,3 +122,17 @@ fn a_gif_too_big_to_play_is_refused() {
         Err(ImportError::TooLarge)
     ));
 }
+
+#[test]
+fn an_icons_colour_is_its_colourful_part() {
+    use image::{Rgba, RgbaImage};
+    use ulanzi_core::apps::dominant_color;
+    let img = RgbaImage::from_fn(10, 10, |x, _| match x {
+        0..=4 => Rgba([255, 255, 255, 255]),
+        5..=7 => Rgba([200, 20, 20, 255]),
+        _ => Rgba([0, 0, 255, 0]),
+    });
+    assert_eq!(dominant_color(&img), Some(ulanzi_core::Color::rgb(200, 20, 20)));
+    let grey = RgbaImage::from_pixel(4, 4, Rgba([128, 128, 128, 255]));
+    assert_eq!(dominant_color(&grey), None);
+}

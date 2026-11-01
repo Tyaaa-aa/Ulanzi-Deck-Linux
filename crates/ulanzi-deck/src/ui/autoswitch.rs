@@ -202,6 +202,7 @@ pub fn open(state: &State, near: &impl IsA<gtk::Widget>, id: Uuid, name: &str) {
                     remove.connect_clicked(move |_| {
                         rule.borrow_mut().apps.retain(|a| *a != entry);
                         save_rule(&state, id, rule.borrow().clone());
+                        crate::ui::sidebar::follow_apps(&state, id, &rule.borrow().apps);
                         if let Some(f) = refresh.borrow().clone() {
                             f();
                         }
@@ -223,6 +224,7 @@ pub fn open(state: &State, near: &impl IsA<gtk::Widget>, id: Uuid, name: &str) {
                 app_picker::button(&face, None, current.clone(), move |a| {
                     rule.borrow_mut().apps.push(a.desktop_id.clone());
                     save_rule(&state, id, rule.borrow().clone());
+                    crate::ui::sidebar::follow_apps(&state, id, &rule.borrow().apps);
                     if let Some(f) = refresh.borrow().clone() {
                         f();
                     }
@@ -268,19 +270,6 @@ pub fn open(state: &State, near: &impl IsA<gtk::Widget>, id: Uuid, name: &str) {
         });
     }
     more.add(&priority);
-    let on = adw::SwitchRow::builder()
-        .title("Switch Profiles by App")
-        .subtitle("For every profile. Also in the tray menu and as a key action.")
-        .active(state.settings.borrow().auto_switch)
-        .build();
-    {
-        let state = state.clone();
-        on.connect_active_notify(move |r| {
-            state.settings.borrow_mut().auto_switch = r.is_active();
-            save_settings(&state);
-        });
-    }
-    more.add(&on);
     page.add(&more);
 
     let view = adw::ToolbarView::new();
