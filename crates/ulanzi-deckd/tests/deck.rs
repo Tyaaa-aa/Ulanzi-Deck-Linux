@@ -1219,3 +1219,16 @@ async fn a_broken_gif_falls_back_to_the_still_key() {
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(!last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif")));
 }
+
+#[tokio::test]
+async fn a_stalled_write_does_not_hold_up_a_keys_action() {
+    let r = rig().await;
+    r.mock.stalled.store(true, Ordering::SeqCst);
+    r.tx.send(DeckMsg::Settings(Box::default())).await.expect("send");
+    settle().await;
+    r.click(2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let ran = r.runner.ran();
+    r.mock.stalled.store(false, Ordering::SeqCst);
+    assert_eq!(ran, vec![cmd("only-tap")]);
+}

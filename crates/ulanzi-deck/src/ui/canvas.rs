@@ -357,6 +357,16 @@ thread_local! {
     static MOVES: RefCell<HashMap<u64, bool>> = RefCell::new(HashMap::new());
 }
 
+/// Frames kept in memory, about 20 MB in all: enough for several pages of effects.
+const MAX_KEPT_FRAMES: usize = 1200;
+
+/// Past `limit` frames in all, keep only `newest`. Anything on screen goes on playing what it holds.
+fn trim_frames<T>(kept: &mut HashMap<u64, Rc<Vec<T>>>, newest: u64, limit: usize) {
+    if kept.values().map(|f| f.len()).sum::<usize>() > limit {
+        kept.retain(|h, _| *h == newest);
+    }
+}
+
 /// How long a stopped window waits before looking again.
 const HIDDEN_WAIT_MS: u32 = 500;
 
@@ -409,7 +419,11 @@ fn with_frames(look: &KeyLook, effect: Effect, dir: &std::path::Path, done: impl
                 })
                 .collect();
             let frames = Rc::new(frames);
-            ANIMATIONS.with(|a| a.borrow_mut().insert(hash, frames.clone()));
+            ANIMATIONS.with(|a| {
+                let mut kept = a.borrow_mut();
+                kept.insert(hash, frames.clone());
+                trim_frames(&mut kept, hash, MAX_KEPT_FRAMES);
+            });
             done(frames);
         },
     );
@@ -1276,6 +1290,16 @@ fn key_menu() -> gio::Menu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kept_frames_stay_under_their_limit() {
+        let mut kept = HashMap::from([(1, Rc::new(vec![0; 8])), (2, Rc::new(vec![0; 8]))]);
+        trim_frames(&mut kept, 2, 16);
+        assert_eq!(kept.len(), 2);
+        kept.insert(3, Rc::new(vec![0; 8]));
+        trim_frames(&mut kept, 3, 16);
+        assert_eq!(kept.keys().collect::<Vec<_>>(), [&3]);
+    }
 
     #[test]
     fn key_menu_labels_have_no_ellipsis() {

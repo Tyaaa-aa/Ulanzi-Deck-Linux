@@ -6,8 +6,8 @@ use std::path::Path;
 use tokio::io::unix::AsyncFd;
 use ulanzi_proto::{PACKET_SIZE, Packet};
 
-use super::Transport;
 use super::discover::{DeviceState, open_error};
+use super::{Exchange, Transport};
 
 /// The deck's `/dev/hidrawN` node, non-blocking and driven by tokio.
 pub struct Hidraw {
@@ -77,6 +77,43 @@ impl Transport for Hidraw {
                 }
                 Ok(Err(e)) => return Err(e),
                 Err(_would_block) => continue,
+            }
+        }
+    }
+
+    async fn exchange(&mut self, next: Option<&Packet>) -> io::Result<Exchange> {
+        let Some(packet) = next else {
+            return self.recv().await.map(Exchange::Got);
+        };
+        let report = ulanzi_proto::with_report_id(packet);
+        let mut buf = vec![0u8; PACKET_SIZE];
+        loop {
+            tokio::select! {
+                biased;
+                guard = self.fd.readable() => {
+                    match guard?.try_io(|f| f.get_ref().read(&mut buf)) {
+                        Ok(Ok(0)) => return Err(io::Error::from(io::ErrorKind::UnexpectedEof)),
+                        Ok(Ok(n)) => {
+                            buf.truncate(n);
+                            return Ok(Exchange::Got(buf));
+                        }
+                        Ok(Err(e)) => return Err(e),
+                        Err(_would_block) => continue,
+                    }
+                }
+                guard = self.fd.writable() => {
+                    match guard?.try_io(|f| f.get_ref().write(&report)) {
+                        Ok(Ok(n)) if n >= PACKET_SIZE => return Ok(Exchange::Sent),
+                        Ok(Ok(n)) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                format!("short write: {n} bytes"),
+                            ));
+                        }
+                        Ok(Err(e)) => return Err(e),
+                        Err(_would_block) => continue,
+                    }
+                }
             }
         }
     }

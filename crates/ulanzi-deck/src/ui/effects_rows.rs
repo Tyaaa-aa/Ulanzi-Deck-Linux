@@ -27,7 +27,8 @@ const SPEEDS: [(EffectSpeed, &str); 3] = [
 pub enum Edit {
     Resting(Effect),
     Pressed(PressedEffect),
-    State(usize, Effect),
+    /// `None`: same as the Otherwise row.
+    State(usize, Option<Effect>),
     Preset(usize),
 }
 
@@ -37,7 +38,7 @@ pub struct View {
     pub resting: Mixed<Effect>,
     pub pressed: Mixed<PressedEffect>,
     /// One entry per live state: its row's title and effect.
-    pub states: Vec<(String, Effect)>,
+    pub states: Vec<(String, Option<Effect>)>,
     pub presets: Vec<String>,
 }
 
@@ -59,12 +60,12 @@ pub fn state_title(st: &LookState, n: usize) -> String {
 }
 
 /// The states' rows, when Show Live State is on and one key is selected.
-pub fn state_rows(states: &[LookState], live: bool) -> Vec<(String, Effect)> {
+pub fn state_rows(states: &[LookState], live: bool) -> Vec<(String, Option<Effect>)> {
     states
         .iter()
         .enumerate()
         .filter(|_| live)
-        .map(|(n, st)| (state_title(st, n), st.look.effect.unwrap_or_default()))
+        .map(|(n, st)| (state_title(st, n), st.look.effect))
         .collect()
 }
 
@@ -98,11 +99,11 @@ fn kind_names() -> Vec<&'static str> {
 }
 
 /// Colour and Speed for `effect`; `send` gets the whole effect after each change.
-fn options(out: &mut Vec<gtk::Widget>, effect: Effect, send: Rc<dyn Fn(Effect, bool)>) {
+fn options(out: &mut Vec<gtk::Widget>, value: Rc<Cell<Effect>>, send: Rc<dyn Fn(Effect, bool)>) {
+    let effect = value.get();
     if !shows_options(effect.kind) {
         return;
     }
-    let value = Rc::new(Cell::new(effect));
     let color = adw::ActionRow::builder().title("Colour").build();
     let describe = |e: &Effect| e.color.map_or("Automatic".to_string(), |c| c.to_string());
     color.set_subtitle(&describe(&effect));
@@ -176,20 +177,49 @@ fn effect_row(
         kind_index(shown.kind),
         effect == Mixed::Mixed,
     );
+    let value = Rc::new(Cell::new(shown));
     {
-        let send = send.clone();
+        let (send, value) = (send.clone(), value.clone());
         row.connect_selected_notify(move |r| {
             send(
                 Effect {
                     kind: kind_at(r.selected()),
-                    ..shown
+                    ..value.get()
                 },
                 true,
             )
         });
     }
     out.push(row.upcast());
-    options(out, shown, send);
+    options(out, value, send);
+}
+
+/// A live state's effect: its own, or whatever Otherwise says.
+fn state_row(
+    out: &mut Vec<gtk::Widget>,
+    title: &str,
+    effect: Option<Effect>,
+    send: Rc<dyn Fn(Option<Effect>, bool)>,
+) {
+    let mut names = vec!["Same as Otherwise"];
+    names.extend(kind_names());
+    let at = effect.map_or(0, |e| 1 + kind_index(e.kind));
+    let row = combo(title, &names, at, false);
+    let value = Rc::new(Cell::new(effect.unwrap_or_default()));
+    {
+        let (send, value) = (send.clone(), value.clone());
+        row.connect_selected_notify(move |r| {
+            let chosen = (r.selected() > 0).then(|| Effect {
+                kind: kind_at(r.selected() - 1),
+                ..value.get()
+            });
+            send(chosen, true);
+        });
+    }
+    out.push(row.upcast());
+    if effect.is_some() {
+        options(out, value, Rc::new(move |e, again| send(Some(e), again)));
+    }
 }
 
 /// The rows for `view`, in order.
@@ -209,8 +239,12 @@ pub fn rows(view: View, commit: Rc<dyn Fn(Edit, bool)>) -> Vec<gtk::Widget> {
     }
     for (n, (title, effect)) in view.states.iter().enumerate() {
         let commit = commit.clone();
-        let send: Rc<dyn Fn(Effect, bool)> = Rc::new(move |e, again| commit(Edit::State(n, e), again));
-        effect_row(&mut out, title, Mixed::One(*effect), send);
+        state_row(
+            &mut out,
+            title,
+            *effect,
+            Rc::new(move |e, again| commit(Edit::State(n, e), again)),
+        );
     }
     let title = if view.states.is_empty() {
         "Effect"
@@ -234,14 +268,15 @@ pub fn rows(view: View, commit: Rc<dyn Fn(Edit, bool)>) -> Vec<gtk::Widget> {
         PressedEffect::Own(e) => (1 + kind_index(e.kind), e),
     };
     let row = combo("When Pressed", &names, at, view.pressed == Mixed::Mixed);
+    let value = Rc::new(Cell::new(own));
     {
-        let commit = commit.clone();
+        let (commit, value) = (commit.clone(), value.clone());
         row.connect_selected_notify(move |r| {
             let chosen = match r.selected() {
                 0 => PressedEffect::Default,
                 i => PressedEffect::Own(Effect {
                     kind: kind_at(i - 1),
-                    ..own
+                    ..value.get()
                 }),
             };
             commit(Edit::Pressed(chosen), true);
@@ -251,7 +286,7 @@ pub fn rows(view: View, commit: Rc<dyn Fn(Edit, bool)>) -> Vec<gtk::Widget> {
     if matches!(shown, PressedEffect::Own(_)) {
         let send: Rc<dyn Fn(Effect, bool)> =
             Rc::new(move |e, again| commit(Edit::Pressed(PressedEffect::Own(e)), again));
-        options(&mut out, own, send);
+        options(&mut out, value, send);
     }
     out
 }
@@ -291,12 +326,11 @@ mod tests {
         ];
         assert!(state_rows(&states, false).is_empty());
         let rows = state_rows(&states, true);
-        assert_eq!(rows[0], ("Effect When On".into(), Effect::of(EffectKind::Chase)));
         assert_eq!(
-            rows[1].1.kind,
-            EffectKind::None,
-            "a state with no effect shows None"
+            rows[0],
+            ("Effect When On".into(), Some(Effect::of(EffectKind::Chase)))
         );
+        assert_eq!(rows[1].1, None, "no effect of its own");
     }
 
     #[test]
@@ -344,7 +378,7 @@ mod tests {
     fn presets_come_first_and_states_before_the_rest() {
         crate::ui::with_gtk(|| {
             let v = View {
-                states: vec![("Effect When On".into(), Effect::default())],
+                states: vec![("Effect When On".into(), None)],
                 presets: vec!["Calm".into()],
                 ..view()
             };
@@ -357,6 +391,54 @@ mod tests {
                     "When Pressed"
                 ]
             );
+        });
+    }
+
+    #[test]
+    fn a_state_follows_otherwise_until_it_chooses() {
+        crate::ui::with_gtk(|| {
+            let seen = Rc::new(Cell::new(None));
+            let v = View {
+                states: vec![("Effect When On".into(), None)],
+                ..view()
+            };
+            let list = {
+                let seen = seen.clone();
+                rows(v, Rc::new(move |e, _| seen.set(Some(e))))
+            };
+            let row = list[0].downcast_ref::<adw::ComboRow>().expect("combo");
+            assert_eq!(row.selected(), 0, "Same as Otherwise");
+            row.set_selected(1);
+            assert_eq!(seen.get(), Some(Edit::State(0, Some(Effect::default()))));
+            row.set_selected(0);
+            assert_eq!(seen.get(), Some(Edit::State(0, None)));
+        });
+    }
+
+    #[test]
+    fn a_new_speed_survives_choosing_another_effect() {
+        crate::ui::with_gtk(|| {
+            let seen = Rc::new(Cell::new(None));
+            let v = View {
+                resting: Mixed::One(Effect::of(EffectKind::Glow)),
+                ..view()
+            };
+            let list = {
+                let seen = seen.clone();
+                rows(v, Rc::new(move |e, _| seen.set(Some(e))))
+            };
+            list[2]
+                .downcast_ref::<adw::ComboRow>()
+                .expect("speed")
+                .set_selected(2);
+            list[0]
+                .downcast_ref::<adw::ComboRow>()
+                .expect("kind")
+                .set_selected(3);
+            let Some(Edit::Resting(e)) = seen.get() else {
+                panic!("{:?}", seen.get());
+            };
+            assert_eq!((e.kind, e.speed), (EffectKind::Chase, EffectSpeed::Fast));
         });
     }
 

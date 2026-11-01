@@ -1092,7 +1092,7 @@ fn effect_commit(ctx: &C, keys: Rc<Vec<u8>>) -> Rc<dyn Fn(Edit, bool)> {
             Edit::State(n, effect) => {
                 let mut states = key.as_ref().map_or(Vec::new(), key_states);
                 if let Some(st) = states.get_mut(n) {
-                    st.look.effect = Some(effect);
+                    st.look.effect = effect;
                 }
                 e.set_field(&keys, Field::States(states));
             }

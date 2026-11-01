@@ -8,7 +8,7 @@ mod push;
 mod screen_rt;
 mod sleep;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ use crate::actions::ActionError;
 use crate::actions::ActionRunner;
 use crate::actions::mouse::InputSink;
 use crate::macros::{Player, PlayerEvent};
-use crate::transport::{DeviceState, Transport};
+use crate::transport::{DeviceState, Exchange, Transport};
 use screen_rt::ScreenRuntime;
 
 /// The wide-screen update goes out this often; like Ulanzi Studio's, it also keeps the deck from
@@ -296,6 +296,10 @@ struct Deck {
     shown: Option<Shown>,
     /// No upload before this (the deck is unpacking the previous one).
     next_upload_at: Option<Instant>,
+    /// Packets on their way, one per turn of the main loop, so input is read between them.
+    outgoing: VecDeque<ulanzi_proto::Packet>,
+    /// While an upload goes out: how long the deck gets after its last packet.
+    upload_gap: Option<Duration>,
     /// Set from connect until the deck answers the info request.
     awaiting_info: Option<Instant>,
     upload_pending: bool,
@@ -391,6 +395,8 @@ impl Deck {
             cache,
             shown: None,
             next_upload_at: None,
+            outgoing: VecDeque::new(),
+            upload_gap: None,
             awaiting_info: None,
             upload_pending: false,
             pending_full: false,
@@ -435,12 +441,14 @@ impl Deck {
             let hold_deadline = self.press.next_deadline();
             // Only arm the upload timer when an upload can actually happen; otherwise a deadline in
             // the past would fire on every loop and spin a core.
-            let can_upload = self.transport.is_some() && self.awaiting_info.is_none();
+            let can_upload =
+                self.transport.is_some() && self.awaiting_info.is_none() && self.upload_gap.is_none();
             let upload_at = if self.upload_pending && can_upload {
                 self.next_upload_at
             } else {
                 None
             };
+            let next = self.outgoing.front().copied();
             let transport = self.transport.as_mut();
             tokio::select! {
                 msg = rx.recv() => match msg {
@@ -452,13 +460,14 @@ impl Deck {
                     self.drawing = false;
                     self.push_page(false).await;
                 },
-                report = async {
+                io = async {
                     match transport {
-                        Some(t) => t.recv().await,
+                        Some(t) => t.exchange(next.as_ref()).await,
                         None => std::future::pending().await,
                     }
-                } => match report {
-                    Ok(buf) => self.on_report(parse_report(&buf)).await,
+                } => match io {
+                    Ok(Exchange::Got(buf)) => self.on_report(parse_report(&buf)).await,
+                    Ok(Exchange::Sent) => self.packet_sent(),
                     Err(e) => self.lost(&e).await,
                 },
                 _ = async {
@@ -516,6 +525,8 @@ impl Deck {
                 self.macro_down.clear();
                 self.held.clear();
                 self.transport = None;
+                self.outgoing.clear();
+                self.upload_gap = None;
                 self.upload_pending = false;
                 self.set_device(state);
             }
@@ -755,7 +766,7 @@ impl Deck {
         }
         let now = Instant::now();
         // Even a forced (full) upload waits; a second upload while the deck unpacks crashes it.
-        if self.next_upload_at.is_some_and(|t| now < t) {
+        if self.upload_gap.is_some() || self.next_upload_at.is_some_and(|t| now < t) {
             self.upload_pending = true;
             self.pending_full |= force;
             return;
@@ -794,6 +805,7 @@ impl Deck {
         let jobs = push::missing_effects(profile, self.nav.page, &dir, &dynamic, &mut self.cache);
         if let (false, false, Some(effects)) = (jobs.is_empty(), self.drawing, self.cache.effects.clone()) {
             self.drawing = true;
+            self.cache.mark_tried(&jobs);
             let (tx, dir) = (self.drawn_tx.clone(), dir.clone());
             tokio::task::spawn_blocking(move || {
                 push::draw_effects(jobs, &effects, &dir);
@@ -802,6 +814,7 @@ impl Deck {
         }
         let same_page = self.shown.as_ref().filter(|s| !force && s.at == here);
         let partial = same_page.is_some();
+        let mut has_gif = false;
         let packets = match same_page {
             // Same page: send only the keys that changed (what Ulanzi Studio does).
             Some(shown) => {
@@ -817,6 +830,7 @@ impl Deck {
                 self.upload_seq = self.upload_seq.wrapping_add(1);
                 let (changed, images) = push::with_fresh_names(&changed, &built.images, self.upload_seq);
                 tracing::debug!("partial upload: keys {:?}", changed.keys().collect::<Vec<_>>());
+                has_gif = images.iter().any(|i| i.name.ends_with(".gif"));
                 file_packets(Command::PartialUpdate, &button_zip(&changed, &images))
             }
             None => {
@@ -830,21 +844,17 @@ impl Deck {
         };
         let bytes = packets.len() * ulanzi_proto::PACKET_SIZE;
         if self.send(&packets).await {
-            let done = Instant::now();
-            tracing::debug!(
-                "upload of {} KB sent in {} ms",
-                bytes / 1024,
-                done.duration_since(now).as_millis()
-            );
+            tracing::debug!("upload of {} KB queued", bytes / 1024);
             // Only small updates for a key on screen: a full page needs its time to unpack.
             let page = self.profile().pages.get(self.nav.page).map(|p| p.id);
             let showing = self.playing.values().any(|p| p.shows && Some(p.page) == page);
-            let gap = if partial && showing {
+            // The gap runs from the last packet, which may be a while off.
+            self.upload_gap = Some(if partial && showing && !has_gif {
                 MACRO_UPLOAD_GAP
             } else {
                 upload_cooldown(bytes)
-            };
-            self.next_upload_at = Some(done + gap);
+            });
+            self.next_upload_at = None;
             self.shown = Some(Shown {
                 at: here,
                 entries: built.entries,
@@ -852,18 +862,23 @@ impl Deck {
         }
     }
 
-    /// Send packets; on I/O failure drop the transport and report the device as gone.
-    async fn send(&mut self, packets: &[ulanzi_proto::Packet]) -> bool {
-        let Some(t) = self.transport.as_mut() else {
-            return false;
-        };
-        match t.send(packets).await {
-            Ok(()) => true,
-            Err(e) => {
-                self.lost(&e).await;
-                false
-            }
+    /// One packet went out. After an upload's last one, its gap starts.
+    fn packet_sent(&mut self) {
+        self.outgoing.pop_front();
+        if self.outgoing.is_empty()
+            && let Some(gap) = self.upload_gap.take()
+        {
+            self.next_upload_at = Some(Instant::now() + gap);
         }
+    }
+
+    /// Queue packets for the deck, in order. False with no deck to send to.
+    async fn send(&mut self, packets: &[ulanzi_proto::Packet]) -> bool {
+        if self.transport.is_none() {
+            return false;
+        }
+        self.outgoing.extend(packets);
+        true
     }
 
     async fn lost(&mut self, e: &std::io::Error) {
@@ -872,6 +887,8 @@ impl Deck {
         self.macro_down.clear();
         self.held.clear();
         self.transport = None;
+        self.outgoing.clear();
+        self.upload_gap = None;
         self.shown = None;
         self.firmware = None;
         // configure() uploads the whole page on reconnect anyway.

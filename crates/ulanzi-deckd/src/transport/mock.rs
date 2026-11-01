@@ -1,11 +1,11 @@
 use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 use ulanzi_proto::Packet;
 
-use super::Transport;
+use super::{Exchange, Transport};
 
 /// In-memory device for tests: records sent packets, replays injected input reports.
 pub struct MockTransport {
@@ -20,6 +20,8 @@ pub struct MockHandle {
     pub inject: mpsc::Sender<io::Result<Vec<u8>>>,
     /// When non-zero, sending fails with `ENODEV` once this many packets have been sent in total.
     pub fail_after: Arc<AtomicUsize>,
+    /// While true, writes wait, as a real deck's sometimes do for up to a second.
+    pub stalled: Arc<AtomicBool>,
 }
 
 impl MockHandle {
@@ -50,6 +52,7 @@ impl MockTransport {
             sent: Arc::default(),
             inject: tx,
             fail_after: Arc::new(AtomicUsize::new(0)),
+            stalled: Arc::default(),
         };
         (
             MockTransport {
@@ -64,6 +67,9 @@ impl MockTransport {
 #[async_trait::async_trait]
 impl Transport for MockTransport {
     async fn send(&mut self, packets: &[Packet]) -> io::Result<()> {
+        while self.handle.stalled.load(Ordering::SeqCst) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
         let limit = self.handle.fail_after.load(Ordering::SeqCst);
         let mut sent = self
             .handle
@@ -85,6 +91,16 @@ impl Transport for MockTransport {
         match self.rx.recv().await {
             Some(r) => r,
             None => std::future::pending().await,
+        }
+    }
+
+    async fn exchange(&mut self, next: Option<&Packet>) -> io::Result<Exchange> {
+        match next {
+            Some(p) if !self.handle.stalled.load(Ordering::SeqCst) => {
+                self.send(std::slice::from_ref(p)).await?;
+                Ok(Exchange::Sent)
+            }
+            _ => self.recv().await.map(Exchange::Got),
         }
     }
 }

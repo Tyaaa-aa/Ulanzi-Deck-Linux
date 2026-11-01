@@ -121,6 +121,8 @@ pub struct RenderCache {
     warned: HashSet<u64>,
     /// Whether a look's GIF moves, by look hash: finding out reads the file.
     moves: HashMap<u64, bool>,
+    /// GIFs sent for drawing, so one that can't be saved isn't drawn over and over.
+    tried: HashSet<u64>,
     /// Finished GIFs, when this cache has somewhere to keep them.
     pub effects: Option<EffectCache>,
     /// Part of every image name. Seeded randomly per process and bumped on every (re)connect: the
@@ -130,6 +132,13 @@ pub struct RenderCache {
 }
 
 impl RenderCache {
+    pub fn mark_tried(&mut self, jobs: &[EffectJob]) {
+        if self.tried.len() > MAX_TRIED {
+            self.tried.clear();
+        }
+        self.tried.extend(jobs.iter().map(|j| j.hash));
+    }
+
     pub fn new() -> RenderCache {
         static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let nanos = std::time::SystemTime::now()
@@ -142,6 +151,7 @@ impl RenderCache {
             images: HashMap::new(),
             warned: HashSet::new(),
             moves: HashMap::new(),
+            tried: HashSet::new(),
             effects: None,
             generation: seed.wrapping_add(n.wrapping_mul(0x9e37_79b9)),
         }
@@ -311,6 +321,8 @@ fn foreign_look() -> KeyLook {
 }
 
 /// Build all 14 manifest entries (keys 0-12 and the wide screen) for `page`.
+const MAX_TRIED: usize = 4096;
+
 /// A moving key to draw.
 pub struct EffectJob {
     pub hash: u64,
@@ -350,6 +362,13 @@ fn shown_look(
     look
 }
 
+/// Whether `key` may show as a GIF: not while a macro shows progress on it, nor with a changing
+/// value drawn into its picture, as either would mean a new GIF for every change.
+fn can_move(key: &Key, progress: Option<&MacroProgress>) -> bool {
+    let label = &key.look.label;
+    progress.is_none() && !(label.position.is_some() && label.text.contains('{'))
+}
+
 /// What `look` needs drawn as a GIF, if it moves at all.
 fn moving_key(
     look: &KeyLook,
@@ -359,6 +378,12 @@ fn moving_key(
     cache: &mut RenderCache,
 ) -> Option<EffectJob> {
     let effect = effect_for(look, held, dynamic.key_effects);
+    // The deck draws this label itself, so its text is no part of the GIF.
+    let mut look = look.clone();
+    if look.label.position.is_none() {
+        look.label.text.clear();
+    }
+    let look = &look;
     let moves = if effect.is_none() {
         *cache
             .moves
@@ -407,7 +432,7 @@ pub fn missing_effects(
     for (i, key) in &page.keys {
         let at = cycle_key(page.id, &format!("key:{i}"));
         let progress = dynamic.macros.get(&at);
-        if progress.is_some() {
+        if !can_move(key, progress) {
             continue;
         }
         let vars = key_vars(key, progress, &vars);
@@ -416,6 +441,7 @@ pub fn missing_effects(
         for held in [false, true].into_iter().filter(|h| !h || acts) {
             if let Some(job) = moving_key(&look, held, dynamic, profile_dir, cache)
                 && !effects.has(job.hash)
+                && !cache.tried.contains(&job.hash)
                 && !jobs.iter().any(|j| j.hash == job.hash)
             {
                 jobs.push(job);
@@ -468,8 +494,7 @@ pub fn build_page(
                 .map(MacroProgress::share);
             let look = shown_look(key, dynamic, &vars, at.as_deref());
             let own_label = look.label.position.is_some();
-            let moving = progress
-                .is_none()
+            let moving = can_move(key, progress)
                 .then(|| moving_key(&look, dynamic.held.contains(&i), dynamic, ctx.profile_dir, cache))
                 .flatten()
                 .filter(|job| cached_gif(cache, job.hash).is_some());
@@ -633,6 +658,46 @@ mod tests {
         };
         let (_, images) = with_fresh_names(&BTreeMap::from([(1, entry)]), &[img], 3);
         assert_eq!(images[0].name, "k1_u3.gif");
+    }
+
+    fn effect_rig() -> (Profile, RenderCache, tempfile::TempDir) {
+        let mut p = profile();
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.effect = ulanzi_core::model::Effect::of(ulanzi_core::model::EffectKind::Glow);
+        let d = tempfile::tempdir().expect("dir");
+        let mut cache = RenderCache::new();
+        cache.effects = Some(EffectCache::new(d.path().to_path_buf(), 1 << 20));
+        (p, cache, d)
+    }
+
+    fn with_cpu(v: &str) -> DynamicState {
+        let mut d = DynamicState::default();
+        d.vars.insert("cpu".into(), v.into());
+        d
+    }
+
+    #[test]
+    fn a_label_the_deck_draws_never_changes_the_gif() {
+        let (p, mut cache, d) = effect_rig();
+        let one = missing_effects(&p, 0, d.path(), &with_cpu("1"), &mut cache);
+        let two = missing_effects(&p, 0, d.path(), &with_cpu("2"), &mut cache);
+        assert_eq!(one[0].hash, two[0].hash);
+    }
+
+    #[test]
+    fn a_changing_label_in_the_picture_keeps_the_key_still() {
+        let (mut p, mut cache, d) = effect_rig();
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.label.position = Some(ulanzi_core::model::LabelPosition::Top);
+        assert!(missing_effects(&p, 0, d.path(), &with_cpu("1"), &mut cache).is_empty());
+    }
+
+    #[test]
+    fn a_draw_that_went_nowhere_is_not_tried_again() {
+        let (p, mut cache, d) = effect_rig();
+        let jobs = missing_effects(&p, 0, d.path(), &with_cpu("1"), &mut cache);
+        cache.mark_tried(&jobs);
+        assert!(missing_effects(&p, 0, d.path(), &with_cpu("1"), &mut cache).is_empty());
     }
 
     #[test]

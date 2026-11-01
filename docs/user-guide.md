@@ -96,7 +96,8 @@ Keys can move. Pick a GIF in **Look → Image**, or give a key a border effect:
   desktop's accent colour if that's too dark to see. Every effect can be any colour, Fire included.
 
 With **Show Live State** on, a key that has live states gets one Effect row per state, so an air
-conditioner can burn while it's off and chase while it's on. Letting go of a key always lands on the
+conditioner can burn while it's off and chase while it's on. **Effect Otherwise** covers any other
+state, and a state set to **Same as Otherwise** follows it. Letting go of a key always lands on the
 effect for the state it's in now.
 
 The preview at the top of the panel plays the effect. Hold the mouse down on it to see the pressed
