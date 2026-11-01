@@ -718,3 +718,50 @@ fn a_two_part_change_can_be_one_undo_step() {
     assert_eq!(linked(&e), m.id);
     assert!(e.library().get(new.id).is_none());
 }
+
+fn fx_editor() -> Editor {
+    let mut p = Profile::new_default("P", Model::D200X);
+    p.pages[0].keys.insert(1, Key::default());
+    Editor::new(p)
+}
+
+#[test]
+fn editing_an_effect_is_one_undo_step() {
+    let mut e = fx_editor();
+    e.set_field(&[1], Field::Effect(Effect::of(EffectKind::Fire)));
+    assert_eq!(e.key(1).expect("key").look.effect.kind, EffectKind::Fire);
+    e.undo();
+    assert_eq!(e.key(1).expect("key").look.effect.kind, EffectKind::None);
+}
+
+#[test]
+fn the_pressed_effect_is_a_field() {
+    let mut e = fx_editor();
+    let own = PressedEffect::Own(Effect::default());
+    e.set_field(&[1], Field::Pressed(own));
+    assert_eq!(e.key(1).expect("key").look.pressed, own);
+}
+
+#[test]
+fn a_state_keeps_its_own_effect_when_another_changes() {
+    let mut e = fx_editor();
+    let state = |is: &str, kind| LookState {
+        when: When {
+            value: "{x}".into(),
+            is: vec![is.into()],
+            not: Vec::new(),
+        },
+        look: LookOverride {
+            effect: Some(Effect::of(kind)),
+            ..LookOverride::default()
+        },
+    };
+    let two = vec![state("on", EffectKind::Chase), state("off", EffectKind::Fire)];
+    e.set_field(&[1], Field::States(two.clone()));
+    let mut next = two;
+    next[1].look.effect = Some(Effect::of(EffectKind::Glow));
+    e.set_field(&[1], Field::States(next));
+    let states = &e.key(1).expect("key").look.states;
+    assert_eq!(states[0].look.effect.map(|f| f.kind), Some(EffectKind::Chase));
+    assert_eq!(states[1].look.effect.map(|f| f.kind), Some(EffectKind::Glow));
+}

@@ -1,15 +1,18 @@
 //! The device drawing: 13 keys, the wide screen, two small buttons and three dials, each showing
 //! exactly what the deck shows. Click to select (Ctrl/Shift for several keys).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use ulanzi_core::edit::Slot;
-use ulanzi_core::model::{KeyLook, ScreenConfig, Widget};
-use ulanzi_core::render::{Fonts, IconLibrary, RenderCtx, look_hash, render_key};
+use ulanzi_core::model::{Effect, KeyLook, ScreenConfig, Widget};
+use ulanzi_core::render::{
+    Fonts, GIF_TARGET, IconLibrary, RenderCtx, animation_hash, effect_color, encode_fit, is_animated,
+    look_hash, render_animation, render_key,
+};
 use ulanzi_core::store::Store;
 
 use crate::state::{Change, State};
@@ -346,6 +349,138 @@ pub fn key_texture(look: &KeyLook, profile_dir: &std::path::Path) -> Option<gdk:
     })
 }
 
+/// A key's frames and how long each shows.
+type Frames = Rc<Vec<(gdk::Texture, u32)>>;
+
+thread_local! {
+    static ANIMATIONS: RefCell<HashMap<u64, Frames>> = RefCell::new(HashMap::new());
+    static MOVES: RefCell<HashMap<u64, bool>> = RefCell::new(HashMap::new());
+}
+
+/// How long a stopped window waits before looking again.
+const HIDDEN_WAIT_MS: u32 = 500;
+
+fn accent() -> Option<ulanzi_core::Color> {
+    Some(crate::ui::color_popover::color(
+        &adw::StyleManager::default().accent_color_rgba(),
+    ))
+}
+
+fn key_moves(look: &KeyLook, effect: &Effect, dir: &std::path::Path) -> bool {
+    !effect.is_none()
+        || MOVES.with(|m| {
+            *m.borrow_mut()
+                .entry(look_hash(look, dir))
+                .or_insert_with(|| is_animated(look, effect, dir))
+        })
+}
+
+/// Hand a look's frames to `done`, drawing them off the GTK thread the first time.
+fn with_frames(look: &KeyLook, effect: Effect, dir: &std::path::Path, done: impl FnOnce(Frames) + 'static) {
+    let color = effect_color(&effect, look.foreground, accent());
+    let hash = animation_hash(look, &effect, color, dir);
+    if let Some(frames) = ANIMATIONS.with(|a| a.borrow().get(&hash).cloned()) {
+        return done(frames);
+    }
+    let (look, dir) = (look.clone(), dir.to_path_buf());
+    crate::runtime::run(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let ctx = RenderCtx {
+                    profile_dir: &dir,
+                    icons: IconLibrary::bundled(),
+                };
+                render_animation(&look, &effect, color, &ctx)
+            })
+            .await
+        },
+        move |drawn| {
+            let Ok(Ok(a)) = drawn else { return };
+            let px = ulanzi_core::render::KEY_PX as i32;
+            let frames: Vec<(gdk::Texture, u32)> = a
+                .frames
+                .into_iter()
+                .zip(a.delays_ms)
+                .map(|(img, ms)| {
+                    let bytes = glib::Bytes::from_owned(img.into_raw());
+                    let tex =
+                        gdk::MemoryTexture::new(px, px, gdk::MemoryFormat::R8g8b8a8, &bytes, px as usize * 4);
+                    (tex.upcast(), ms)
+                })
+                .collect();
+            let frames = Rc::new(frames);
+            ANIMATIONS.with(|a| a.borrow_mut().insert(hash, frames.clone()));
+            done(frames);
+        },
+    );
+}
+
+fn show_frame(
+    owner: glib::WeakRef<gtk::Widget>,
+    running: Rc<Cell<u64>>,
+    token: u64,
+    frames: Frames,
+    at: usize,
+    set: Rc<dyn Fn(&gdk::Texture)>,
+) {
+    let Some(widget) = owner.upgrade() else { return };
+    if running.get() != token || frames.is_empty() {
+        return;
+    }
+    let mapped = widget.is_mapped();
+    let (tex, ms) = &frames[at % frames.len()];
+    if mapped {
+        set(tex);
+    }
+    let wait = if mapped { *ms } else { HIDDEN_WAIT_MS };
+    let next = if mapped { at + 1 } else { at };
+    glib::timeout_add_local_once(std::time::Duration::from_millis(wait as u64), move || {
+        show_frame(owner, running, token, frames, next, set)
+    });
+}
+
+/// Play `effect` on `look` through `set` while `owner` is on screen. Each call replaces the one
+/// before it on the same `running`; a look that doesn't move just stops that.
+pub fn animate(
+    owner: &gtk::Widget,
+    running: &Rc<Cell<u64>>,
+    look: &KeyLook,
+    effect: Effect,
+    dir: &std::path::Path,
+    set: impl Fn(&gdk::Texture) + 'static,
+) {
+    let token = running.get().wrapping_add(1);
+    running.set(token);
+    if !key_moves(look, &effect, dir) {
+        return;
+    }
+    let (owner, running) = (owner.downgrade(), running.clone());
+    let set: Rc<dyn Fn(&gdk::Texture)> = Rc::new(set);
+    with_frames(look, effect, dir, move |frames| {
+        show_frame(owner, running, token, frames, 0, set)
+    });
+}
+
+/// Whether a key's GIF lost frames on its way to the deck.
+pub fn lost_frames(look: &KeyLook, dir: &std::path::Path, done: impl FnOnce(bool) + 'static) {
+    let (look, dir) = (look.clone(), dir.to_path_buf());
+    crate::runtime::run(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let ctx = RenderCtx {
+                    profile_dir: &dir,
+                    icons: IconLibrary::bundled(),
+                };
+                render_animation(&look, &look.effect, None, &ctx)
+                    .is_ok_and(|a| encode_fit(&a, GIF_TARGET).lost_frames)
+            })
+            .await
+            .unwrap_or(false)
+        },
+        done,
+    );
+}
+
 pub fn profile_dir(state: &State) -> std::path::PathBuf {
     Store::xdg()
         .map(|s| s.profile_dir(state.profile_id()))
@@ -358,6 +493,7 @@ struct KeyWidget {
     label: gtk::Label,
     /// Shown when the key's action can't work (a missing app, scene, file…).
     warning: gtk::Image,
+    animation: Rc<Cell<u64>>,
 }
 
 /// Why a key's tap or hold action can't work, if it can't.
@@ -434,6 +570,7 @@ fn key_widget(width: i32) -> KeyWidget {
         picture,
         label,
         warning,
+        animation: Rc::default(),
     }
 }
 
@@ -938,6 +1075,19 @@ pub fn build(state: &State) -> Canvas {
                                 ulanzi_core::render::KEY_PX as i32,
                                 ulanzi_core::render::KEY_PX as i32,
                             )));
+                            let picture = k.picture.downgrade();
+                            animate(
+                                k.picture.upcast_ref(),
+                                &k.animation,
+                                look,
+                                look.effect,
+                                &dir,
+                                move |t| {
+                                    if let Some(p) = picture.upgrade() {
+                                        p.set_paintable(Some(t));
+                                    }
+                                },
+                            );
                             let text = &shown.label.text;
                             k.label.set_label(text);
                             // A label with its own position is part of the key image.
@@ -962,6 +1112,7 @@ pub fn build(state: &State) -> Canvas {
                             }
                         }
                         None => {
+                            k.animation.set(k.animation.get().wrapping_add(1));
                             k.picture.set_paintable(Some(&or_blank(
                                 None,
                                 ulanzi_core::render::KEY_PX as i32,

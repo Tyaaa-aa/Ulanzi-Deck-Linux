@@ -4,7 +4,7 @@
 //! (undo, a drop on the canvas, the daemon). Its own edits only refresh the preview and summaries,
 //! so typing and dragging keep focus.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -17,6 +17,7 @@ use ulanzi_core::model::*;
 use crate::state::{Change, State};
 use crate::ui::action_editor::{self, How, OnChange};
 use crate::ui::canvas;
+use crate::ui::effects_rows::{self, Edit};
 
 pub struct Panel {
     pub root: gtk::Widget,
@@ -637,15 +638,26 @@ fn key_preview(ctx: &C, k: u8) -> gtk::Widget {
         .build();
     frame.set_size_request(120, 120);
     frame.append(&overlay);
+    let held = Rc::new(Cell::new(false));
+    let running: Rc<Cell<u64>> = Rc::default();
     let refresh = {
         let state = ctx.state.clone();
+        let held = held.clone();
         move || {
             let mut look = shown_look(&state, k);
             if let Some(f) = state.preview.borrow().as_ref() {
                 ulanzi_core::edit::apply_field(&mut look, f);
             }
-            let tex = canvas::key_texture(&look, &canvas::profile_dir(&state));
+            let dir = canvas::profile_dir(&state);
+            let tex = canvas::key_texture(&look, &dir);
             picture.set_paintable(tex.as_ref());
+            let effect = effect_for(&look, held.get(), state.settings.borrow().key_effects);
+            let shown = picture.downgrade();
+            canvas::animate(picture.upcast_ref(), &running, &look, effect, &dir, move |t| {
+                if let Some(p) = shown.upgrade() {
+                    p.set_paintable(Some(t));
+                }
+            });
             let text = if look.label.visible {
                 look.label.text.as_str()
             } else {
@@ -660,6 +672,21 @@ fn key_preview(ctx: &C, k: u8) -> gtk::Widget {
     {
         let refresh = refresh.clone();
         ctx.on_refresh(move || refresh());
+    }
+    {
+        // Holding the mouse here shows how the key looks while pressed.
+        let press = gtk::GestureClick::new();
+        let (down, up) = (refresh.clone(), refresh.clone());
+        let (is_down, is_up) = (held.clone(), held);
+        press.connect_pressed(move |_, _, _, _| {
+            is_down.set(true);
+            down();
+        });
+        press.connect_released(move |_, _, _, _| {
+            is_up.set(false);
+            up();
+        });
+        frame.add_controller(press);
     }
     {
         // Live previews (hovered colours); weak so a rebuilt inspector drops it.
@@ -992,7 +1019,99 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
         .build();
     live.connect_active_notify(move |r| set(How::Set, Field::Dynamic(r.is_active())));
     look.add_row(&live);
+    for row in effects_rows::rows(effect_view(&state, &keys), effect_commit(ctx, keys.clone())) {
+        look.add_row(&row);
+    }
+    if let [k] = keys[..] {
+        let note = adw::ActionRow::builder()
+            .title("This GIF was shortened to fit the deck")
+            .css_classes(["dim-label"])
+            .visible(false)
+            .build();
+        let look_now = key_look(&state, k);
+        look.add_row(&note);
+        if matches!(&look_now.source, ImageSource::Image { path } if path.to_lowercase().ends_with(".gif")) {
+            canvas::lost_frames(&look_now, &canvas::profile_dir(&state), move |lost| {
+                note.set_visible(lost)
+            });
+        }
+    }
     (group, label_group)
+}
+
+/// A key's looks for live states: its own, or those its plugin action declares.
+fn key_states(key: &Key) -> Vec<LookState> {
+    match &key.tap {
+        Some(Action::Plugin { plugin, action, .. }) if key.look.states.is_empty() => {
+            catalog::plugin_states(plugin, action)
+        }
+        _ => key.look.states.clone(),
+    }
+}
+
+/// The effect presets of a key's plugin action.
+fn key_presets(state: &State, key: &Key) -> Vec<ulanzi_core::plugin::ManifestEffectPreset> {
+    let Some(Action::Plugin { plugin, action, .. }) = &key.tap else {
+        return Vec::new();
+    };
+    let plugins = state.plugins.borrow();
+    plugins
+        .manifests
+        .get(plugin)
+        .and_then(|m| m.action(action))
+        .map(|a| a.effect_presets.clone())
+        .unwrap_or_default()
+}
+
+fn effect_view(state: &State, keys: &[u8]) -> effects_rows::View {
+    let e = state.editor.borrow();
+    let one = keys.first().filter(|_| keys.len() == 1).and_then(|k| e.key(*k));
+    effects_rows::View {
+        resting: e.shared_look(keys, |l| l.effect),
+        pressed: e.shared_look(keys, |l| l.pressed),
+        states: one.map_or(Vec::new(), |k| {
+            effects_rows::state_rows(&key_states(k), k.look.dynamic)
+        }),
+        presets: one.map_or(Vec::new(), |k| {
+            key_presets(state, k).into_iter().map(|p| p.name).collect()
+        }),
+    }
+}
+
+fn effect_commit(ctx: &C, keys: Rc<Vec<u8>>) -> Rc<dyn Fn(Edit, bool)> {
+    let ctx = ctx.clone();
+    Rc::new(move |edit, again| {
+        let how = if again { How::Structure } else { How::Set };
+        let key = keys
+            .first()
+            .and_then(|k| ctx.state.editor.borrow().key(*k).cloned());
+        let presets = key.as_ref().map_or(Vec::new(), |k| key_presets(&ctx.state, k));
+        ctx.commit(how, |e| match edit {
+            Edit::Resting(effect) => e.set_field(&keys, Field::Effect(effect)),
+            Edit::Pressed(p) => e.set_field(&keys, Field::Pressed(p)),
+            Edit::State(n, effect) => {
+                let mut states = key.as_ref().map_or(Vec::new(), key_states);
+                if let Some(st) = states.get_mut(n) {
+                    st.look.effect = Some(effect);
+                }
+                e.set_field(&keys, Field::States(states));
+            }
+            Edit::Preset(n) => {
+                let (Some(key), Some(preset)) = (&key, presets.get(n)) else {
+                    return;
+                };
+                let plugin = match &key.tap {
+                    Some(Action::Plugin { plugin, .. }) => plugin.as_str(),
+                    _ => "",
+                };
+                let mut look = key.look.clone();
+                ulanzi_core::plugin::apply_preset(&mut look, preset, plugin);
+                e.set_field(&keys, Field::Effect(look.effect));
+                e.set_field(&keys, Field::Pressed(look.pressed));
+                e.set_field(&keys, Field::States(look.states));
+            }
+        });
+    })
 }
 
 /// The label values the keys offer: a macro's, or their plugin action's when they all have the same one.

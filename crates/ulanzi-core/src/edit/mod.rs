@@ -68,6 +68,10 @@ pub enum Field {
     Dynamic(bool),
     /// `None` follows Preferences.
     LabelPosition(Option<LabelPosition>),
+    Effect(Effect),
+    Pressed(PressedEffect),
+    /// The key's own looks for live states.
+    States(Vec<LookState>),
 }
 
 /// The common value of a property across a selection.
@@ -92,6 +96,9 @@ pub fn apply_field(look: &mut KeyLook, field: &Field) {
         Field::Source(s) => look.source = s.clone(),
         Field::Dynamic(d) => look.dynamic = *d,
         Field::LabelPosition(p) => look.label.position = *p,
+        Field::Effect(e) => look.effect = *e,
+        Field::Pressed(p) => look.pressed = *p,
+        Field::States(s) => look.states = s.clone(),
     }
 }
 

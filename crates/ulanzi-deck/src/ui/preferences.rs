@@ -231,6 +231,19 @@ fn general_page(state: &State) -> adw::PreferencesPage {
     sound.add_suffix(&scale);
     sound.add_suffix(&value);
     keys.add(&sound);
+    let effects = adw::SwitchRow::builder()
+        .title("Key Effects")
+        .subtitle("Pulse a key while it's pressed. Keys with their own effect keep it.")
+        .active(s.key_effects)
+        .build();
+    {
+        let state = state.clone();
+        effects.connect_active_notify(move |r| {
+            let v = r.is_active();
+            change(&state, |s| s.key_effects = v)
+        });
+    }
+    keys.add(&effects);
     page.add(&keys);
     page.add(&crate::ui::updates::preferences_group(state));
     page
