@@ -54,7 +54,7 @@ pub struct Settings {
     pub plugins: BTreeMap<String, PluginEntry>,
     /// Allows installing plugins from a folder.
     pub developer_mode: bool,
-    /// Pulse keys while pressed, unless a key has its own pressed effect.
+    /// Pulse keys while held, unless a key has its own effect for that.
     #[serde(skip_serializing_if = "is_on")]
     pub key_effects: bool,
     /// Colours the user saved in the colour picker.

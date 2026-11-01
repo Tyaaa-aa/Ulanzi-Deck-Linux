@@ -190,6 +190,15 @@ pub struct Page {
 }
 
 impl Page {
+    /// How many keys play a GIF or an effect at rest, which the deck's small CPU feels.
+    pub fn moving_keys(&self) -> usize {
+        let moves = |k: &Key| {
+            let gif = matches!(&k.look.source, super::ImageSource::Image { path } if path.to_lowercase().ends_with(".gif"));
+            gif || !k.look.effect.is_none()
+        };
+        self.keys.values().filter(|k| moves(k)).count()
+    }
+
     pub fn new(name: &str) -> Page {
         Page {
             id: Uuid::new_v4(),
@@ -212,6 +221,14 @@ pub struct Key {
 }
 
 impl Key {
+    /// Whether holding this key shows anything: an action's default effect, or one chosen for it.
+    pub fn shows_press(&self) -> bool {
+        match self.look.pressed {
+            super::PressedEffect::Own(e) => !e.is_none(),
+            super::PressedEffect::Default => self.tap.is_some() || self.hold.is_some(),
+        }
+    }
+
     /// The look before any press: a cycling key shows its last step, or its first when it shows
     /// the next one.
     pub fn shown_look(&self) -> KeyLook {

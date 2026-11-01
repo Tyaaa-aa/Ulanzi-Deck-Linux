@@ -12,7 +12,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   or a set level. Keys remember a monitor by name, so changing display numbers don't break them.
 - **GIF keys**: a GIF plays on the deck, shrunk to fit if it's too big.
 - **Key effects**: Glow, Pulse, Chase and Fire, in any colour, one per live state and one while held. Keys
-  pulse while pressed by default; **Preferences → Key Effects** turns that off.
+  pulse while held by default; **Preferences → Key Effects** turns that off.
 - **Saved colours** in the colour picker.
 - **Profile icons and colours**, and Ctrl+1 to Ctrl+9 to go to a profile.
 - The deck's firmware version and **Restart Service** in the status menu at the top left.

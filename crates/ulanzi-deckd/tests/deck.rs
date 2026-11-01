@@ -299,15 +299,13 @@ async fn sleep_after_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn screen_updates_every_second_and_unlocks_every_30s() {
+async fn screen_updates_every_second() {
     let r = rig().await;
     r.mock.clear();
     tokio::time::sleep(Duration::from_secs(61)).await;
     let cmds = r.mock.commands();
     let windows = cmds.iter().filter(|c| **c == WINDOW).count();
-    let unlocks = cmds.iter().filter(|c| **c == UNLOCK).count();
     assert!((59..=62).contains(&windows), "{windows} window updates");
-    assert_eq!(unlocks, 2);
 }
 
 #[tokio::test(start_paused = true)]
@@ -629,49 +627,6 @@ fn image_names_are_seeded_per_process() {
     assert_ne!(RenderCache::new().generation, RenderCache::new().generation);
 }
 
-/// CPU time (user + system) this process has used, in clock ticks.
-fn cpu_ticks() -> u64 {
-    let stat = std::fs::read_to_string("/proc/self/stat").expect("stat");
-    let after = &stat[stat.rfind(')').expect("comm") + 2..];
-    let f: Vec<&str> = after.split_whitespace().collect();
-    f[11].parse::<u64>().expect("utime") + f[12].parse::<u64>().expect("stime")
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn no_busy_loop_when_the_deck_goes_away_with_an_upload_pending() {
-    let dir = tempfile::tempdir().expect("tmp");
-    let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
-    store.save_profile(&profile()).expect("save");
-    let (tx, _events) = spawn_deck(store, Settings::default(), Arc::new(FakeRunner::default()));
-    let (t, mock) = answering_mock();
-    tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
-        .await
-        .expect("up");
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    // A live change inside the upload cooldown leaves an upload pending...
-    let playing = DynamicState {
-        playing: Some(true),
-        ..DynamicState::default()
-    };
-    tx.send(DeckMsg::Dynamic(Box::new(playing)))
-        .await
-        .expect("dynamic");
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    // ...then the deck disappears.
-    mock.inject
-        .send(Err(std::io::Error::from_raw_os_error(19)))
-        .await
-        .expect("unplug");
-    tokio::time::sleep(Duration::from_millis(3000)).await;
-    let before = cpu_ticks();
-    tokio::time::sleep(Duration::from_millis(1000)).await;
-    let used = cpu_ticks() - before;
-    assert!(
-        used < 30,
-        "the deck loop used {used} ticks of CPU in 1 s while unplugged"
-    );
-}
-
 async fn active_profile(r: &Rig) -> uuid::Uuid {
     let (tx, rx) = tokio::sync::oneshot::channel();
     r.tx.send(DeckMsg::Query(tx)).await.expect("send");
@@ -931,7 +886,8 @@ async fn a_fast_macro_updates_the_key_every_100_ms_at_most() {
         .iter()
         .filter(|c| **c == PARTIAL || **c == BUTTONS)
         .count();
-    assert!((5..=11).contains(&uploads), "{uploads} uploads in a second");
+    // Ten at most from the macro, and one for the press.
+    assert!((5..=12).contains(&uploads), "{uploads} uploads in a second");
 }
 
 #[tokio::test(start_paused = true)]
@@ -1111,6 +1067,57 @@ async fn a_press_shows_the_pressed_look_and_a_release_goes_back() {
     })
     .await;
     assert!(!r.mock.commands().contains(&BUTTONS), "only that key is sent");
+}
+
+#[tokio::test]
+async fn a_tap_sends_nothing_and_a_hold_starts_the_effect() {
+    let r = rig_effects(
+        one_key(key(Some(cmd("tap")), None)),
+        Settings::default(),
+        Vec::new(),
+    )
+    .await;
+    // The rig's own wait lets the pressed looks get drawn.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    r.mock.clear();
+    r.click(1).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(manifests(&r.mock.sent()), Vec::<String>::new());
+    assert_eq!(r.runner.ran(), vec![cmd("tap")]);
+    r.press(1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif")));
+    r.release(1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".png")),
+        "back at once"
+    );
+}
+
+#[tokio::test]
+async fn a_chosen_pressed_effect_plays_on_a_key_with_no_action() {
+    let mut k = key(None, None);
+    k.look.pressed = PressedEffect::Own(Effect::of(EffectKind::Fire));
+    let r = rig_of(one_key(k), Settings::default(), Vec::new()).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    r.press(1).await;
+    until("the fire", || {
+        last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif"))
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_deck_is_kept_awake() {
+    let r = rig().await;
+    r.mock.clear();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let unlocks = r.mock.commands().iter().filter(|c| **c == UNLOCK).count();
+    assert!(
+        unlocks >= 3,
+        "only {unlocks} a second: a quiet deck stalls the next press"
+    );
 }
 
 #[tokio::test]

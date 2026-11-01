@@ -20,7 +20,7 @@ const MIN_DELAY_MS: u32 = 20;
 const NO_DELAY_MS: u32 = 100;
 const SHADES: [u32; 3] = [16, 8, 4];
 /// Part of every cached file's name. Raise it when effects are drawn differently.
-const DRAW_VERSION: u64 = 1;
+const DRAW_VERSION: u64 = 2;
 
 /// Frames and how long each shows.
 #[derive(Debug, Clone, PartialEq)]

@@ -93,9 +93,16 @@ Keys can move. Pick a GIF in **Look → Image**, or give a key a border effect:
 Open the **Effects** section under **Look**:
 
 - **Effect** is what the key shows at rest: **Glow**, **Pulse**, **Chase** or **Fire**.
-- **When Pressed** is what it shows while held. **Default** is a Pulse, and **None** keeps the key plain.
-- Choosing an effect adds a colour button and **Speed**. The automatic colour uses the key's own colour, or your
-  desktop's accent colour if that's too dark to see. Every effect can be any colour, Fire included.
+- **When Held** is what it shows when you hold the key for a moment. **Default** is a Pulse, and
+  **None** keeps the key plain. A quick tap shows only the deck's own shrink, because the deck takes
+  about 0.2 seconds to show a new picture. The Default Pulse needs the key to have an action; an effect
+  you choose plays on any key. If the key rests on the same effect, nothing changes when you hold it.
+- Choosing an effect adds a colour button and **Speed**. A new resting effect starts on Slow, which is
+  easier on the deck. The automatic colour uses the key's own colour, or your desktop's accent colour if
+  that's too dark to see. Every effect can be any colour, Fire included.
+
+A page with seven or more moving keys (effects or GIFs) shows a note under the deck, because many
+moving keys slow the deck down.
 
 With **Show Live State** on, a key that has live states gets one Effect row per state, so an air
 conditioner can burn while it's off and chase while it's on. **Effect Otherwise** covers any other
@@ -108,9 +115,6 @@ look. Plugins can offer ready-made sets in **Effect Preset**.
 The deck can't show a GIF over about 300 KB, so bigger ones are shrunk to fit: fewer colours first, then
 fewer frames, and a note in the Look section says so if frames went. A GIF can be up to 16 MB and 500
 frames. A key shows its still look for a moment the first time its effect is drawn.
-
-A key can change up to about a second late now and then, mostly on the first press after a pause. The
-action itself never waits for this.
 
 To turn the default Pulse off, use **Preferences → Key Effects**. Keys with their own effect keep it.
 

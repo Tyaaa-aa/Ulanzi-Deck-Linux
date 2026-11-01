@@ -181,8 +181,8 @@ pub fn summary(view: &View) -> String {
         .any(|s| s.1.is_some())
         .then(|| "By state".to_string());
     let pressed = match view.pressed {
-        Mixed::One(PressedEffect::Default) => Some("Pulse when pressed".to_string()),
-        Mixed::One(PressedEffect::Own(e)) if !e.is_none() => Some(format!("{} when pressed", name(e.kind))),
+        Mixed::One(PressedEffect::Default) => Some("Pulse when held".to_string()),
+        Mixed::One(PressedEffect::Own(e)) if !e.is_none() => Some(format!("{} when held", name(e.kind))),
         _ => None,
     };
     let parts: Vec<String> = [live.or(resting), pressed].into_iter().flatten().collect();
@@ -190,6 +190,18 @@ pub fn summary(view: &View) -> String {
         "None".to_string()
     } else {
         parts.join(", ")
+    }
+}
+
+/// A resting effect changed to `kind`. A new one starts slow: every moving key costs the deck, and
+/// slower ones cost less.
+fn moved_to(effect: Effect, kind: EffectKind) -> Effect {
+    let new = effect.is_none() && kind != EffectKind::None;
+    let speed = if new { EffectSpeed::Slow } else { effect.speed };
+    Effect {
+        kind,
+        speed,
+        ..effect
     }
 }
 
@@ -212,15 +224,7 @@ fn effect_row(
     let value = Rc::new(Cell::new(shown));
     {
         let (send, value) = (send.clone(), value.clone());
-        row.connect_selected_notify(move |r| {
-            send(
-                Effect {
-                    kind: kind_at(r.selected()),
-                    ..value.get()
-                },
-                true,
-            )
-        });
+        row.connect_selected_notify(move |r| send(moved_to(value.get(), kind_at(r.selected())), true));
     }
     out.push(row.clone().upcast());
     options(out, &row, value, send);
@@ -241,10 +245,7 @@ fn state_row(
     {
         let (send, value) = (send.clone(), value.clone());
         row.connect_selected_notify(move |r| {
-            let chosen = (r.selected() > 0).then(|| Effect {
-                kind: kind_at(r.selected() - 1),
-                ..value.get()
-            });
+            let chosen = (r.selected() > 0).then(|| moved_to(value.get(), kind_at(r.selected() - 1)));
             send(chosen, true);
         });
     }
@@ -299,7 +300,7 @@ pub fn rows(view: View, commit: Rc<dyn Fn(Edit, bool)>) -> Vec<gtk::Widget> {
         PressedEffect::Default => (0, Effect::default()),
         PressedEffect::Own(e) => (1 + kind_index(e.kind), e),
     };
-    let row = combo("When Pressed", &names, at, view.pressed == Mixed::Mixed);
+    let row = combo("When Held", &names, at, view.pressed == Mixed::Mixed);
     let value = Rc::new(Cell::new(own));
     {
         let (commit, value) = (commit.clone(), value.clone());
@@ -392,7 +393,7 @@ mod tests {
 
     #[test]
     fn the_summary_says_what_a_key_does() {
-        assert_eq!(summary(&view()), "Pulse when pressed");
+        assert_eq!(summary(&view()), "Pulse when held");
         let v = View {
             resting: Mixed::One(Effect::of(EffectKind::Fire)),
             pressed: Mixed::One(PressedEffect::Own(Effect::default())),
@@ -408,7 +409,7 @@ mod tests {
 
     #[test]
     fn a_plain_key_has_two_rows() {
-        crate::ui::with_gtk(|| assert_eq!(titles(view()), ["Effect", "When Pressed"]));
+        crate::ui::with_gtk(|| assert_eq!(titles(view()), ["Effect", "When Held"]));
     }
 
     #[test]
@@ -418,7 +419,7 @@ mod tests {
                 resting: Mixed::One(Effect::of(EffectKind::Fire)),
                 ..view()
             };
-            assert_eq!(titles(v), ["Effect", "Speed", "When Pressed"]);
+            assert_eq!(titles(v), ["Effect", "Speed", "When Held"]);
         });
     }
 
@@ -432,12 +433,7 @@ mod tests {
             };
             assert_eq!(
                 titles(v),
-                [
-                    "Effect Preset",
-                    "Effect When On",
-                    "Effect Otherwise",
-                    "When Pressed"
-                ]
+                ["Effect Preset", "Effect When On", "Effect Otherwise", "When Held"]
             );
         });
     }
@@ -460,6 +456,25 @@ mod tests {
             assert_eq!(seen.get(), Some(Edit::State(0, Some(Effect::default()))));
             row.set_selected(0);
             assert_eq!(seen.get(), Some(Edit::State(0, None)));
+        });
+    }
+
+    #[test]
+    fn a_new_resting_effect_starts_slow() {
+        crate::ui::with_gtk(|| {
+            let seen = Rc::new(Cell::new(None));
+            let list = {
+                let seen = seen.clone();
+                rows(view(), Rc::new(move |e, _| seen.set(Some(e))))
+            };
+            list[0]
+                .downcast_ref::<adw::ComboRow>()
+                .expect("kind")
+                .set_selected(4);
+            let Some(Edit::Resting(e)) = seen.get() else {
+                panic!("{:?}", seen.get());
+            };
+            assert_eq!((e.kind, e.speed), (EffectKind::Fire, EffectSpeed::Slow));
         });
     }
 

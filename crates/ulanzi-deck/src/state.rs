@@ -303,6 +303,14 @@ impl AppState {
         }
     }
 
+    /// Show a page here and on the deck.
+    pub fn go_to_page(&self, page: usize) {
+        self.set_page(page);
+        if let Some(c) = self.client.borrow().clone() {
+            crate::runtime::run(async move { c.set_page(page as u32).await }, |_| {});
+        }
+    }
+
     pub fn set_page(&self, page: usize) {
         self.editor.borrow_mut().set_page(page);
         self.selection.borrow_mut().clear();

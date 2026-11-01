@@ -53,6 +53,30 @@ pub fn render_key_progress(look: &KeyLook, ctx: &RenderCtx, share: f32) -> Optio
     draw_key(look, ctx, Some(share))
 }
 
+/// Side of a stack of icons.
+const STACK_PX: u32 = 96;
+const STACK_ICON_PX: f32 = 58.0;
+/// Where each icon of a stack sits, front first: turn in degrees, and offset from the centre.
+const STACK: [(f32, f32, f32); 3] = [(-10.0, -13.0, 5.0), (8.0, 11.0, -10.0), (18.0, 14.0, 12.0)];
+
+/// Up to three icons (PNGs, first in front) fanned out like a hand of cards, as a PNG.
+pub fn stacked_icons(icons: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let mut out = Pixmap::new(STACK_PX, STACK_PX)?;
+    let centre = STACK_PX as f32 / 2.0;
+    for (png, (turn, x, y)) in icons.iter().zip(STACK).rev() {
+        let icon = Pixmap::decode_png(png).ok()?;
+        let side = icon.width().max(icon.height()) as f32;
+        let scale = STACK_ICON_PX / side;
+        let half = STACK_ICON_PX / 2.0;
+        let place = Transform::from_scale(scale, scale)
+            .post_translate(-half, -half)
+            .post_rotate(turn)
+            .post_translate(centre + x, centre + y);
+        out.draw_pixmap(0, 0, icon.as_ref(), &PixmapPaint::default(), place, None);
+    }
+    out.encode_png().ok()
+}
+
 /// Height of the progress bar.
 const BAR_PX: u32 = 8;
 

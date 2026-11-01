@@ -120,9 +120,19 @@ fn store() -> Option<Store> {
 }
 
 /// The picture on a profile's tile, or `None` for the plain one.
-fn tile_texture(id: uuid::Uuid, chosen: &ProfileLook) -> Option<gtk::gdk::Texture> {
+fn tile_texture(id: uuid::Uuid, chosen: &ProfileLook, apps: &[String]) -> Option<gtk::gdk::Texture> {
     if chosen.is_default() {
         return None;
+    }
+    // A look from auto-switch shows every app the profile follows, up to three.
+    if chosen.from_app.is_some() && apps.len() > 1 {
+        let icons: Vec<Vec<u8>> = apps
+            .iter()
+            .filter_map(|a| ulanzi_core::apps::app_icon_png(a, 64))
+            .collect();
+        if let Some(stack) = ulanzi_core::render::stacked_icons(&icons) {
+            return crate::ui::canvas::texture(&stack);
+        }
     }
     let dark = adw::StyleManager::default().is_dark();
     let look = KeyLook {
@@ -165,6 +175,15 @@ fn tint_class(color: Color) -> Option<String> {
 
 thread_local! {
     static LOADED_TINTS: std::cell::RefCell<std::collections::HashSet<String>> = Default::default();
+}
+
+/// The apps a profile follows.
+fn rule_apps(state: &State, id: uuid::Uuid) -> Vec<String> {
+    state
+        .rules
+        .borrow()
+        .get(&id)
+        .map_or(Vec::new(), |r| r.apps.clone())
 }
 
 /// Change a profile's look and show it.
@@ -261,11 +280,12 @@ fn look_dialog(state: &State, near: &impl IsA<gtk::Widget>, id: uuid::Uuid, name
         .build();
     let marks: Rc<std::cell::RefCell<Vec<(Color, gtk::Button)>>> = Rc::default();
     let redraw: Rc<dyn Fn()> = {
-        let (name, preview, marks) = (name.to_string(), preview.clone(), marks.clone());
+        let (state, name, preview, marks) = (state.clone(), name.to_string(), preview.clone(), marks.clone());
         Rc::new(move || {
             let look = store().map(|s| s.profile_look(id)).unwrap_or_default();
             preview.remove_all();
-            preview.append(&profile_row(&name, "", false, &look, id));
+            let apps = rule_apps(&state, id);
+            preview.append(&profile_row(&name, "", false, &look, id, &apps));
             for (c, b) in marks.borrow().iter() {
                 if look.color == Some(*c) {
                     b.add_css_class("swatch-current");
@@ -366,6 +386,7 @@ fn profile_row(
     active: bool,
     look: &ProfileLook,
     id: uuid::Uuid,
+    apps: &[String],
 ) -> gtk::ListBoxRow {
     let b = gtk::Box::builder()
         .spacing(12)
@@ -381,7 +402,7 @@ fn profile_row(
         .halign(gtk::Align::Center)
         .pixel_size(TILE_PX)
         .build();
-    if let Some(tile) = tile_texture(id, look) {
+    if let Some(tile) = tile_texture(id, look, apps) {
         badge.set_paintable(Some(&tile));
     }
     badge.set_overflow(gtk::Overflow::Hidden);
@@ -475,12 +496,12 @@ pub fn build(state: &State) -> gtk::Box {
     {
         let state = state.clone();
         column.append(&heading("Pages", "Add a page", move || {
+            let mut at = 0;
             state.edit(|e| {
                 let n = e.profile().pages.len() + 1;
-                let at = e.add_page(&format!("Page {n}"));
-                e.set_page(at);
+                at = e.add_page(&format!("Page {n}"));
             });
-            state.notify(Change::Page);
+            state.go_to_page(at);
         }));
     }
     column.append(&pages);
@@ -555,7 +576,7 @@ pub fn build(state: &State) -> gtk::Box {
                     };
                     let sub = crate::ui::autoswitch::summary(rule.as_ref(), default == Some(*id));
                     let look = store().map(|s| s.profile_look(*id)).unwrap_or_default();
-                    let row = profile_row(name, &sub, *id == current, &look, *id);
+                    let row = profile_row(name, &sub, *id == current, &look, *id, &rule_apps(&state, *id));
                     attach_profile_menu(&state, &row, *id, name, i, list.len());
                     let st = state.clone();
                     reorderable(&row, "profile", i, move |from, to| move_profile(&st, from, to));
@@ -571,6 +592,7 @@ pub fn build(state: &State) -> gtk::Box {
                         false,
                         &ProfileLook::default(),
                         uuid::Uuid::nil(),
+                        &[],
                     );
                     row.set_activatable(false);
                     row.add_css_class("dim-label");
@@ -627,11 +649,7 @@ pub fn build(state: &State) -> gtk::Box {
         pages.connect_row_activated(move |_, row| {
             let i = row.index().max(0) as usize;
             if i != state.editor.borrow().page() {
-                state.set_page(i);
-                let c = state.client.borrow().clone();
-                if let Some(c) = c {
-                    runtime::run(async move { c.set_page(i as u32).await }, |_| {});
-                }
+                state.go_to_page(i);
             }
         });
     }

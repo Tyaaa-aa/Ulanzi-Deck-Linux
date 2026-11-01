@@ -146,7 +146,7 @@ thread_local! {
     static TEXTURES: RefCell<HashMap<u64, Option<gdk::Texture>>> = RefCell::new(HashMap::new());
 }
 
-fn texture(png: &[u8]) -> Option<gdk::Texture> {
+pub fn texture(png: &[u8]) -> Option<gdk::Texture> {
     gdk::Texture::from_bytes(&glib::Bytes::from(png)).ok()
 }
 
@@ -275,6 +275,14 @@ fn dial_tooltip(plugins: &crate::plugins::Plugins, n: usize, d: &ulanzi_core::mo
         line("Turn right", &d.right),
         line("Hold", &d.hold),
     )
+}
+
+/// From here on a page's moving keys slow presses down, and more so as they add up.
+const MANY_MOVING_KEYS: usize = 7;
+
+/// A word about a page with many moving keys.
+fn moving_note(keys: usize) -> Option<String> {
+    (keys >= MANY_MOVING_KEYS).then(|| format!("{keys} moving keys on this page may slow the deck down."))
 }
 
 const HINT: &str = "Right-click a key to copy or paste it. The ‹ › buttons flip pages on the deck.";
@@ -830,6 +838,14 @@ pub fn build(state: &State) -> Canvas {
         .justify(gtk::Justification::Center)
         .build();
 
+    let note = gtk::Label::builder()
+        .css_classes(["hint", "warning"])
+        .margin_top(6)
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .visible(false)
+        .build();
+
     let column = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .halign(gtk::Align::Center)
@@ -842,6 +858,7 @@ pub fn build(state: &State) -> Canvas {
     column.append(&body);
     column.append(&dots);
     column.append(&hint);
+    column.append(&note);
     let scroller = gtk::ScrolledWindow::builder()
         .child(&column)
         .hexpand(true)
@@ -1030,6 +1047,7 @@ pub fn build(state: &State) -> Canvas {
 
     // Redraw.
     let redraw = {
+        let note = note.clone();
         let (state, keys, screen, small, dials, dots, faces) = (
             state.clone(),
             keys.clone(),
@@ -1054,6 +1072,9 @@ pub fn build(state: &State) -> Canvas {
                 let sel = state.selection.borrow().clone();
                 let e = state.editor.borrow();
                 let page = &e.profile().pages[e.page()];
+                let moving = moving_note(page.moving_keys());
+                note.set_visible(moving.is_some());
+                note.set_label(moving.as_deref().unwrap_or_default());
                 for (i, k) in keys.iter().enumerate() {
                     // A hovered colour shows on the selected keys before it is applied.
                     let previewed = preview.as_ref().filter(|_| sel.contains(Slot::Key(i as u8)));
@@ -1290,6 +1311,12 @@ fn key_menu() -> gio::Menu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_note_appears_once_a_page_has_many_moving_keys() {
+        assert_eq!(moving_note(MANY_MOVING_KEYS - 1), None);
+        assert!(moving_note(MANY_MOVING_KEYS).is_some_and(|n| n.starts_with("7 moving keys")));
+    }
 
     #[test]
     fn kept_frames_stay_under_their_limit() {

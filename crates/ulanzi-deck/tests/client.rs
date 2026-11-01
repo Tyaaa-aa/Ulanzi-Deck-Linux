@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ulanzi_core::model::{Model, Profile, Settings};
+use ulanzi_core::model::{Model, Page, Profile, Settings};
 use ulanzi_core::store::Store;
 use ulanzi_deck::client::{Client, ClientError, ClientEvent, ImportChoice};
 use ulanzi_deckd::actions::Executor;
@@ -145,6 +145,18 @@ async fn client_debounces_rapid_applies() {
     c.flush().await;
     assert_eq!(c.revision(r.profile.id), 2, "ten quick edits are one save");
     assert_eq!(r.store.load_profile(r.profile.id).expect("load").name, "Name 9");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_to_a_page_just_added_waits_for_its_save() {
+    let Some(r) = rig().await else { return };
+    let c = Client::connect_to(&r.bus.addr).await.expect("connect");
+    let mut p = c.profile(r.profile.id).await.expect("profile");
+    p.pages.push(Page::new("New"));
+    let at = p.pages.len() as u32 - 1;
+    c.apply(p);
+    c.set_page(at).await.expect("set page");
+    assert_eq!(c.hello().await.expect("hello").active_page, at);
 }
 
 #[tokio::test(flavor = "multi_thread")]

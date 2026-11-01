@@ -322,8 +322,8 @@ fn foreign_look() -> KeyLook {
 
 /// Build all 14 manifest entries (keys 0-12 and the wide screen) for `page`.
 const MAX_TRIED: usize = 4096;
-
 /// A moving key to draw.
+#[derive(Clone)]
 pub struct EffectJob {
     pub hash: u64,
     pub look: KeyLook,
@@ -437,8 +437,7 @@ pub fn missing_effects(
         }
         let vars = key_vars(key, progress, &vars);
         let look = shown_look(key, dynamic, &vars, Some(&at));
-        let acts = key.tap.is_some() || key.hold.is_some();
-        for held in [false, true].into_iter().filter(|h| !h || acts) {
+        for held in [false, true].into_iter().filter(|h| !h || key.shows_press()) {
             if let Some(job) = moving_key(&look, held, dynamic, profile_dir, cache)
                 && !effects.has(job.hash)
                 && !cache.tried.contains(&job.hash)

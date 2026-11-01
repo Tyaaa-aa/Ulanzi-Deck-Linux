@@ -132,7 +132,7 @@ fn confirm(state: &State, parent: &gtk::Widget, m: &Manifest, ks: &KeySet, picks
             state.edit(|e| first = e.add_keys(groups, &name, new_page));
             first
         };
-        state.set_page(page);
+        state.go_to_page(page);
         track(&state, &m, &ks, &items);
         crate::ui::toast(&state, &format!("Added {n} keys"));
     });

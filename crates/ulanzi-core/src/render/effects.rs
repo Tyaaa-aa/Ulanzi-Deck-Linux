@@ -14,6 +14,8 @@ pub const GIF_TARGET: usize = 250 * 1024;
 const FALLBACK: Color = Color([0x35, 0x84, 0xe4, 255]);
 /// Below this relative luminance a border can't be seen on a dark key.
 const MIN_LUMINANCE: f32 = 0.15;
+/// Below this spread between colour channels, a colour counts as grey.
+const MIN_HUE: u8 = 48;
 
 pub fn frame_ms(speed: EffectSpeed) -> u32 {
     match speed {
@@ -37,19 +39,24 @@ fn can_be_seen(c: Color) -> bool {
     0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b) >= MIN_LUMINANCE
 }
 
+/// Grey and white flames look like smoke, so Fire needs an actual colour.
+fn has_hue(c: Color) -> bool {
+    let [r, g, b, _] = c.0;
+    r.max(g).max(b) - r.min(g).min(b) > MIN_HUE
+}
+
 /// The colour `effect` is drawn in: its own, or `own` (the key's or plugin's), then the desktop's
-/// accent, then blue. `None` is Fire's own red, orange and yellow.
+/// accent, then blue. Fire goes to its natural red, orange and yellow (`None`) in place of blue.
 pub fn effect_color(effect: &Effect, own: Color, accent: Option<Color>) -> Option<Color> {
-    if effect.color.is_some() || effect.kind == EffectKind::Fire {
+    if effect.color.is_some() {
         return effect.color;
     }
-    Some(
-        [Some(own), accent]
-            .into_iter()
-            .flatten()
-            .find(|c| can_be_seen(*c))
-            .unwrap_or(FALLBACK),
-    )
+    let fire = effect.kind == EffectKind::Fire;
+    let found = [Some(own), accent]
+        .into_iter()
+        .flatten()
+        .find(|c| can_be_seen(*c) && (!fire || has_hue(*c)));
+    if fire { found } else { found.or(Some(FALLBACK)) }
 }
 
 /// How far `x, y` is from the edge, and how far round the border it is, 0 to 1.
@@ -101,7 +108,8 @@ fn pixel(kind: EffectKind, color: Option<Color>, d: f32, u: f32, t: f32) -> ([f3
         }
         EffectKind::Pulse => {
             let v = (1.0 - d / 26.0).clamp(0.0, 1.0);
-            (plain, v * v * (0.55 + 0.45 * (TAU * t).sin()))
+            // Starts at its brightest, so a quick press shows at once.
+            (plain, v * v * (0.55 + 0.45 * (TAU * t).cos()))
         }
         EffectKind::Chase => {
             let v = (1.0 - d / 20.0).clamp(0.0, 1.0);
@@ -214,11 +222,25 @@ mod tests {
     }
 
     #[test]
-    fn a_chosen_colour_wins_and_fire_keeps_its_own() {
+    fn a_chosen_colour_wins() {
         let mut e = Effect::of(EffectKind::Fire);
-        assert_eq!(effect_color(&e, Color::WHITE, None), None);
         e.color = Some(Color([1, 2, 3, 255]));
         assert_eq!(effect_color(&e, Color::WHITE, None), e.color);
+    }
+
+    #[test]
+    fn automatic_fire_takes_a_real_colour_or_stays_natural() {
+        let e = Effect::of(EffectKind::Fire);
+        assert_eq!(effect_color(&e, BLUE, None), Some(BLUE));
+        assert_eq!(effect_color(&e, Color::WHITE, Some(BLUE)), Some(BLUE));
+        assert_eq!(effect_color(&e, Color::WHITE, None), None);
+    }
+
+    #[test]
+    fn a_pulse_starts_at_its_brightest() {
+        let e = Effect::of(EffectKind::Pulse);
+        let at = |t| draw_effect(&dark(), &e, Some(BLUE), t).get_pixel(98, 0).0[2];
+        assert!(at(0.0) > at(0.25) && at(0.25) > at(0.5));
     }
 
     #[test]

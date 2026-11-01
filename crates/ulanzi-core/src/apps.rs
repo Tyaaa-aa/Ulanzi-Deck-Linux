@@ -371,9 +371,14 @@ pub fn find_icon(name: &str, roots: &[PathBuf], themes: &[&str]) -> Option<PathB
 }
 
 /// Icon file for an installed application.
+/// An app's icon as a PNG, about `px` wide.
+pub fn app_icon_png(desktop_id: &str, px: u32) -> Option<Vec<u8>> {
+    crate::render::icon_file_png(&app_icon(desktop_id)?, px, None)
+}
+
 /// The colour an app's icon is mostly, for tinting something that belongs to the app.
 pub fn app_color(desktop_id: &str) -> Option<crate::Color> {
-    let png = crate::render::icon_file_png(&app_icon(desktop_id)?, 48, None)?;
+    let png = app_icon_png(desktop_id, 48)?;
     dominant_color(&image::load_from_memory(&png).ok()?.to_rgba8())
 }
 

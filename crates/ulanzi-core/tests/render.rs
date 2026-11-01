@@ -435,3 +435,18 @@ mod animation {
         assert_ne!(first, animation_hash(&gif_look(), &e, BLUE, d.path()));
     }
 }
+
+#[test]
+fn stacked_icons_put_the_first_in_front() {
+    let solid = |c: [u8; 4]| {
+        let img = image::RgbaImage::from_pixel(32, 32, image::Rgba(c));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).expect("png");
+        out.into_inner()
+    };
+    let (red, blue) = (solid([255, 0, 0, 255]), solid([0, 0, 255, 255]));
+    let png = ulanzi_core::render::stacked_icons(&[red, blue]).expect("drawn");
+    let [r, _, b, a] = decode(&png).get_pixel(50, 52).0;
+    assert!(a > 200 && r > b, "the first icon lies on top");
+    assert_eq!(decode(&png).get_pixel(0, 95).0[3], 0, "corners stay clear");
+}

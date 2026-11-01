@@ -233,7 +233,7 @@ fn general_page(state: &State) -> adw::PreferencesPage {
     keys.add(&sound);
     let effects = adw::SwitchRow::builder()
         .title("Key Effects")
-        .subtitle("Pulse a key while it's pressed. Keys with their own effect keep it.")
+        .subtitle("Pulse a key while it's held. Keys with their own effect keep it.")
         .active(s.key_effects)
         .build();
     {

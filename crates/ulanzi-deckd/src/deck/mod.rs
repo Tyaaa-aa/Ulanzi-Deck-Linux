@@ -16,7 +16,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use ulanzi_core::Color;
 use ulanzi_core::model::{
-    Action, AudioTarget, BrightnessOp, ClockStyle, Feedback, Macro, MacroLibrary, Model, MouseButton,
+    Action, AudioTarget, BrightnessOp, ClockStyle, Feedback, Key, Macro, MacroLibrary, Model, MouseButton,
     Profile, ScreenConfig, Settings, Slot, Trigger,
 };
 use ulanzi_core::render::{IconLibrary, RenderCtx};
@@ -43,13 +43,17 @@ use screen_rt::ScreenRuntime;
 /// The wide-screen update goes out this often; like Ulanzi Studio's, it also keeps the deck from
 /// locking itself (it locks after ~2 minutes without host traffic).
 const TICK: Duration = Duration::from_secs(1);
-/// Re-send unlock this often, in case the deck locked anyway.
-const UNLOCK_EVERY: Duration = Duration::from_secs(30);
 /// Minimum time between uploads. With correct framing (report ID 0) the deck took back-to-back
 /// full and partial uploads on hardware; the gap is a safety margin that also folds rapid changes.
 const MIN_UPLOAD_GAP: Duration = Duration::from_millis(500);
 /// Minimum time between uploads while a macro plays. The deck took 30 small updates a second.
 const MACRO_UPLOAD_GAP: Duration = Duration::from_millis(100);
+/// How long a key is held before its pressed effect starts. The deck takes about 0.2 s to show any
+/// new picture, with the key black meanwhile, so a tap only gets the deck's own instant shrink.
+const PRESS_SETTLE: Duration = Duration::from_millis(350);
+/// A small message this often stops the deck stalling for up to a second on the next upload after
+/// a quiet spell: without it, the first press after a pause shows late.
+const KEEP_AWAKE: Duration = Duration::from_millis(200);
 /// The control a macro tried from the editor plays under: no key shows it.
 const TRY_CONTROL: u8 = 255;
 /// How long a finished macro's key stays on its last look.
@@ -305,7 +309,6 @@ struct Deck {
     upload_pending: bool,
     /// The pending upload must be a full page (a connect or page change asked for it).
     pending_full: bool,
-    last_unlock: Instant,
     firmware: Option<String>,
     /// Counts partial uploads, for fresh image names.
     upload_seq: u32,
@@ -321,8 +324,12 @@ struct Deck {
     player: Player,
     player_tx: mpsc::UnboundedSender<PlayerEvent>,
     player_rx: Option<mpsc::UnboundedReceiver<PlayerEvent>>,
-    /// Keys held down, for their pressed look.
+    /// Keys going down, and when each has been held long enough to show its pressed look.
+    pressing: BTreeMap<u8, Instant>,
+    /// Keys showing their pressed look.
     held: BTreeSet<u8>,
+    /// The next upload is only a key going down or coming back up.
+    press_upload: bool,
     accent: Option<Color>,
     /// Effects are being drawn on a blocking thread.
     drawing: bool,
@@ -400,7 +407,6 @@ impl Deck {
             awaiting_info: None,
             upload_pending: false,
             pending_full: false,
-            last_unlock: now,
             firmware: None,
             upload_seq: 0,
             focused: None,
@@ -411,7 +417,9 @@ impl Deck {
             player,
             player_tx,
             player_rx: Some(player_rx),
+            pressing: BTreeMap::new(),
             held: BTreeSet::new(),
+            press_upload: false,
             accent: None,
             drawing: false,
             drawn_tx,
@@ -437,6 +445,8 @@ impl Deck {
         let mut levels = self.level_rx.take().expect("run once");
         let mut player = self.player_rx.take().expect("run once");
         let mut drawn = self.drawn_rx.take().expect("run once");
+        let mut awake = tokio::time::interval(KEEP_AWAKE);
+        awake.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let hold_deadline = self.press.next_deadline();
             // Only arm the upload timer when an upload can actually happen; otherwise a deadline in
@@ -448,6 +458,7 @@ impl Deck {
             } else {
                 None
             };
+            let press_due = self.pressing.values().min().copied();
             let next = self.outgoing.front().copied();
             let transport = self.transport.as_mut();
             tokio::select! {
@@ -456,6 +467,17 @@ impl Deck {
                     Some(m) => self.on_msg(m).await,
                 },
                 Some(e) = player.recv() => self.on_player(e).await,
+                _ = async {
+                    match press_due {
+                        Some(d) => tokio::time::sleep_until(d).await,
+                        None => std::future::pending().await,
+                    }
+                } => self.presses_settled().await,
+                _ = awake.tick() => {
+                    if self.transport.is_some() && !self.sleep.is_asleep() && self.outgoing.is_empty() {
+                        self.send(&[unlock()]).await;
+                    }
+                },
                 Some(()) = drawn.recv() => {
                     self.drawing = false;
                     self.push_page(false).await;
@@ -498,6 +520,23 @@ impl Deck {
         }
     }
 
+    /// Keys held long enough start showing their pressed look.
+    async fn presses_settled(&mut self) {
+        let now = Instant::now();
+        let due: Vec<u8> = self
+            .pressing
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(i, _)| *i)
+            .collect();
+        for i in due {
+            self.pressing.remove(&i);
+            self.held.insert(i);
+        }
+        self.press_upload = true;
+        self.push_page(false).await;
+    }
+
     async fn on_msg(&mut self, m: DeckMsg) {
         match m {
             DeckMsg::DeviceUp(t, node) => {
@@ -524,6 +563,7 @@ impl Deck {
                 self.player.stop_all();
                 self.macro_down.clear();
                 self.held.clear();
+                self.pressing.clear();
                 self.transport = None;
                 self.outgoing.clear();
                 self.upload_gap = None;
@@ -660,7 +700,6 @@ impl Deck {
         self.shown = None;
         // New connection, new image names: the deck must not match them against anything it cached.
         self.cache.generation = self.cache.generation.wrapping_add(1);
-        self.last_unlock = Instant::now();
         if !self.send(&[unlock()]).await {
             return;
         }
@@ -766,7 +805,9 @@ impl Deck {
         }
         let now = Instant::now();
         // Even a forced (full) upload waits; a second upload while the deck unpacks crashes it.
-        if self.upload_gap.is_some() || self.next_upload_at.is_some_and(|t| now < t) {
+        // A press only waits for an upload still going out: the gap is what made presses feel slow.
+        let waiting = self.next_upload_at.is_some_and(|t| now < t) && !self.press_upload;
+        if self.upload_gap.is_some() || waiting {
             self.upload_pending = true;
             self.pending_full |= force;
             return;
@@ -797,6 +838,7 @@ impl Deck {
         // A key held through a page change is let go: the next page has no press to show.
         if self.shown.as_ref().is_some_and(|s| s.at != here) {
             self.held.clear();
+            self.pressing.clear();
         }
         dynamic.held = self.held.clone();
         dynamic.key_effects = self.settings.key_effects;
@@ -849,7 +891,10 @@ impl Deck {
             let page = self.profile().pages.get(self.nav.page).map(|p| p.id);
             let showing = self.playing.values().any(|p| p.shows && Some(p.page) == page);
             // The gap runs from the last packet, which may be a while off.
-            self.upload_gap = Some(if partial && showing && !has_gif {
+            let press = std::mem::take(&mut self.press_upload);
+            self.upload_gap = Some(if partial && press {
+                Duration::ZERO
+            } else if partial && showing && !has_gif {
                 MACRO_UPLOAD_GAP
             } else {
                 upload_cooldown(bytes)
@@ -886,6 +931,7 @@ impl Deck {
         self.player.stop_all();
         self.macro_down.clear();
         self.held.clear();
+        self.pressing.clear();
         self.transport = None;
         self.outgoing.clear();
         self.upload_gap = None;
@@ -909,10 +955,6 @@ impl Deck {
             self.sleep.sleep();
             tracing::info!("sleeping after inactivity");
             self.send(&[brightness(self.settings.sleep_brightness)]).await;
-        }
-        if now.duration_since(self.last_unlock) >= UNLOCK_EVERY {
-            self.last_unlock = now;
-            self.send(&[unlock()]).await;
         }
         self.refresh_screen().await;
         self.send_window().await;
@@ -956,9 +998,12 @@ impl Deck {
         // First of all: every path below that returns early still lets go of the key.
         if ev.kind == InputKind::Release
             && let Control::Key(i) = ev.control
-            && self.held.remove(&i)
         {
-            self.push_page(false).await;
+            self.pressing.remove(&i);
+            if self.held.remove(&i) {
+                self.press_upload = true;
+                self.push_page(false).await;
+            }
         }
         // Before the sleep check: a held key can outlast the sleep timer.
         if ev.kind == InputKind::Release
@@ -981,10 +1026,9 @@ impl Deck {
         match ev.kind {
             InputKind::Press => {
                 if let Control::Key(i) = ev.control
-                    && (self.tap_action(ev.control).is_some() || self.hold_action(ev.control).is_some())
+                    && self.key(i).is_some_and(Key::shows_press)
                 {
-                    self.held.insert(i);
-                    self.push_page(false).await;
+                    self.pressing.insert(i, now + PRESS_SETTLE);
                 }
                 if let Some(a) = self.macro_on_press(ev.control) {
                     self.macro_down.push(ev.control);
@@ -1022,6 +1066,11 @@ impl Deck {
                 }
             }
         }
+    }
+
+    /// Key `i` on the current page.
+    fn key(&self, i: u8) -> Option<&Key> {
+        self.profile().pages.get(self.nav.page)?.keys.get(&i)
     }
 
     fn tap_action(&self, c: Control) -> Option<Action> {

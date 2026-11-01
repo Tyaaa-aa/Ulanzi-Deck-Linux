@@ -15,6 +15,6 @@ pub use fonts::{Fonts, TextStyle};
 pub use icons::IconLibrary;
 pub use key::{
     KEY_PX, RenderCtx, Rendered, icon_file_png, key_image, look_hash, plugin_icon_png, render_key,
-    render_key_progress,
+    render_key_progress, stacked_icons,
 };
 pub use nowplaying::{NowPlaying, render_now_playing};

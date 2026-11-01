@@ -969,3 +969,31 @@ fn a_look_the_user_chose_stays_put() {
     assert_eq!(chosen.follow_apps(&[], from), chosen);
     assert_eq!(chosen.follow_apps(&["a".to_string()], from), chosen);
 }
+
+#[test]
+fn a_press_shows_on_a_key_with_an_action_or_its_own_effect() {
+    let mut k = Key::default();
+    assert!(!k.shows_press());
+    k.look.pressed = PressedEffect::Own(Effect::default());
+    assert!(!k.shows_press(), "its own effect is None");
+    k.look.pressed = PressedEffect::Own(Effect::of(EffectKind::Fire));
+    assert!(k.shows_press());
+    k.look.pressed = PressedEffect::Default;
+    k.tap = Some(Action::Back);
+    assert!(k.shows_press());
+}
+
+#[test]
+fn a_page_counts_its_moving_keys() {
+    let mut page = Page::new("P");
+    let mut key = Key::default();
+    page.keys.insert(0, key.clone());
+    key.look.effect = Effect::of(EffectKind::Glow);
+    page.keys.insert(1, key.clone());
+    key.look.effect = Effect::default();
+    key.look.source = ImageSource::Image {
+        path: "icons/a.GIF".into(),
+    };
+    page.keys.insert(2, key);
+    assert_eq!(page.moving_keys(), 2);
+}

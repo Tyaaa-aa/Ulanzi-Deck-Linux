@@ -706,7 +706,9 @@ impl Client {
             .await?)
     }
 
+    /// Show a page on the deck. Any queued save goes first, as the page may be one it adds.
     pub async fn set_page(&self, index: u32) -> Result<()> {
+        self.flush().await;
         Ok(self.inner.proxy.call::<_, _, ()>("SetPage", &(index,)).await?)
     }
 

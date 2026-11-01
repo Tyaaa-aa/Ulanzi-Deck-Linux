@@ -77,10 +77,9 @@ Measured on 2026-10-31 with `ulanzictl probe gif`.
   all, with no reboot. The last key looked the choppiest both times.
 * **One GIF can't go over about 300 KB.** Files of 265 KB and less played; files of 357 KB and more
   showed the deck's yellow question mark, alone or among others, with no reboot. Frame count, frame
-  time and encoder speed made no difference (`ulanzictl probe fire-variants`, 2026-11-01). Fewer
+  time and encoder speed made no difference (tested 2026-11-01). Fewer
   colours is the way to keep the frames: 24 frames of Fire fell from 397 KB to 123 KB and played.
-* The deck ignores a GIF's loop count: a one-shot fade started over at its end (`ulanzictl probe fade`,
-  2026-11-01), so anything that plays once needs the app to swap it out in time.
+* The deck ignores a GIF's loop count: a one-shot fade started over at its end (tested 2026-11-01), so anything that plays once needs the app to swap it out in time.
 * Swapping a key's GIF usually took under 100 ms to write. A few writes stalled for 0.4 to 1 s: about
   1 in 10 with one upload per press, about 1 in 3 with a fade and a loop per press.
 * Fire at 40 ms a frame played on all 13 keys, at 1.6 MB in all (2026-11-02).
@@ -100,21 +99,50 @@ minutes (0 = off; the daemon sends 0 and dims by itself), `0x00e0` flash "!" on 
 `{"<col>_<row>":{"KeyType":1,"Progress":100,"State":1}}`), and the deck may ask for the label style
 (cc 1 / pid 0x0b), which is answered.
 
+## Swapping a key to a file already on the deck
+
+A partial update can name a file sent earlier, with no picture in it, so a swap takes only a 204-byte
+ZIP that writes in well under a millisecond. Tested 2026-11-02, the first
+swap worked, the next went blank, and later ones did nothing, so stored files don't stay usable. Even
+when a swap worked, the key was slow to change, so the delay on a GIF key is the deck loading the GIF,
+not the upload.
+
+## Showing a press
+
+Tested on one key on a dark page (2026-11-02), changing one thing at a time:
+
+| Setup | Felt |
+|---|---|
+| Quiet page, 62 KB GIF on press, no gap between uploads | Very good |
+| The same, with a 0.5 s gap | Broken: the pressed look stayed after letting go |
+| Key rests on a GIF | Good |
+| 3 other keys playing GIFs | Good, first press slow |
+| 12 other keys playing GIFs | Not good |
+| 12 others, and the key rests on a GIF | Bad |
+| 12 others, frames streamed instead of a GIF | Bad |
+| Quiet page, a small message every 200 ms | Best: no stalled writes |
+
+So the upload gap hurt most, a quiet deck stalls the next write for 0.4 to 1 s, and many animated keys
+slow everything down.
+
+Dark test keys hid the real limit. On a real page, any new picture leaves the key black for about 0.2 s
+before it shows: GIF, PNG, JPEG and BMP alike, whatever the size. Frames streamed at 15 or 30 a second,
+in any of those formats, left the key black until released. So a press can't change a key's picture
+quickly, and the app starts pressed effects only after a short hold.
+
 ## Pressing a key
 
 The picture shrinks while a key is held, and the deck does this by itself. Reading the 5.3.1 and 5.3.6
 firmware (2026-11-02): pressing a key moves its picture and text views in by 17 pixels on every side, and
 letting go puts them back. Nothing in the manifest or the protocol switches this, so the host can't turn
-it off or use it. Thirteen guesses at manifest fields changed nothing either (`ulanzictl probe
-press-shrink`).
+it off or use it. Thirteen guesses at manifest fields changed nothing either.
 
 ## Dials and brightness
 
 Turning a dial sets full brightness on some firmware. In 5.3.1, after a turn is handled, the firmware
 turns the screen on and sets brightness to a fixed 100, whatever the host chose. In 5.3.6 this is
 gone: a turn only wakes a screen that is off, and it restores the saved brightness. Firmware 5.2.3
-isn't available to read, but it behaves like 5.3.1 (tested 2026-11-02 with `ulanzictl probe
-dial-brightness`, and with app builds 2.1.1 and current, before and after replugging). Sending the
+isn't available to read, but it behaves like 5.3.1 (tested 2026-11-02 with app builds 2.1.1 and current, before and after replugging). Sending the
 brightness back after each turn works, but it flickers, so the app doesn't do it.
 
 ## Starting up
