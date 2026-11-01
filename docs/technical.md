@@ -97,6 +97,7 @@ album art, plugin store), ksni (tray), x11rb (X11 focus) and evdev (virtual keyb
 | `~/.local/share/ulanzi-deck/plugins/.store-index.json`, `.store-icons/` | Cached plugin store index (with its signature) and icons |
 | `~/.cache/ulanzi-deck/plugins/` | Compiled plugins (safe to delete) |
 | `~/.cache/ulanzi-deck/updates/` | Downloaded updates (safe to delete) |
+| `~/.cache/ulanzi-deck/effects/` | Finished effect GIFs, named by a hash of what draws them; the oldest go past 100 MB, and an empty file marks a look that could not be drawn (safe to delete) |
 | `~/.cache/ulanzi-deck/art/` | Album art (downloaded or copied from players; newest 100 kept) |
 | `~/.local/share/ulanzi-deck/templates/` | User templates (`.ulanzideck`) |
 | `/etc/udev/rules.d/70-ulanzi-deck.rules` (or `/usr/lib/udev/rules.d/`) | Grants the logged-in user access to the deck and `/dev/uinput` |

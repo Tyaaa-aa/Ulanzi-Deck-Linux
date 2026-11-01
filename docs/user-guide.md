@@ -86,6 +86,31 @@ next.
 **Play Sound** has its own volume, relative to **Sound Volume** in Preferences → General. Use the
 **Play** button next to the file to preview it.
 
+### Effects and GIFs
+
+Keys can move. Pick a GIF in **Look → Image**, or give a key a border effect:
+
+- **Effect** is what the key shows at rest: **Glow**, **Pulse**, **Chase** or **Fire**.
+- **When Pressed** is what it shows while held. **Default** is a Pulse, and **None** keeps the key plain.
+- Choosing an effect adds **Colour** and **Speed**. **Automatic** uses the key's own colour, or your
+  desktop's accent colour if that's too dark to see. Every effect can be any colour, Fire included.
+
+With **Show Live State** on, a key that has live states gets one Effect row per state, so an air
+conditioner can burn while it's off and chase while it's on. Letting go of a key always lands on the
+effect for the state it's in now.
+
+The preview at the top of the panel plays the effect. Hold the mouse down on it to see the pressed
+look. Plugins can offer ready-made sets in **Effect Preset**.
+
+The deck can't show a GIF over about 300 KB, so bigger ones are shrunk to fit: fewer colours first, then
+fewer frames, and a note in the Look section says so if frames went. A GIF can be up to 16 MB and 500
+frames. A key shows its still look for a moment the first time its effect is drawn.
+
+A key can change up to about a second late now and then, mostly on the first press after a pause. The
+action itself never waits for this.
+
+To turn the default Pulse off, use **Preferences → Key Effects**. Keys with their own effect keep it.
+
 ### Editing several keys
 
 - Drag an action from the action list onto a key. **Search actions** (Ctrl+L) filters by name,
@@ -341,7 +366,7 @@ Open Preferences from the main menu or with Ctrl+,.
 
 | Page | Settings |
 |---|---|
-| General | Light or dark style, Start at Login, tray icon, auto-switch, hold time, sound volume |
+| General | Light or dark style, Start at Login, tray icon, auto-switch, hold time, sound volume, Key Effects |
 | Device | Brightness, sleep timeout and dim level, Show Volume Changes, label style (visibility, position, colour) |
 | Integrations | Whether keyboard shortcut and text typing actions are allowed; a link to the plugin manager |
 | Backups | Create a backup, restore a backup, open the backup folder |

@@ -10,6 +10,15 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Update All** in Plugins → Discover, with the number of updates waiting, when two or more are.
 - **Display Brightness** action for PC monitors, through KDE Plasma 6 or `ddcutil` on any other desktop: one monitor or all, brighter, dimmer
   or a set level. Keys remember a monitor by name, so changing display numbers don't break them.
+- **GIF keys**: a GIF plays on the deck, shrunk to fit if it's too big.
+- **Key effects**: Glow, Pulse, Chase and Fire, in any colour, one per live state and one while held. Keys
+  pulse while pressed by default; **Preferences → Key Effects** turns that off.
+- **Saved colours** in the colour picker.
+- Plugin contract 1.3: plugins can set default effects and offer effect presets.
+
+### Compatibility
+
+- A key with an effect shows the "needs a newer version" badge in 2.2 and is kept intact.
 
 ## [2.2.0] - 2026-10-31
 
