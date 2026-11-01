@@ -1,5 +1,6 @@
 //! Rendering of key images and the wide screen.
 
+mod effects;
 mod fonts;
 mod icons;
 mod key;
@@ -7,6 +8,7 @@ mod nowplaying;
 pub mod screen;
 mod text;
 
+pub use effects::{GIF_TARGET, LOOP_FRAMES, draw_effect, effect_color, frame_ms};
 pub use fonts::{Fonts, TextStyle};
 pub use icons::IconLibrary;
 pub use key::{
