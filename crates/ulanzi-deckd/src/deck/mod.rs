@@ -1,6 +1,7 @@
 //! The deck actor: owns the connected transport and the active profile, turns input into actions,
 //! and keeps the device showing the right page.
 
+pub mod effect_cache;
 mod nav;
 mod press;
 mod push;
