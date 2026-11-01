@@ -856,6 +856,90 @@ fn brightness_rows(ed: &Ed, op: BrightnessOp) -> Vec<gtk::Widget> {
     vec![combo.upcast(), spin]
 }
 
+/// The Do and Step rows of a Display Brightness key; quick steps suit a monitor, so 2% to start.
+fn display_op_rows(ed: &Ed, op: BrightnessOp) -> Vec<gtk::Widget> {
+    let (i, v) = match op {
+        BrightnessOp::Up { step } => (0, step),
+        BrightnessOp::Down { step } => (1, step),
+        BrightnessOp::Set { percent } => (2, percent),
+    };
+    let combo = combo_row(
+        ed,
+        "Do",
+        &["Brighter", "Dimmer", "Set To"],
+        i,
+        How::Structure,
+        |a, i| {
+            if let Action::DisplayBrightness { op, .. } = a {
+                *op = match i {
+                    0 => BrightnessOp::Up { step: 2 },
+                    1 => BrightnessOp::Down { step: 2 },
+                    _ => BrightnessOp::Set { percent: 50 },
+                };
+            }
+        },
+    );
+    let (title, range) = if i == 2 {
+        ("Brightness", (0.0, 100.0, 5.0))
+    } else {
+        ("Step", (1.0, 50.0, 1.0))
+    };
+    let spin = spin_row(ed, title, "Percent", range, v as f64, "display-bri", |a, v| {
+        if let Action::DisplayBrightness { op, .. } = a {
+            let v = v as u8;
+            *op = match op {
+                BrightnessOp::Up { .. } => BrightnessOp::Up { step: v },
+                BrightnessOp::Down { .. } => BrightnessOp::Down { step: v },
+                BrightnessOp::Set { .. } => BrightnessOp::Set { percent: v },
+            };
+        }
+    });
+    vec![combo.upcast(), spin]
+}
+
+/// Which monitor a Display Brightness key changes. The list arrives from the service, and the row
+/// only listens once it is filled, so filling it can't change the key.
+fn display_row(ed: &Ed, state: &State, saved: &DisplayTarget) -> gtk::Widget {
+    let current = ulanzi_core::display::choices(&[], saved);
+    let at = current.iter().position(|c| c.target == *saved).unwrap_or(0);
+    let model = gtk::StringList::new(&[current[at].title.as_str()]);
+    let row = adw::ComboRow::builder()
+        .title("Display")
+        .model(&model)
+        .sensitive(false)
+        .build();
+    let Some(client) = state.client.borrow().clone() else {
+        return row.upcast();
+    };
+    let (weak, ed, saved) = (row.downgrade(), ed.clone(), saved.clone());
+    crate::runtime::run(async move { client.list_displays().await }, move |r| {
+        let Some(row) = weak.upgrade() else { return };
+        let labels = r.unwrap_or_default();
+        if labels.is_empty() {
+            row.set_subtitle("No displays found. See Display Brightness in the User Guide");
+            return;
+        }
+        let list = ulanzi_core::display::choices(&labels, &saved);
+        let titles: Vec<&str> = list.iter().map(|c| c.title.as_str()).collect();
+        let selected = list.iter().position(|c| c.target == saved).unwrap_or(0);
+        row.set_model(Some(&gtk::StringList::new(&titles)));
+        row.set_selected(selected as u32);
+        row.set_sensitive(true);
+        let ed = ed.clone();
+        row.connect_selected_notify(move |r| {
+            let Some(c) = list.get(r.selected() as usize) else {
+                return;
+            };
+            ed.apply(How::Set, |a| {
+                if let Action::DisplayBrightness { display, .. } = a {
+                    *display = c.target.clone();
+                }
+            });
+        });
+    });
+    row.upcast()
+}
+
 fn small_icon_button(icon: &str, tooltip: &str) -> gtk::Button {
     gtk::Button::builder()
         .icon_name(icon)
@@ -1357,6 +1441,11 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
         ],
         Action::SwitchOutput { devices } => output_rows(&ed, devices),
         Action::Brightness { op } => brightness_rows(&ed, *op),
+        Action::DisplayBrightness { display, op } => {
+            let mut rows = vec![display_row(&ed, state, display)];
+            rows.extend(display_op_rows(&ed, *op));
+            rows
+        }
         Action::GoToPage { page } | Action::OpenFolder { page } => {
             vec![page_combo(&ed, state, *page)]
         }

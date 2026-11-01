@@ -803,6 +803,12 @@ impl DeckService {
         serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
+    /// The names of the connected PC monitors; empty when the desktop can't say.
+    async fn list_displays(&self, #[zbus(connection)] conn: &zbus::Connection) -> Vec<String> {
+        let client = crate::actions::display::DisplayClient::new(conn.clone());
+        client.labels().await.unwrap_or_default()
+    }
+
     /// The macro library as TOML.
     async fn list_macros(&self) -> Result<String> {
         let library = self

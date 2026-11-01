@@ -8,6 +8,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 ### Added
 
 - **Update All** in Plugins → Discover, with the number of updates waiting, when two or more are.
+- **Display Brightness** action for PC monitors, through KDE Plasma 6 or `ddcutil` on any other desktop: one monitor or all, brighter, dimmer
+  or a set level. Keys remember a monitor by name, so changing display numbers don't break them.
 
 ## [2.2.0] - 2026-10-31
 

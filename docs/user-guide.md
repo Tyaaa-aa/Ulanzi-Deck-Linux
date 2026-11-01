@@ -107,7 +107,7 @@ reason at the top of the editor.
 | Category | Actions |
 |---|---|
 | Navigation | Next or previous page, go to page, open folder, back, switch profile, toggle auto-switch |
-| System | Run command (optionally in a terminal), launch application, open website or file, keyboard shortcut, type text, multi action, cycle through actions |
+| System | Run command (optionally in a terminal), launch application, open website or file, keyboard shortcut, type text, multi action, cycle through actions, Display Brightness |
 | Media | Play/pause, next, previous, stop, skip back, skip forward, for a specific player or whichever is playing |
 | Audio | Volume up, down or set, and mute, for the default output, the microphone, a specific device or a single application; switch default output; play sound |
 | Device | Brightness up, down or set, put the deck to sleep, next widget on the wide screen |
@@ -130,6 +130,28 @@ Notes on specific actions:
   entity, open a searchable list (with a group filter where the plugin provides one). Some lists
   allow multiple selections; confirm with **Done**. If the list is empty or the plugin is not
   connected, you can enter the name manually.
+
+**Display Brightness** changes your PC monitors, not the deck. Choose one monitor or **All Displays**,
+then **Brighter**, **Dimmer** or **Set To**. A key remembers a monitor by its name, so restarts and
+replugging don't break it. If that monitor isn't connected, the key says so and works again when
+it's back. Two monitors with the same name are told apart only by their order, so they can swap
+after replugging.
+
+KDE Plasma 6 needs no setup. Any other desktop needs `ddcutil`, which talks to external monitors
+over their video cable:
+
+1. Install `ddcutil` from your distro.
+2. Load the kernel module with `sudo modprobe i2c-dev`, and add `i2c-dev` to a file in
+   `/etc/modules-load.d/` to keep it after a restart.
+3. Check that `ddcutil detect` lists your monitors without `sudo`. If it reports a permissions
+   problem, add yourself to the `i2c` group with `sudo usermod -aG i2c $USER` and log in again. On
+   some distros the group comes from a separate rules package, such as `ddcutil-i2c-udev-rules` on
+   openSUSE.
+4. Turn on DDC/CI in the monitor's own menu if `ddcutil detect` calls it an invalid display.
+
+`ddcutil` can't reach every monitor or TV, and it can't change a laptop's built-in screen, so outside
+KDE those don't appear in the list. Quick dial turns are added together, so the monitor may catch up
+in one jump.
 
 ## Macros
 

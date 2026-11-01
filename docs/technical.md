@@ -165,6 +165,7 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). To inspect it, run
 | Sharing and backups | `PreviewBundle`, `BundleCommands`, `ImportBundle`, `ExportBundle`, `ListSnapshots`, `TakeSnapshot`, `RestoreSnapshot`, `Migrate` |
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |
 | Widgets and sound | `NowPlaying`, `WeatherPlaces`, `WeatherNow`, `PlaySound` (path, device, volume) |
+| Displays | `ListDisplays` (names of the connected PC monitors, from KDE or `ddcutil`) |
 | Macros | `ListMacros`, `SetMacros` (the whole library, as TOML), `MacroUsage` (id), `TryMacro` (macro, delay in ms), `StopMacros`; signal `MacrosChanged` |
 | Updates | `UpdateStatus` and `UpdateCheck` (JSON), `UpdateDownload` (reports `UpdateProgress`; returns the verified file), `UpdateApply` (file; backs up, and swaps an AppImage), `UpdateSkip` (version), `UpdateSetCheck` (on), `UpdateWhatsNewShown` (version) |
 | Plugin store | `PluginStoreIndex` (refresh; the signed index as JSON, from cache when recent), `PluginStoreInstall` (id; reports `PluginInstallProgress`), `PluginVerified` and `PluginOfficial` (ids of installed plugins that are signed, and signed as official) |

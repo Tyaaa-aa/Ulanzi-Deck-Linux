@@ -588,6 +588,11 @@ impl Client {
         Ok(self.inner.proxy.call("UpdateWhatsNewShown", &(version,)).await?)
     }
 
+    /// The names of the connected PC monitors.
+    pub async fn list_displays(&self) -> Result<Vec<String>> {
+        Ok(self.inner.proxy.call("ListDisplays", &()).await?)
+    }
+
     /// The plugin store's signed list (the last one seen when the store can't be reached).
     /// A copy under 30 minutes old is used unless `refresh`.
     pub async fn plugin_store_index(&self, refresh: bool) -> Result<ulanzi_core::plugin::store::Listing> {

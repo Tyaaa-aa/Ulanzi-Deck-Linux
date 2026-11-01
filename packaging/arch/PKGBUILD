@@ -14,6 +14,7 @@ optdepends=(
   'pipewire-pulse: switch audio outputs'
   'wireplumber: volume control and the volume overlay'
   'wl-clipboard: Type Text with characters a US keyboard lacks'
+  'ddcutil: Display Brightness outside KDE Plasma'
   'obs-studio: OBS actions and widget'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")

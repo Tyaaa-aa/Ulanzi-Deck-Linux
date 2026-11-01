@@ -16,7 +16,7 @@ copyright = "2026, Tya"
 section = "utils"
 priority = "optional"
 depends = "libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libc6 (>= 2.39), dbus-user-session"
-recommends = "pipewire-pulse, wireplumber, wl-clipboard"
+recommends = "pipewire-pulse, wireplumber, wl-clipboard, ddcutil"
 extended-description = """\
 Set up the keys, dials and wide screen of an Ulanzi D200 or D200X stream deck: actions for media,\
 volume, shortcuts, apps and OBS Studio, wide-screen widgets, profiles that follow the app in front,\

@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod command;
+pub mod display;
 pub mod keys;
 pub mod launch;
 pub mod media;
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 use ulanzi_core::model::{Action, Step, table_to_json};
 
+use self::display::DisplayClient;
 use self::keys::VirtualKeyboard;
 use self::media::MediaClient;
 use crate::plugins::PluginError;
@@ -47,6 +49,7 @@ pub async fn run_multi(runner: &dyn ActionRunner, steps: &[Step]) -> Result<(), 
 /// The real action runner.
 pub struct Executor {
     media: Option<MediaClient>,
+    displays: Option<DisplayClient>,
     keyboard: Arc<Mutex<Option<VirtualKeyboard>>>,
     plugins: Option<crate::plugins::PluginSlot>,
 }
@@ -55,7 +58,8 @@ impl Executor {
     /// `session` is the session bus, needed for media control; without it media actions report unavailable.
     pub fn new(session: Option<zbus::Connection>) -> Executor {
         Executor {
-            media: session.map(MediaClient::new),
+            media: session.clone().map(MediaClient::new),
+            displays: session.map(DisplayClient::new),
             keyboard: Arc::default(),
             plugins: None,
         }
@@ -235,6 +239,12 @@ impl ActionRunner for Executor {
                 step,
                 limit_100,
             } => audio::volume(target, op, *step, *limit_100).await,
+            Action::DisplayBrightness { display, op } => match &self.displays {
+                Some(d) => d.change(display, *op).await,
+                None => Err(ActionError::Unavailable(
+                    "display brightness needs the session bus".into(),
+                )),
+            },
             Action::Multi { steps } => run_multi(self, steps).await,
             // The deck picks a cycle's step (it knows which one is next); elsewhere, the first.
             Action::Cycle { steps, .. } => match steps.first() {

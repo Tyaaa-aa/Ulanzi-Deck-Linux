@@ -8,6 +8,7 @@ pub mod autoswitch;
 pub mod bundle;
 pub mod catalog;
 mod color;
+pub mod display;
 pub mod edit;
 mod error;
 pub mod import;

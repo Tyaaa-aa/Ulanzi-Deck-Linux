@@ -73,6 +73,11 @@ pub enum Action {
     Brightness {
         op: BrightnessOp,
     },
+    /// The brightness of a PC monitor, not the deck's.
+    DisplayBrightness {
+        display: DisplayTarget,
+        op: BrightnessOp,
+    },
     SleepNow,
     /// Show the next widget on the wide screen.
     ScreenNext,
@@ -202,6 +207,19 @@ pub enum BrightnessOp {
     Set { percent: u8 },
     Up { step: u8 },
     Down { step: u8 },
+}
+
+/// Which PC monitors a Display Brightness key changes. A monitor goes by its name, never its
+/// number, which changes between sessions; `nth` tells monitors with the same name apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DisplayTarget {
+    All,
+    Named {
+        name: String,
+        #[serde(default)]
+        nth: u8,
+    },
 }
 
 impl Action {

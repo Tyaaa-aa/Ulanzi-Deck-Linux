@@ -112,6 +112,7 @@ pub fn help(id: &str) -> Option<&'static str> {
         "brightness_up" => "Makes the deck's screen brighter",
         "brightness_down" => "Makes the deck's screen dimmer",
         "brightness_set" => "Sets the deck's brightness to a level you choose",
+        "display_brightness" => "Changes the brightness of your PC monitors",
         "sleep_now" => "Puts the deck to sleep",
         "screen_next" => "Shows the next widget on the wide screen",
         "timer_start" => "Starts or pauses the timer",
@@ -242,6 +243,17 @@ static CATALOG: &[ActionSpec] = &[
             show: CycleShows::Last,
         },
         Action::Cycle { .. }
+    ),
+    spec!(
+        "display_brightness",
+        "Display Brightness",
+        System,
+        "monitor",
+        Action::DisplayBrightness {
+            display: DisplayTarget::All,
+            op: BrightnessOp::Up { step: 2 },
+        },
+        Action::DisplayBrightness { .. }
     ),
     spec!(
         "macro",
@@ -699,6 +711,17 @@ pub fn describe(a: &Action) -> String {
             VolumeOp::Set { percent } => format!("Volume {percent}% · {}", target_name(target)),
         },
         Action::Multi { steps } => format!("{} steps", steps.len()),
+        Action::DisplayBrightness { display, op } => {
+            let which = match display {
+                DisplayTarget::All => "All Displays",
+                DisplayTarget::Named { name, .. } => name,
+            };
+            match op {
+                BrightnessOp::Up { step } => format!("Brighter {step}% · {which}"),
+                BrightnessOp::Down { step } => format!("Dimmer {step}% · {which}"),
+                BrightnessOp::Set { percent } => format!("Brightness {percent}% · {which}"),
+            }
+        }
         Action::Macro { own: Some(m), .. } => m.name.clone(),
         Action::Macro { .. } => "Macro".into(),
         Action::Cycle { steps, .. } => match steps.len() {
