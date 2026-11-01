@@ -98,3 +98,20 @@ Measured on 2026-10-31 with `ulanzictl probe gif`.
 minutes (0 = off; the daemon sends 0 and dims by itself), `0x00e0` flash "!" on one key (ZIP with
 `{"<col>_<row>":{"KeyType":1,"Progress":100,"State":1}}`), and the deck may ask for the label style
 (cc 1 / pid 0x0b), which is answered.
+
+## Pressing a key
+
+The picture shrinks while a key is held, and the deck does this by itself. Reading the 5.3.1 and 5.3.6
+firmware (2026-11-02): pressing a key moves its picture and text views in by 17 pixels on every side, and
+letting go puts them back. Nothing in the manifest or the protocol switches this, so the host can't turn
+it off or use it. Thirteen guesses at manifest fields changed nothing either (`ulanzictl probe
+press-shrink`).
+
+## Dials and brightness
+
+Turning a dial sets full brightness on some firmware. In 5.3.1, after a turn is handled, the firmware
+turns the screen on and sets brightness to a fixed 100, whatever the host chose. In 5.3.6 this is
+gone: a turn only wakes a screen that is off, and it restores the saved brightness. Firmware 5.2.3
+isn't available to read, but it behaves like 5.3.1 (tested 2026-11-02 with `ulanzictl probe
+dial-brightness`, and with app builds 2.1.1 and current, before and after replugging). Sending the
+brightness back after each turn works, but it flickers, so the app doesn't do it.

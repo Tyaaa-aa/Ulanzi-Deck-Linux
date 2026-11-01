@@ -44,6 +44,12 @@ pub enum Probe {
     FireLimit,
     /// Ten versions of Fire on ten keys: which ones does the deck play?
     FireVariants,
+    /// Fire at 40 ms on all 13 keys: does it keep up, and how long does a page take?
+    PageSwitch,
+    /// Does turning a dial change the deck's brightness when nothing asks it to?
+    DialBrightness,
+    /// Thirteen guesses at manifest fields: does any stop the press shrink, or swap the picture?
+    PressShrink,
 }
 
 pub async fn run(what: Probe) -> Result<(), String> {
@@ -61,6 +67,9 @@ pub async fn run(what: Probe) -> Result<(), String> {
         Probe::Fade => fade(&mut dev).await,
         Probe::FireLimit => fire_limit(&mut dev).await,
         Probe::FireVariants => fire_variants(&mut dev).await,
+        Probe::PageSwitch => page_switch(&mut dev).await,
+        Probe::DialBrightness => dial_brightness(&mut dev).await,
+        Probe::PressShrink => press_shrink(&mut dev).await,
     }
 }
 
@@ -847,7 +856,11 @@ fn fx_gif(frames: Vec<image::RgbaImage>, repeat: bool) -> Vec<u8> {
     let mut out = Vec::new();
     {
         let mut enc = GifEncoder::new_with_speed(&mut out, 10);
-        let times = if repeat { Repeat::Infinite } else { Repeat::Finite(0) };
+        let times = if repeat {
+            Repeat::Infinite
+        } else {
+            Repeat::Finite(0)
+        };
         enc.set_repeat(times).expect("gif");
         for img in frames {
             let delay = Delay::from_numer_denom_ms(FX_DELAY_MS, 1);
@@ -913,9 +926,13 @@ async fn fade(dev: &mut Hidraw) -> Result<(), String> {
         println!("  {fx:?}: {} KB", g.len() / 1024);
     }
     let t = Instant::now();
-    let fades = [(Fire, Pulse), (Pulse, Chase), (Chase, Pulse), (Pulse, Fire)]
-        .map(|(a, b)| ((a, b), fx_fade(a, b)));
-    println!("four fades made in {:?}, about {} KB each", t.elapsed(), fades[0].1.len() / 1024);
+    let fades =
+        [(Fire, Pulse), (Pulse, Chase), (Chase, Pulse), (Pulse, Fire)].map(|(a, b)| ((a, b), fx_fade(a, b)));
+    println!(
+        "four fades made in {:?}, about {} KB each",
+        t.elapsed(),
+        fades[0].1.len() / 1024
+    );
     let looped = |fx: Fx| &loops.iter().find(|l| l.0 == fx).expect("loop").1;
     let faded = |a: Fx, b: Fx| &fades.iter().find(|f| f.0 == (a, b)).expect("fade").1;
 
@@ -1012,7 +1029,10 @@ async fn fire_limit(dev: &mut Hidraw) -> Result<(), String> {
         entries.retain(|i, _| *i < keys);
         images.truncate(keys as usize);
         let zip = zip_for(&entries, &images);
-        println!("TEST {test} of 5: Fire on {keys} keys, {} KB in all", zip.len() / 1024);
+        println!(
+            "TEST {test} of 5: Fire on {keys} keys, {} KB in all",
+            zip.len() / 1024
+        );
         if !survives(dev, &file_packets(Command::SetButtons, &zip), 6).await {
             println!("DECK REBOOTED");
             return Ok(());
@@ -1055,7 +1075,8 @@ async fn fire_variants(dev: &mut Hidraw) -> Result<(), String> {
         ("8 frames at 100 ms", fire_gif(8, 100, 10, 255.0)),
         ("Pulse that played before", fx_loop(Fx::Pulse)),
     ];
-    let (mut entries, mut images) = gif_page(|i| gifs.get(i as usize).map_or(Vec::new(), |g| g.1.clone()), None);
+    let (mut entries, mut images) =
+        gif_page(|i| gifs.get(i as usize).map_or(Vec::new(), |g| g.1.clone()), None);
     entries.retain(|i, _| (*i as usize) < gifs.len());
     images.truncate(gifs.len());
     let grey = page(&(0..13).map(|i| (i, solid([18, 18, 22]))).collect::<Vec<_>>());
@@ -1075,6 +1096,132 @@ async fn fire_variants(dev: &mut Hidraw) -> Result<(), String> {
         return Ok(());
     }
     wait_enter("Top row is keys 1-5, next row 6-10. Which keys show a question mark?");
+    Ok(())
+}
+
+async fn page_switch(dev: &mut Hidraw) -> Result<(), String> {
+    let fire = fire_gif(24, 40, 10, 8.0);
+    let grey = page(&(0..13).map(|i| (i, solid([18, 18, 22]))).collect::<Vec<_>>());
+    println!("Fire at 40 ms a frame: {} KB", fire.len() / 1024);
+    wait_enter("Look at the deck. Press Enter for the first test.");
+    send(dev, &[ulanzi_proto::unlock()]).await?;
+    for round in 1..=3 {
+        if !survives(dev, &grey, 2).await {
+            println!("DECK REBOOTED");
+            return Ok(());
+        }
+        let (entries, images) = gif_page(|_| fire.clone(), None);
+        let zip = zip_for(&entries, &images);
+        let t = Instant::now();
+        send(dev, &file_packets(Command::SetButtons, &zip)).await?;
+        println!(
+            "round {round} of 3: {} KB written in {:?}",
+            zip.len() / 1024,
+            t.elapsed()
+        );
+        wait_enter(
+            "Roughly how long did the fire take to appear? Do all 13 keep up at this speed? \
+             Type it here, then press Enter",
+        );
+    }
+    Ok(())
+}
+
+async fn dial_brightness(dev: &mut Hidraw) -> Result<(), String> {
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+    send(dev, &[ulanzi_proto::unlock(), brightness(10)]).await?;
+    for (test, answer) in [(1, false), (2, true)] {
+        println!(
+            "TEST {test} of 2: the deck is now dim. Turn a dial both ways, then type whether it went \
+             bright and press Enter.  {}",
+            if answer {
+                "(This time the host answers each turn with the dim level.)"
+            } else {
+                "(The host sends nothing.)"
+            }
+        );
+        send(dev, &[brightness(10)]).await?;
+        loop {
+            tokio::select! {
+                _ = stdin.next_line() => break,
+                r = dev.recv() => {
+                    let Ok(buf) = r else { return Ok(()) };
+                    println!("report {:02x?}", &buf[..12]);
+                    if answer && parse_input(&buf).is_some_and(|e| matches!(e.control, ulanzi_proto::Control::Dial(_))) {
+                        send(dev, &[brightness(10)]).await?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn press_shrink(dev: &mut Hidraw) -> Result<(), String> {
+    use std::io::Write;
+    // {I} is the key's picture, {P} a second, white one.
+    let one = r#""ViewParam":[{"Icon":"{I}"}]"#;
+    let two = r#""ViewParam":[{"Icon":"{I}"},{"Icon":"{P}"}]"#;
+    let guesses: [(&str, String); 13] = [
+        ("nothing new (the normal key)", format!(r#""State":0,{one}"#)),
+        ("State 1", format!(r#""State":1,{one}"#)),
+        ("KeyType 0", format!(r#""KeyType":0,"State":0,{one}"#)),
+        ("KeyType 1", format!(r#""KeyType":1,"State":0,{one}"#)),
+        ("KeyType 2", format!(r#""KeyType":2,"State":0,{one}"#)),
+        ("KeyType 3", format!(r#""KeyType":3,"State":0,{one}"#)),
+        ("Animation 0", format!(r#""Animation":0,"State":0,{one}"#)),
+        (
+            "PressAnimation off",
+            format!(r#""PressAnimation":false,"State":0,{one}"#),
+        ),
+        (
+            "Animation 0 inside the picture",
+            r#""State":0,"ViewParam":[{"Animation":0,"Icon":"{I}"}]"#.into(),
+        ),
+        (
+            "Press, Scale and Zoom",
+            format!(r#""Press":0,"Scale":1,"State":0,"Zoom":0,{one}"#),
+        ),
+        ("two pictures, State 0", format!(r#""State":0,{two}"#)),
+        ("two pictures, State 1", format!(r#""State":1,{two}"#)),
+        (
+            "Effect, Feedback and ClickEffect",
+            format!(r#""ClickEffect":0,"Effect":0,"Feedback":0,"State":0,{one}"#),
+        ),
+    ];
+    let mut manifest = Vec::new();
+    let mut files = Vec::new();
+    for (i, (name, body)) in guesses.iter().enumerate() {
+        let (icon, pressed) = (
+            format!("icons/s{i}_{}.png", unique()),
+            format!("icons/p{i}_{}.png", unique()),
+        );
+        let body = body.replace("{I}", &icon).replace("{P}", &pressed);
+        manifest.push(format!(r#""{}":{{{body}}}"#, ulanzi_proto::manifest_key(i as u8)));
+        files.push((icon, solid([30, 90, 200])));
+        files.push((pressed, solid([255, 255, 255])));
+        println!("row {} key {}: {name}", i / 5 + 1, i % 5 + 1);
+    }
+    let manifest = format!("{{{}}}", manifest.join(","));
+    let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (name, data) in &files {
+        zw.start_file(name.as_str(), opts).expect("zip");
+        zw.write_all(data).expect("zip");
+    }
+    zw.start_file("manifest.json", opts).expect("zip");
+    zw.write_all(manifest.as_bytes()).expect("zip");
+    let zip = zw.finish().expect("zip").into_inner();
+    wait_enter("Look at the deck. Press Enter to send them.");
+    send(dev, &[ulanzi_proto::unlock()]).await?;
+    if !survives(dev, &file_packets(Command::SetButtons, &zip), 3).await {
+        println!("DECK REBOOTED");
+        return Ok(());
+    }
+    wait_enter(
+        "Hold each key in turn, compared with row 1 key 1. Note any that don't shrink, any that \
+         turn white, and any that look wrong at rest. Type it here, then press Enter",
+    );
     Ok(())
 }
 
