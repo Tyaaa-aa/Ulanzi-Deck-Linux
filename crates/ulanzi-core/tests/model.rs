@@ -882,3 +882,38 @@ fn effects_are_on_by_default_and_saved_colours_are_empty() {
         "{text}"
     );
 }
+
+#[test]
+fn a_colour_saves_once_and_the_list_stops_at_16() {
+    let mut s = Settings::default();
+    assert!(s.save_color(Color::rgb(1, 2, 3)));
+    assert!(!s.save_color(Color::rgb(1, 2, 3)), "no duplicates");
+    for i in 0..15 {
+        assert!(s.save_color(Color::rgb(i, 9, 9)));
+    }
+    assert_eq!(s.saved_colors.len(), MAX_SAVED_COLORS);
+    assert!(!s.save_color(Color::rgb(200, 9, 9)), "full");
+}
+
+#[test]
+fn removing_a_colour_keeps_the_others_in_order() {
+    let (a, b, c) = (Color::rgb(1, 0, 0), Color::rgb(2, 0, 0), Color::rgb(3, 0, 0));
+    let mut s = Settings::default();
+    for x in [a, b, c] {
+        s.save_color(x);
+    }
+    s.remove_color(b);
+    assert_eq!(s.saved_colors, [a, c]);
+}
+
+#[test]
+fn saved_colours_survive_a_save_and_load() {
+    let (_d, store) = store();
+    let mut s = Settings::default();
+    s.save_color(Color::rgb(10, 20, 30));
+    store.save_settings(&s).expect("save");
+    assert_eq!(
+        store.load_settings().expect("load").saved_colors,
+        [Color::rgb(10, 20, 30)]
+    );
+}

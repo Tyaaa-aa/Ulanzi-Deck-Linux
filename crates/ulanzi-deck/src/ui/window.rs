@@ -167,6 +167,7 @@ fn window_title(state: &State, title: &adw::WindowTitle) {
 }
 
 pub fn build(app: &adw::Application, state: &State) -> Window {
+    crate::ui::color_popover::use_state(state);
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("Ulanzi Deck")

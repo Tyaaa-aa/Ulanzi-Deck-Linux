@@ -382,3 +382,10 @@ row.drop-target {
 .pick-spot {
   background-color: alpha(black, 0.45);
 }
+
+.saved-colour-remove {
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  -gtk-icon-size: 10px;
+}

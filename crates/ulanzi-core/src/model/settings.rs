@@ -14,6 +14,9 @@ pub enum AppearancePref {
     Dark,
 }
 
+/// How many colours the colour picker can keep.
+pub const MAX_SAVED_COLORS: usize = 16;
+
 fn is_on(v: &bool) -> bool {
     *v
 }
@@ -114,6 +117,21 @@ impl Settings {
 /// Sort `list` by `order`; entries not in `order` keep their relative order at the end.
 pub fn order_profiles<T>(list: &mut [(Uuid, T)], order: &[Uuid]) {
     list.sort_by_key(|(id, _)| order.iter().position(|o| o == id).unwrap_or(usize::MAX));
+}
+
+impl Settings {
+    /// Add a colour to the saved ones; false when it is already there or the list is full.
+    pub fn save_color(&mut self, c: crate::Color) -> bool {
+        if self.saved_colors.contains(&c) || self.saved_colors.len() >= MAX_SAVED_COLORS {
+            return false;
+        }
+        self.saved_colors.push(c);
+        true
+    }
+
+    pub fn remove_color(&mut self, c: crate::Color) {
+        self.saved_colors.retain(|x| *x != c);
+    }
 }
 
 impl Default for Settings {

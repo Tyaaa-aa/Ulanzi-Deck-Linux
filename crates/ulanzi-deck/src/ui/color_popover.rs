@@ -1,12 +1,15 @@
 //! A colour button whose popover previews colours live: hovering a swatch shows it on the selected
 //! keys, clicking applies it and keeps the popover open so you can compare.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::gdk;
 use ulanzi_core::Color;
+use ulanzi_core::model::{MAX_SAVED_COLORS, Settings};
+
+use crate::state::State;
 
 /// Swatches in rows of eight: neutrals, then GNOME palette colours light to dark.
 const PALETTE: [&str; 32] = [
@@ -117,6 +120,92 @@ fn swatch(size: i32) -> (gtk::DrawingArea, Rc<Cell<Option<Color>>>) {
     (area, value)
 }
 
+thread_local! {
+    /// Where saved colours live; every colour button shares them.
+    static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+}
+
+/// Give colour buttons the app's settings. Without this they just have no saved colours.
+pub fn use_state(state: &State) {
+    STATE.with(|s| *s.borrow_mut() = Some(state.clone()));
+}
+
+fn saved_colors() -> Vec<Color> {
+    STATE.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map_or(Vec::new(), |s| s.settings.borrow().saved_colors.clone())
+    })
+}
+
+fn change_saved(f: impl FnOnce(&mut Settings)) {
+    let state = STATE.with(|s| s.borrow().clone());
+    if let Some(state) = state {
+        crate::ui::preferences::change_now(&state, f);
+    }
+}
+
+/// A swatch that previews on hover and applies on click.
+fn swatch_button(c: Color, preview: &Rc<dyn Fn(Option<Color>)>, apply: &Rc<dyn Fn(Color)>) -> gtk::Button {
+    let (area, v) = swatch(26);
+    v.set(Some(c));
+    let b = gtk::Button::builder()
+        .child(&area)
+        .css_classes(["flat", "swatch-button"])
+        .tooltip_text(c.to_string())
+        .build();
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let preview = preview.clone();
+        motion.connect_enter(move |_, _, _| preview(Some(c)));
+    }
+    {
+        let preview = preview.clone();
+        motion.connect_leave(move |_| preview(None));
+    }
+    b.add_controller(motion);
+    let apply = apply.clone();
+    b.connect_clicked(move |_| apply(c));
+    b
+}
+
+/// Show the saved colours, each with a small remove button on its top corner.
+fn fill_saved(
+    row: &gtk::Grid,
+    save: &gtk::Button,
+    preview: &Rc<dyn Fn(Option<Color>)>,
+    apply: &Rc<dyn Fn(Color)>,
+    refill: Option<Rc<dyn Fn()>>,
+) {
+    while let Some(child) = row.first_child() {
+        row.remove(&child);
+    }
+    let colors = saved_colors();
+    save.set_sensitive(colors.len() < MAX_SAVED_COLORS);
+    row.set_visible(!colors.is_empty());
+    for (i, c) in colors.into_iter().enumerate() {
+        let overlay = gtk::Overlay::builder()
+            .child(&swatch_button(c, preview, apply))
+            .build();
+        let remove = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .css_classes(["circular", "osd", "saved-colour-remove"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .tooltip_text("Remove this colour")
+            .build();
+        let refill = refill.clone();
+        remove.connect_clicked(move |_| {
+            change_saved(|s| s.remove_color(c));
+            if let Some(r) = &refill {
+                r();
+            }
+        });
+        overlay.add_overlay(&remove);
+        row.attach(&overlay, (i % 8) as i32, (i / 8) as i32, 1, 1);
+    }
+}
+
 /// A colour button. `preview(Some(c))` while a swatch is hovered, `preview(None)` when it is left;
 /// `pick(c)` when one is chosen.
 pub fn color_button(
@@ -151,30 +240,12 @@ pub fn color_button(
     let grid = gtk::Grid::builder().row_spacing(6).column_spacing(6).build();
     for (i, hex) in PALETTE.iter().enumerate() {
         let Ok(c) = hex.parse::<Color>() else { continue };
-        let (area, v) = swatch(26);
-        v.set(Some(c));
-        let b = gtk::Button::builder()
-            .child(&area)
-            .css_classes(["flat", "swatch-button"])
-            .tooltip_text(*hex)
-            .build();
-        let motion = gtk::EventControllerMotion::new();
-        {
-            let preview = preview.clone();
-            motion.connect_enter(move |_, _, _| preview(Some(c)));
-        }
-        {
-            let preview = preview.clone();
-            motion.connect_leave(move |_| preview(None));
-        }
-        b.add_controller(motion);
-        {
-            let apply = apply.clone();
-            b.connect_clicked(move |_| apply(c));
-        }
+        let b = swatch_button(c, &preview, &apply);
         grid.attach(&b, (i % 8) as i32, (i / 8) as i32, 1, 1);
     }
     column.append(&grid);
+    let saved_row = gtk::Grid::builder().row_spacing(6).column_spacing(6).build();
+    column.append(&saved_row);
 
     let hex = gtk::Entry::builder()
         .placeholder_text("#rrggbb")
@@ -196,10 +267,41 @@ pub fn color_button(
         .label("Custom")
         .tooltip_text("Pick any colour")
         .build();
+    let save = gtk::Button::builder()
+        .label("Save Colour")
+        .tooltip_text("Keep this colour in the swatches")
+        .build();
     let row = gtk::Box::builder().spacing(6).build();
     row.append(&hex);
+    row.append(&save);
     row.append(&custom);
     column.append(&row);
+    let refill: Rc<dyn Fn()> = {
+        let (saved_row, save, preview, apply) =
+            (saved_row.clone(), save.clone(), preview.clone(), apply.clone());
+        let this: Rc<RefCell<Weak<dyn Fn()>>> = Rc::new(RefCell::new(Weak::<fn()>::new()));
+        let refill: Rc<dyn Fn()> = {
+            let this = this.clone();
+            Rc::new(move || {
+                let again = this.borrow().upgrade();
+                fill_saved(&saved_row, &save, &preview, &apply, again);
+            })
+        };
+        *this.borrow_mut() = Rc::downgrade(&refill);
+        refill
+    };
+    refill();
+    {
+        let (face_value, refill) = (face_value.clone(), refill.clone());
+        save.connect_clicked(move |_| {
+            if let Some(c) = face_value.get() {
+                change_saved(|s| {
+                    s.save_color(c);
+                });
+                refill();
+            }
+        });
+    }
 
     let hsv = Rc::new(Cell::new(current.map(to_hsv).unwrap_or((0.0, 0.0, 0.5))));
     let sv = gtk::DrawingArea::builder()
@@ -340,6 +442,8 @@ pub fn color_button(
         let preview = preview.clone();
         popover.connect_closed(move |_| preview(None));
     }
+    // Another colour button may have changed the saved colours.
+    popover.connect_show(move |_| refill());
     button.set_popover(Some(&popover));
     button
 }
