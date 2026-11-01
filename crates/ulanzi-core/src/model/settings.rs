@@ -14,6 +14,10 @@ pub enum AppearancePref {
     Dark,
 }
 
+fn is_on(v: &bool) -> bool {
+    *v
+}
+
 /// App and device settings (`settings.toml`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,6 +51,12 @@ pub struct Settings {
     pub plugins: BTreeMap<String, PluginEntry>,
     /// Allows installing plugins from a folder.
     pub developer_mode: bool,
+    /// Pulse keys while pressed, unless a key has its own pressed effect.
+    #[serde(skip_serializing_if = "is_on")]
+    pub key_effects: bool,
+    /// Colours the user saved in the colour picker.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub saved_colors: Vec<crate::Color>,
     /// What a newer version wrote; kept so a save does not lose it.
     #[serde(flatten)]
     pub extra: toml::Table,
@@ -126,6 +136,8 @@ impl Default for Settings {
             profile_order: Vec::new(),
             plugins: BTreeMap::new(),
             developer_mode: false,
+            key_effects: true,
+            saved_colors: Vec::new(),
             extra: toml::Table::new(),
         }
     }

@@ -18,6 +18,83 @@ pub struct KeyLook {
     /// cools). Used while `dynamic` is on.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub states: Vec<LookState>,
+    /// The border effect while the key rests. A state can set its own.
+    #[serde(skip_serializing_if = "Effect::is_none")]
+    pub effect: Effect,
+    /// The border effect while the key is held.
+    #[serde(skip_serializing_if = "PressedEffect::is_default")]
+    pub pressed: PressedEffect,
+}
+
+/// A built-in border effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectKind {
+    #[default]
+    None,
+    Glow,
+    Pulse,
+    Chase,
+    Fire,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectSpeed {
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+}
+
+/// An effect as a key uses it. Kind `None` means no effect; `color` `None` means Automatic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Effect {
+    pub kind: EffectKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<Color>,
+    pub speed: EffectSpeed,
+}
+
+impl Effect {
+    pub fn of(kind: EffectKind) -> Effect {
+        Effect {
+            kind,
+            ..Effect::default()
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.kind == EffectKind::None
+    }
+}
+
+/// What a key shows while held: `Default` follows Preferences, `Own` is the key's choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PressedEffect {
+    #[default]
+    Default,
+    Own(Effect),
+}
+
+impl PressedEffect {
+    pub fn is_default(&self) -> bool {
+        *self == PressedEffect::Default
+    }
+}
+
+/// The effect `look` shows. `key_effects` is the Preferences switch, which only moves `Default`.
+pub fn effect_for(look: &KeyLook, held: bool, key_effects: bool) -> Effect {
+    if !held {
+        return look.effect;
+    }
+    match look.pressed {
+        PressedEffect::Own(e) => e,
+        PressedEffect::Default if key_effects => Effect::of(EffectKind::Pulse),
+        PressedEffect::Default => Effect::default(),
+    }
 }
 
 /// Parts of a key's look that replace the key's own while something holds; `None` keeps it.
@@ -32,6 +109,8 @@ pub struct LookOverride {
     pub background: Option<Color>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect: Option<Effect>,
 }
 
 impl LookOverride {
@@ -52,6 +131,9 @@ impl LookOverride {
         }
         if let Some(t) = &self.label {
             look.label.text = t.clone();
+        }
+        if let Some(e) = self.effect {
+            look.effect = e;
         }
     }
 }
@@ -159,6 +241,8 @@ impl Default for KeyLook {
             label: Label::default(),
             dynamic: true,
             states: Vec::new(),
+            effect: Effect::default(),
+            pressed: PressedEffect::default(),
         }
     }
 }

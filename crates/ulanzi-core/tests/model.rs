@@ -126,6 +126,7 @@ fn profile_roundtrip_all_action_variants() {
         },
         dynamic: true,
         states: Vec::new(),
+        ..KeyLook::default()
     };
     p.pages[0].dials[1].right = every_action().into_iter().nth(14);
     p.screen = ScreenConfig::custom(vec![Widget::now_playing()], None, Some(Action::NextPage));
@@ -813,4 +814,68 @@ fn settings_that_failed_to_load_are_never_overwritten() {
     s.protect_settings();
     assert!(s.save_settings(&Settings::default()).is_err());
     assert!(std::fs::read_to_string(&path).expect("read").contains("keep me"));
+}
+
+#[test]
+fn a_look_with_no_effect_writes_nothing_new() {
+    let text = toml::to_string(&KeyLook::default()).expect("toml");
+    assert!(!text.contains("effect") && !text.contains("pressed"), "{text}");
+}
+
+#[test]
+fn a_look_with_effects_comes_back_the_same() {
+    let look = KeyLook {
+        effect: Effect {
+            kind: EffectKind::Chase,
+            color: Some(Color::rgb(1, 2, 3)),
+            speed: EffectSpeed::Fast,
+        },
+        pressed: PressedEffect::Own(Effect::of(EffectKind::Fire)),
+        ..KeyLook::default()
+    };
+    let text = toml::to_string(&look).expect("toml");
+    assert_eq!(toml::from_str::<KeyLook>(&text).expect("back"), look);
+}
+
+#[test]
+fn a_look_override_sets_the_effect() {
+    let mut look = KeyLook::default();
+    let o = LookOverride {
+        effect: Some(Effect::of(EffectKind::Fire)),
+        ..Default::default()
+    };
+    o.apply(&mut look);
+    assert_eq!(look.effect.kind, EffectKind::Fire);
+    assert!(!o.is_empty());
+}
+
+#[test]
+fn the_held_effect_follows_the_default_and_the_switch() {
+    let look = KeyLook {
+        effect: Effect::of(EffectKind::Chase),
+        ..KeyLook::default()
+    };
+    assert_eq!(effect_for(&look, false, true).kind, EffectKind::Chase);
+    assert_eq!(effect_for(&look, true, true).kind, EffectKind::Pulse);
+    assert_eq!(effect_for(&look, true, false).kind, EffectKind::None);
+}
+
+#[test]
+fn a_keys_own_pressed_effect_ignores_the_switch() {
+    let mut look = KeyLook {
+        pressed: PressedEffect::Own(Effect::of(EffectKind::Fire)),
+        ..KeyLook::default()
+    };
+    assert_eq!(effect_for(&look, true, false).kind, EffectKind::Fire);
+    look.pressed = PressedEffect::Own(Effect::default());
+    assert_eq!(effect_for(&look, true, true).kind, EffectKind::None);
+}
+
+#[test]
+fn effects_are_on_by_default_and_saved_colours_are_empty() {
+    let s = Settings::default();
+    assert!(s.key_effects);
+    assert!(s.saved_colors.is_empty());
+    let text = toml::to_string(&s).expect("toml");
+    assert!(!text.contains("key_effects") && !text.contains("saved_colors"), "{text}");
 }

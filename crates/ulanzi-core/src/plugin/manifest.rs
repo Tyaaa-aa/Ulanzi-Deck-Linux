@@ -252,6 +252,7 @@ impl ManifestState {
                 foreground: color(&self.color),
                 background: color(&self.background),
                 label: self.label.clone(),
+                effect: None,
             },
         }
     }

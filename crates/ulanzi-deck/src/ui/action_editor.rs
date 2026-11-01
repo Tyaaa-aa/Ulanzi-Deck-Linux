@@ -1103,6 +1103,7 @@ fn step_look(a: &Action, state: &State) -> LookOverride {
         foreground: Some(d.foreground),
         background: None,
         label: (!label.is_empty()).then_some(label),
+        effect: None,
     }
 }
 
