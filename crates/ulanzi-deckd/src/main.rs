@@ -154,6 +154,13 @@ async fn main() -> ExitCode {
             .await
             .map(|i| Arc::new(std::sync::Mutex::new(i)))
     };
+    {
+        let (conn, deck) = (conn.clone(), tx.clone());
+        tokio::spawn(async move {
+            let accent = ulanzi_deckd::accent::read_accent(&conn).await;
+            let _ = deck.send(DeckMsg::Accent(accent)).await;
+        });
+    }
     let events = match input {
         Ok(input) => start_deck_with(store.clone(), settings, executor, input, rx),
         Err(_) => start_deck(store.clone(), settings, executor, rx),

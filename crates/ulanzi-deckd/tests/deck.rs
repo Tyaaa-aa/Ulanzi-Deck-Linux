@@ -114,7 +114,16 @@ async fn rig_full(settings: Settings, extra: Vec<Profile>) -> Rig {
     rig_of(profile(), settings, extra).await
 }
 
+/// A rig with effects off, as drawing them takes a while in a debug build.
 async fn rig_of(p: Profile, settings: Settings, extra: Vec<Profile>) -> Rig {
+    let settings = Settings {
+        key_effects: false,
+        ..settings
+    };
+    rig_effects(p, settings, extra).await
+}
+
+async fn rig_effects(p: Profile, settings: Settings, extra: Vec<Profile>) -> Rig {
     let dir = tempfile::tempdir().expect("tmp");
     let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
     store.save_profile(&p).expect("save");
@@ -168,6 +177,10 @@ impl Rig {
             .await
             .expect("inject");
         settle().await;
+    }
+    /// Whether the background drawing has had its time.
+    fn effects_drawn(&self) -> bool {
+        self.mock.sent().len() > 3
     }
     async fn click(&self, index: u8) {
         self.press(index).await;
@@ -998,4 +1011,211 @@ async fn a_press_after_an_unplug_is_a_normal_press() {
     mock.inject.send(Ok(report(2, 1, 0))).await.expect("release");
     settle().await;
     assert_eq!(r.runner.ran(), vec![cmd("only-tap")]);
+}
+
+/// The manifest of every upload in `packets`, oldest first.
+fn manifests(packets: &[ulanzi_proto::Packet]) -> Vec<String> {
+    use std::io::Read;
+    let starts = packets.iter().enumerate().filter(|(_, p)| {
+        p[0] == 0x7c && p[1] == 0x7c && [BUTTONS, PARTIAL].contains(&u16::from_be_bytes([p[2], p[3]]))
+    });
+    let mut out = Vec::new();
+    for (start, head) in starts {
+        let len = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as usize;
+        let mut data = head[8..].to_vec();
+        for p in &packets[start + 1..] {
+            if data.len() >= len {
+                break;
+            }
+            data.extend_from_slice(p);
+        }
+        data.truncate(len);
+        let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(data)) else {
+            continue;
+        };
+        let mut m = String::new();
+        if let Ok(mut f) = zip.by_name("manifest.json")
+            && f.read_to_string(&mut m).is_ok()
+        {
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// What the last upload that names `key` ("col_row") gave it.
+fn last_icon(r: &Rig, key: &str) -> Option<String> {
+    icon_on(&r.mock, key)
+}
+
+fn icon_on(mock: &MockHandle, key: &str) -> Option<String> {
+    let all = manifests(&mock.sent());
+    all.iter().rev().find_map(|m| {
+        let v: serde_json::Value = serde_json::from_str(m).ok()?;
+        let params = v.get(key)?.get("ViewParam")?.get(0)?;
+        Some(params.get("Icon")?.as_str()?.to_string())
+    })
+}
+
+/// Wait for `check`, for as long as a debug build may take to draw.
+async fn until(what: &str, check: impl Fn() -> bool) {
+    for _ in 0..1200 {
+        if check() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("never: {what}");
+}
+
+fn one_key(k: Key) -> Profile {
+    let mut p = Profile::new_default("Default", Model::D200X);
+    p.pages[0].keys.insert(1, k);
+    p
+}
+
+fn fx(kind: EffectKind) -> Key {
+    let mut k = key(None, None);
+    k.look.effect = Effect::of(kind);
+    k
+}
+
+#[tokio::test]
+async fn a_key_with_an_effect_uploads_a_gif() {
+    let r = rig_of(one_key(fx(EffectKind::Glow)), Settings::default(), Vec::new()).await;
+    until("a gif", || {
+        last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif"))
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_press_shows_the_pressed_look_and_a_release_goes_back() {
+    let r = rig_effects(
+        one_key(key(Some(cmd("tap")), None)),
+        Settings::default(),
+        Vec::new(),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    r.mock.clear();
+    // Early presses may beat the drawing, so hold until the pulse has been drawn.
+    r.press(1).await;
+    until("the pulse", || {
+        last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif"))
+    })
+    .await;
+    r.release(1).await;
+    until("the still key", || {
+        last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".png"))
+    })
+    .await;
+    assert!(!r.mock.commands().contains(&BUTTONS), "only that key is sent");
+}
+
+#[tokio::test]
+async fn the_preferences_switch_stops_the_default_pulse() {
+    let r = rig_of(
+        one_key(key(Some(cmd("tap")), None)),
+        Settings::default(),
+        Vec::new(),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    r.mock.clear();
+    r.press(1).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    r.release(1).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(last_icon(&r, "1_0"), None);
+}
+
+#[tokio::test]
+async fn a_key_with_no_action_gets_no_default_effect() {
+    let r = rig_effects(one_key(key(None, None)), Settings::default(), Vec::new()).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    r.mock.clear();
+    r.press(1).await;
+    r.press(4).await; // nothing on this key at all
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(manifests(&r.mock.sent()), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_page_change_lets_go_of_a_held_key() {
+    let mut p = one_key(key(None, Some(Action::NextPage)));
+    p.pages.push(Page::new("Two"));
+    p.pages[1].keys.insert(1, key(Some(cmd("x")), None));
+    let settings = Settings {
+        hold_ms: 100,
+        ..Settings::default()
+    };
+    let r = rig_effects(p, settings, Vec::new()).await;
+    until("drawn", || r.effects_drawn()).await;
+    r.press(1).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await; // the hold turns the page
+    until("the new page", || !r.mock.commands().is_empty()).await;
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert!(last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".png")));
+}
+
+#[tokio::test]
+async fn a_macro_that_takes_the_release_lets_go_too() {
+    let (r, _keys) = macro_rig(Macro::new("M"), None).await;
+    tokio::time::sleep(Duration::from_secs(4)).await; // the pressed looks get drawn
+    r.mock.clear();
+    r.click(7).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!last_icon(&r, "2_1").is_some_and(|i| i.ends_with(".gif")));
+}
+
+#[tokio::test]
+async fn an_unplug_lets_go_of_a_held_key() {
+    let r = rig_effects(
+        one_key(key(Some(cmd("tap")), None)),
+        Settings::default(),
+        Vec::new(),
+    )
+    .await;
+    r.press(1).await;
+    until("the pulse", || {
+        last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif"))
+    })
+    .await;
+    r.tx.send(DeckMsg::DeviceDown(DeviceState::NotFound))
+        .await
+        .expect("send");
+    settle().await;
+    let (t, mock) = answering_mock();
+    r.tx.send(DeckMsg::DeviceUp(Box::new(t), "/dev/mock".into()))
+        .await
+        .expect("send");
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert!(icon_on(&mock, "1_0").is_some_and(|i| i.ends_with(".png")));
+}
+
+#[tokio::test]
+async fn two_keys_with_the_same_look_get_their_own_files() {
+    let mut p = one_key(fx(EffectKind::Glow));
+    p.pages[0].keys.insert(2, fx(EffectKind::Glow));
+    let r = rig_of(p, Settings::default(), Vec::new()).await;
+    until("both", || {
+        [last_icon(&r, "1_0"), last_icon(&r, "2_0")]
+            .iter()
+            .all(|i| i.as_ref().is_some_and(|i| i.ends_with(".gif")))
+    })
+    .await;
+    assert_ne!(last_icon(&r, "1_0"), last_icon(&r, "2_0"));
+}
+
+#[tokio::test]
+async fn a_broken_gif_falls_back_to_the_still_key() {
+    let mut k = key(None, None);
+    k.look.source = ImageSource::Image {
+        path: "gone.gif".into(),
+    };
+    k.look.effect = Effect::of(EffectKind::Glow);
+    let r = rig_of(one_key(k), Settings::default(), Vec::new()).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(!last_icon(&r, "1_0").is_some_and(|i| i.ends_with(".gif")));
 }

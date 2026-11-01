@@ -1,10 +1,19 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::Path;
 
-use ulanzi_core::model::{Action, Feedback, ImageSource, KeyLook, LookOverride, MediaControl, Profile};
-use ulanzi_core::render::{RenderCtx, look_hash, render_key, render_key_progress};
+use ulanzi_core::Color;
+use ulanzi_core::model::{
+    Action, Effect, Feedback, ImageSource, Key, KeyLook, LookOverride, MediaControl, Profile, effect_for,
+};
+use ulanzi_core::render::{
+    GIF_TARGET, IconLibrary, RenderCtx, animation_hash, effect_color, encode_fit, is_animated, look_hash,
+    render_animation, render_key, render_key_progress,
+};
 use ulanzi_proto::{ButtonEntry, ButtonImage};
 
+use super::effect_cache::EffectCache;
 use crate::vars::resolve_vars;
 
 /// Index of the wide screen in the manifest.
@@ -30,6 +39,12 @@ pub struct DynamicState {
     pub cycles: BTreeMap<String, usize>,
     /// How far each playing macro's key is, by [`cycle_key`]. Set by the deck.
     pub macros: BTreeMap<String, MacroProgress>,
+    /// The keys held down now. Set by the deck.
+    pub held: BTreeSet<u8>,
+    /// The Key Effects switch in Preferences. Set by the deck.
+    pub key_effects: bool,
+    /// The desktop's accent colour. Set by the deck.
+    pub accent: Option<Color>,
 }
 
 /// A key's macro while it plays.
@@ -104,6 +119,10 @@ pub fn cycle_key(page: uuid::Uuid, control: &str) -> String {
 pub struct RenderCache {
     images: HashMap<u64, Option<Vec<u8>>>,
     warned: HashSet<u64>,
+    /// Whether a look's GIF moves, by look hash: finding out reads the file.
+    moves: HashMap<u64, bool>,
+    /// Finished GIFs, when this cache has somewhere to keep them.
+    pub effects: Option<EffectCache>,
     /// Part of every image name. Seeded randomly per process and bumped on every (re)connect: the
     /// deck caches images by file name, so a new connection or daemon must never reuse names from an
     /// earlier one. Within a connection names are stable, so unchanged keys are not re-sent.
@@ -122,6 +141,8 @@ impl RenderCache {
         RenderCache {
             images: HashMap::new(),
             warned: HashSet::new(),
+            moves: HashMap::new(),
+            effects: None,
             generation: seed.wrapping_add(n.wrapping_mul(0x9e37_79b9)),
         }
     }
@@ -290,6 +311,137 @@ fn foreign_look() -> KeyLook {
 }
 
 /// Build all 14 manifest entries (keys 0-12 and the wide screen) for `page`.
+/// A moving key to draw.
+pub struct EffectJob {
+    pub hash: u64,
+    pub look: KeyLook,
+    pub effect: Effect,
+    pub color: Option<Color>,
+}
+
+/// The label variables of `key`, with its macro's when one plays.
+fn key_vars<'a>(
+    key: &Key,
+    progress: Option<&MacroProgress>,
+    vars: &'a BTreeMap<String, String>,
+) -> Cow<'a, BTreeMap<String, String>> {
+    if matches!(key.tap, Some(Action::Macro { .. })) {
+        Cow::Owned(with_macro_vars(vars, progress))
+    } else {
+        Cow::Borrowed(vars)
+    }
+}
+
+/// The look `key` shows now, with its parameters filled in.
+fn shown_look(
+    key: &Key,
+    dynamic: &DynamicState,
+    vars: &BTreeMap<String, String>,
+    at: Option<&str>,
+) -> KeyLook {
+    let mut look = live_look(&key.look, &key.tap, dynamic, vars, at);
+    if let Some(params) = params_of(&key.tap) {
+        look.label.text = ulanzi_core::model::fill_params(&look.label.text, params);
+    }
+    // A key with its own label position gets the label drawn into its picture.
+    if look.label.position.is_some() {
+        look.label.text = resolve_vars(&look.label.text, vars);
+    }
+    look
+}
+
+/// What `look` needs drawn as a GIF, if it moves at all.
+fn moving_key(
+    look: &KeyLook,
+    held: bool,
+    dynamic: &DynamicState,
+    profile_dir: &Path,
+    cache: &mut RenderCache,
+) -> Option<EffectJob> {
+    let effect = effect_for(look, held, dynamic.key_effects);
+    let moves = if effect.is_none() {
+        *cache
+            .moves
+            .entry(look_hash(look, profile_dir))
+            .or_insert_with(|| is_animated(look, &effect, profile_dir))
+    } else {
+        true
+    };
+    if !moves {
+        return None;
+    }
+    let color = effect_color(&effect, look.foreground, dynamic.accent);
+    Some(EffectJob {
+        hash: animation_hash(look, &effect, color, profile_dir),
+        look: look.clone(),
+        effect,
+        color,
+    })
+}
+
+/// A finished GIF. An empty file marks a look that could not be drawn.
+fn cached_gif(cache: &mut RenderCache, hash: u64) -> Option<Vec<u8>> {
+    if !cache.images.get(&hash).is_some_and(Option::is_some) {
+        let gif = cache.effects.as_ref()?.get(hash)?;
+        cache.images.insert(hash, Some(gif));
+    }
+    cache.images.get(&hash)?.clone().filter(|g| !g.is_empty())
+}
+
+/// The GIFs `page` may need that nobody has drawn yet: each key at rest, and held if it has an action.
+pub fn missing_effects(
+    profile: &Profile,
+    page: usize,
+    profile_dir: &Path,
+    dynamic: &DynamicState,
+    cache: &mut RenderCache,
+) -> Vec<EffectJob> {
+    let Some(effects) = cache.effects.clone() else {
+        return Vec::new();
+    };
+    let Some(page) = profile.pages.get(page) else {
+        return Vec::new();
+    };
+    let vars = dynamic.label_vars();
+    let mut jobs: Vec<EffectJob> = Vec::new();
+    for (i, key) in &page.keys {
+        let at = cycle_key(page.id, &format!("key:{i}"));
+        let progress = dynamic.macros.get(&at);
+        if progress.is_some() {
+            continue;
+        }
+        let vars = key_vars(key, progress, &vars);
+        let look = shown_look(key, dynamic, &vars, Some(&at));
+        let acts = key.tap.is_some() || key.hold.is_some();
+        for held in [false, true].into_iter().filter(|h| !h || acts) {
+            if let Some(job) = moving_key(&look, held, dynamic, profile_dir, cache)
+                && !effects.has(job.hash)
+                && !jobs.iter().any(|j| j.hash == job.hash)
+            {
+                jobs.push(job);
+            }
+        }
+    }
+    jobs
+}
+
+/// Draw `jobs` into `effects`. Slow: run it off the deck loop.
+pub fn draw_effects(jobs: Vec<EffectJob>, effects: &EffectCache, profile_dir: &Path) {
+    let ctx = RenderCtx {
+        profile_dir,
+        icons: IconLibrary::bundled(),
+    };
+    for job in jobs {
+        match render_animation(&job.look, &job.effect, job.color, &ctx) {
+            Ok(a) => effects.put(job.hash, &encode_fit(&a, GIF_TARGET).gif),
+            Err(e) => {
+                tracing::warn!("a key's animation: {e}");
+                effects.put(job.hash, &[]);
+            }
+        }
+    }
+}
+
 pub fn build_page(
     profile: &Profile,
     page: usize,
@@ -310,24 +462,33 @@ pub fn build_page(
         if let Some(key) = keys.and_then(|k| k.get(&i)) {
             let at = page_id.map(|id| cycle_key(id, &format!("key:{i}")));
             let progress = at.as_deref().and_then(|a| dynamic.macros.get(a));
-            let macro_vars;
-            let vars: &BTreeMap<String, String> = if matches!(key.tap, Some(Action::Macro { .. })) {
-                macro_vars = with_macro_vars(&vars, progress);
-                &macro_vars
-            } else {
-                &vars
-            };
+            let vars = key_vars(key, progress, &vars);
             let bar = progress
                 .filter(|p| p.feedback == Feedback::Progress)
                 .map(MacroProgress::share);
-            let mut look = live_look(&key.look, &key.tap, dynamic, vars, at.as_deref());
-            if let Some(params) = params_of(&key.tap) {
-                look.label.text = ulanzi_core::model::fill_params(&look.label.text, params);
-            }
-            // A key with its own label position gets the label drawn into its picture.
+            let look = shown_look(key, dynamic, &vars, at.as_deref());
             let own_label = look.label.position.is_some();
-            if own_label {
-                look.label.text = resolve_vars(&look.label.text, vars);
+            let moving = progress
+                .is_none()
+                .then(|| moving_key(&look, dynamic.held.contains(&i), dynamic, ctx.profile_dir, cache))
+                .flatten()
+                .filter(|job| cached_gif(cache, job.hash).is_some());
+            if let Some(job) = moving {
+                let name = format!("k{i}_{:016x}_{:08x}.gif", job.hash, cache.generation);
+                entry.icon = Some(format!("icons/{name}"));
+                images.push(ButtonImage {
+                    name,
+                    png: cached_gif(cache, job.hash).unwrap_or_default(),
+                });
+                if !own_label && look.label.visible && !look.label.text.is_empty() {
+                    entry.text = Some(resolve_vars(&look.label.text, &vars));
+                }
+                job.hash.hash(&mut h);
+                used.insert(job.hash);
+                used.insert(look_hash(&look, ctx.profile_dir));
+                (i, &entry.text, &entry.icon).hash(&mut h);
+                entries.insert(i, entry);
+                continue;
             }
             let mut lh = look_hash(&look, ctx.profile_dir);
             if let Some(share) = bar {
@@ -356,7 +517,7 @@ pub fn build_page(
                 });
             }
             if !own_label && look.label.visible && !look.label.text.is_empty() {
-                entry.text = Some(resolve_vars(&look.label.text, vars));
+                entry.text = Some(resolve_vars(&look.label.text, &vars));
             }
             lh.hash(&mut h);
             used.insert(lh);
@@ -401,6 +562,7 @@ pub fn build_page(
     entries.insert(SCREEN_INDEX, screen);
     cache.images.retain(|lh, _| used.contains(lh));
     cache.warned.retain(|lh| used.contains(lh));
+    cache.moves.retain(|lh, _| used.contains(lh));
     BuiltPage {
         entries,
         images,
@@ -423,8 +585,9 @@ pub fn with_fresh_names(
             let mut e = e.clone();
             if let Some(icon) = e.icon.take() {
                 let old = icon.strip_prefix("icons/").unwrap_or(&icon).to_string();
-                let new = match old.strip_suffix(".png") {
-                    Some(stem) => format!("{stem}_u{seq}.png"),
+                // The deck goes by the extension.
+                let new = match old.rsplit_once('.') {
+                    Some((stem, ext)) => format!("{stem}_u{seq}.{ext}"),
                     None => format!("{old}_u{seq}"),
                 };
                 if let Some(img) = images.iter().find(|img| img.name == old) {
@@ -456,6 +619,43 @@ mod tests {
             profile_dir: std::path::Path::new("/nonexistent"),
             icons: IconLibrary::bundled(),
         }
+    }
+
+    #[test]
+    fn a_fresh_name_keeps_the_extension() {
+        let entry = ButtonEntry {
+            icon: Some("icons/k1.gif".into()),
+            ..ButtonEntry::default()
+        };
+        let img = ButtonImage {
+            name: "k1.gif".into(),
+            png: vec![1],
+        };
+        let (_, images) = with_fresh_names(&BTreeMap::from([(1, entry)]), &[img], 3);
+        assert_eq!(images[0].name, "k1_u3.gif");
+    }
+
+    #[test]
+    fn a_macro_showing_progress_stays_still() {
+        let mut p = profile();
+        let key = p.pages[0].keys.get_mut(&6).expect("key");
+        key.look.effect = ulanzi_core::model::Effect::of(ulanzi_core::model::EffectKind::Glow);
+        let d = tempfile::tempdir().expect("dir");
+        let mut cache = RenderCache::new();
+        cache.effects = Some(EffectCache::new(d.path().to_path_buf(), 1 << 20));
+        let mut dynamic = DynamicState::default();
+        assert_eq!(missing_effects(&p, 0, d.path(), &dynamic, &mut cache).len(), 1);
+        dynamic.macros.insert(
+            cycle_key(p.pages[0].id, "key:6"),
+            MacroProgress {
+                step: 0,
+                total: 2,
+                name: "M".into(),
+                feedback: Feedback::Progress,
+                look: LookOverride::default(),
+            },
+        );
+        assert!(missing_effects(&p, 0, d.path(), &dynamic, &mut cache).is_empty());
     }
 
     fn profile() -> Profile {

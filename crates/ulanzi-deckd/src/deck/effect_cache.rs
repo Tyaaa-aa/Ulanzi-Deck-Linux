@@ -23,6 +23,10 @@ impl EffectCache {
         self.dir.join(format!("{hash:016x}.gif"))
     }
 
+    pub fn has(&self, hash: u64) -> bool {
+        self.path(hash).exists()
+    }
+
     pub fn get(&self, hash: u64) -> Option<Vec<u8>> {
         std::fs::read(self.path(hash)).ok()
     }

@@ -8,12 +8,13 @@ mod push;
 mod screen_rt;
 mod sleep;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
+use ulanzi_core::Color;
 use ulanzi_core::model::{
     Action, AudioTarget, BrightnessOp, ClockStyle, Feedback, Macro, MacroLibrary, Model, MouseButton,
     Profile, ScreenConfig, Settings, Slot, Trigger,
@@ -76,6 +77,8 @@ pub enum DeckMsg {
     Apply {
         profile: Box<Profile>,
     },
+    /// The desktop's accent colour.
+    Accent(Option<ulanzi_core::Color>),
     /// Settings changed (already saved by the caller).
     Settings(Box<Settings>),
     SwitchProfile(Uuid),
@@ -314,6 +317,13 @@ struct Deck {
     player: Player,
     player_tx: mpsc::UnboundedSender<PlayerEvent>,
     player_rx: Option<mpsc::UnboundedReceiver<PlayerEvent>>,
+    /// Keys held down, for their pressed look.
+    held: BTreeSet<u8>,
+    accent: Option<Color>,
+    /// Effects are being drawn on a blocking thread.
+    drawing: bool,
+    drawn_tx: mpsc::UnboundedSender<()>,
+    drawn_rx: Option<mpsc::UnboundedReceiver<()>>,
     library: Arc<std::sync::RwLock<MacroLibrary>>,
     playing: HashMap<u64, Playing>,
     /// Controls that started a macro on key down; their key up goes to the player.
@@ -334,6 +344,12 @@ impl Deck {
         });
         let library = Arc::new(std::sync::RwLock::new(library));
         let (player_tx, player_rx) = mpsc::unbounded_channel();
+        let (drawn_tx, drawn_rx) = mpsc::unbounded_channel();
+        let mut cache = RenderCache::default();
+        cache.effects = Some(effect_cache::EffectCache::new(
+            store.cache_dir().join(effect_cache::FOLDER),
+            effect_cache::LIMIT,
+        ));
         let player = Player::new(input, runner.clone(), library.clone(), player_tx.clone());
         let mut profiles: Vec<Profile> = store
             .list_profiles()
@@ -372,7 +388,7 @@ impl Deck {
             queues: HashMap::new(),
             swallowed: Vec::new(),
             dynamic: DynamicState::default(),
-            cache: RenderCache::default(),
+            cache,
             shown: None,
             next_upload_at: None,
             awaiting_info: None,
@@ -389,6 +405,11 @@ impl Deck {
             player,
             player_tx,
             player_rx: Some(player_rx),
+            held: BTreeSet::new(),
+            accent: None,
+            drawing: false,
+            drawn_tx,
+            drawn_rx: Some(drawn_rx),
             library,
             playing: HashMap::new(),
             macro_down: Vec::new(),
@@ -409,6 +430,7 @@ impl Deck {
         let wake = self.screen.wake.clone();
         let mut levels = self.level_rx.take().expect("run once");
         let mut player = self.player_rx.take().expect("run once");
+        let mut drawn = self.drawn_rx.take().expect("run once");
         loop {
             let hold_deadline = self.press.next_deadline();
             // Only arm the upload timer when an upload can actually happen; otherwise a deadline in
@@ -426,6 +448,10 @@ impl Deck {
                     Some(m) => self.on_msg(m).await,
                 },
                 Some(e) = player.recv() => self.on_player(e).await,
+                Some(()) = drawn.recv() => {
+                    self.drawing = false;
+                    self.push_page(false).await;
+                },
                 report = async {
                     match transport {
                         Some(t) => t.recv().await,
@@ -488,6 +514,7 @@ impl Deck {
             DeckMsg::DeviceDown(state) => {
                 self.player.stop_all();
                 self.macro_down.clear();
+                self.held.clear();
                 self.transport = None;
                 self.upload_pending = false;
                 self.set_device(state);
@@ -504,9 +531,14 @@ impl Deck {
                 self.send_window().await;
                 self.push_page(false).await;
             }
+            DeckMsg::Accent(c) => {
+                self.accent = c;
+                self.push_page(false).await;
+            }
             DeckMsg::Settings(s) => {
                 let label_changed =
                     s.hide_labels != self.settings.hide_labels || s.label_style != self.settings.label_style;
+                let effects_changed = s.key_effects != self.settings.key_effects;
                 self.settings = *s;
                 crate::actions::audio::set_sound_volume(self.settings.sound_volume);
                 self.press = PressTracker::new(self.settings.hold_ms);
@@ -515,6 +547,9 @@ impl Deck {
                 if label_changed {
                     self.send_label_style().await;
                     // Labels drawn into key pictures follow "Hide All Labels" too.
+                    self.push_page(false).await;
+                }
+                if effects_changed {
                     self.push_page(false).await;
                 }
             }
@@ -748,7 +783,23 @@ impl Deck {
             .insert("page".into(), (self.nav.page + 1).to_string());
         dynamic.vars.insert("profile".into(), profile.name.clone());
         let here = (profile.id, self.nav.page);
+        // A key held through a page change is let go: the next page has no press to show.
+        if self.shown.as_ref().is_some_and(|s| s.at != here) {
+            self.held.clear();
+        }
+        dynamic.held = self.held.clone();
+        dynamic.key_effects = self.settings.key_effects;
+        dynamic.accent = self.accent;
         let built = build_page(profile, self.nav.page, &ctx, &dynamic, &mut self.cache);
+        let jobs = push::missing_effects(profile, self.nav.page, &dir, &dynamic, &mut self.cache);
+        if let (false, false, Some(effects)) = (jobs.is_empty(), self.drawing, self.cache.effects.clone()) {
+            self.drawing = true;
+            let (tx, dir) = (self.drawn_tx.clone(), dir.clone());
+            tokio::task::spawn_blocking(move || {
+                push::draw_effects(jobs, &effects, &dir);
+                let _ = tx.send(());
+            });
+        }
         let same_page = self.shown.as_ref().filter(|s| !force && s.at == here);
         let partial = same_page.is_some();
         let packets = match same_page {
@@ -819,6 +870,7 @@ impl Deck {
         tracing::warn!("device connection lost: {e}");
         self.player.stop_all();
         self.macro_down.clear();
+        self.held.clear();
         self.transport = None;
         self.shown = None;
         self.firmware = None;
@@ -884,6 +936,13 @@ impl Deck {
     async fn on_input(&mut self, ev: InputEvent) {
         let now = Instant::now();
         self.emit(DeckEvent::Input(ev));
+        // First of all: every path below that returns early still lets go of the key.
+        if ev.kind == InputKind::Release
+            && let Control::Key(i) = ev.control
+            && self.held.remove(&i)
+        {
+            self.push_page(false).await;
+        }
         // Before the sleep check: a held key can outlast the sleep timer.
         if ev.kind == InputKind::Release
             && let Some(i) = self.macro_down.iter().position(|c| *c == ev.control)
@@ -904,6 +963,12 @@ impl Deck {
         }
         match ev.kind {
             InputKind::Press => {
+                if let Control::Key(i) = ev.control
+                    && (self.tap_action(ev.control).is_some() || self.hold_action(ev.control).is_some())
+                {
+                    self.held.insert(i);
+                    self.push_page(false).await;
+                }
                 if let Some(a) = self.macro_on_press(ev.control) {
                     self.macro_down.push(ev.control);
                     self.start_macro(ev.control, &a);
