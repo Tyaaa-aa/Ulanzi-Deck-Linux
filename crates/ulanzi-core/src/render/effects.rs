@@ -161,7 +161,12 @@ mod tests {
 
     #[test]
     fn every_effect_closes_its_loop() {
-        for kind in [EffectKind::Glow, EffectKind::Pulse, EffectKind::Chase, EffectKind::Fire] {
+        for kind in [
+            EffectKind::Glow,
+            EffectKind::Pulse,
+            EffectKind::Chase,
+            EffectKind::Fire,
+        ] {
             let e = Effect::of(kind);
             let at = |f: u32| draw_effect(&dark(), &e, Some(BLUE), f as f32 / LOOP_FRAMES as f32);
             let (last, first, next) = (at(LOOP_FRAMES - 1), at(0), at(1));
@@ -171,7 +176,12 @@ mod tests {
 
     #[test]
     fn effects_stay_on_the_border() {
-        for kind in [EffectKind::Glow, EffectKind::Pulse, EffectKind::Chase, EffectKind::Fire] {
+        for kind in [
+            EffectKind::Glow,
+            EffectKind::Pulse,
+            EffectKind::Chase,
+            EffectKind::Fire,
+        ] {
             let out = draw_effect(&dark(), &Effect::of(kind), Some(BLUE), 0.3);
             assert_eq!(out.get_pixel(98, 98), dark().get_pixel(98, 98), "{kind:?}");
         }

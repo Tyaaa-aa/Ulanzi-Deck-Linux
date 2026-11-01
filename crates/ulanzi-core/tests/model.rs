@@ -877,5 +877,8 @@ fn effects_are_on_by_default_and_saved_colours_are_empty() {
     assert!(s.key_effects);
     assert!(s.saved_colors.is_empty());
     let text = toml::to_string(&s).expect("toml");
-    assert!(!text.contains("key_effects") && !text.contains("saved_colors"), "{text}");
+    assert!(
+        !text.contains("key_effects") && !text.contains("saved_colors"),
+        "{text}"
+    );
 }

@@ -2,6 +2,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
 use std::path::Path;
 
+use image::RgbaImage;
 use resvg::tiny_skia::{self, Pixmap, PixmapPaint, Transform};
 use resvg::usvg;
 
@@ -33,6 +34,20 @@ pub fn render_key(look: &KeyLook, ctx: &RenderCtx) -> Option<Rendered> {
     draw_key(look, ctx, None)
 }
 
+/// A key as pixels for an animation, with `picture` in place of its image when given. An empty key
+/// is black.
+pub fn key_image(look: &KeyLook, ctx: &RenderCtx, picture: Option<&RgbaImage>) -> RgbaImage {
+    let drawn = draw_pixels(look, ctx, None, picture).map(|(pix, _)| pix);
+    let mut out = RgbaImage::from_pixel(KEY_PX, KEY_PX, image::Rgba([0, 0, 0, 255]));
+    if let Some(pix) = drawn {
+        for (dst, src) in out.pixels_mut().zip(pix.pixels()) {
+            let c = src.demultiply();
+            *dst = image::Rgba([c.red(), c.green(), c.blue(), 255]);
+        }
+    }
+    out
+}
+
 /// [`render_key`] with a progress bar along the bottom, `share` of the way across.
 pub fn render_key_progress(look: &KeyLook, ctx: &RenderCtx, share: f32) -> Option<Rendered> {
     draw_key(look, ctx, Some(share))
@@ -53,11 +68,23 @@ fn draw_bar(pix: &mut Pixmap, color: Color, share: f32) {
 }
 
 fn draw_key(look: &KeyLook, ctx: &RenderCtx, bar: Option<f32>) -> Option<Rendered> {
+    let (pix, warnings) = draw_pixels(look, ctx, bar, None)?;
+    let png = pix.encode_png().ok()?;
+    Some(Rendered { png, warnings })
+}
+
+fn draw_pixels(
+    look: &KeyLook,
+    ctx: &RenderCtx,
+    bar: Option<f32>,
+    picture: Option<&RgbaImage>,
+) -> Option<(Pixmap, Vec<String>)> {
     let own_label = look
         .label
         .position
         .filter(|_| look.label.visible && !look.label.text.trim().is_empty());
-    if look.source == ImageSource::None
+    if picture.is_none()
+        && look.source == ImageSource::None
         && look.background == Color::BLACK
         && own_label.is_none()
         && bar.is_none()
@@ -69,6 +96,11 @@ fn draw_key(look: &KeyLook, ctx: &RenderCtx, bar: Option<f32>) -> Option<Rendere
     pix.fill(tiny_skia::Color::from_rgba8(r, g, b, a));
     let mut warnings = Vec::new();
     match &look.source {
+        _ if picture.is_some() => {
+            if let Some(Err(e)) = picture.map(|p| draw_layer(&mut pix, p)) {
+                warnings.push(format!("picture: {e}"));
+            }
+        }
         ImageSource::None => {}
         ImageSource::Icon { set, name } => match ctx.icons.svg(*set, name) {
             Some(svg) => {
@@ -126,8 +158,7 @@ fn draw_key(look: &KeyLook, ctx: &RenderCtx, bar: Option<f32>) -> Option<Rendere
     if let Some(share) = bar {
         draw_bar(&mut pix, look.foreground, share);
     }
-    let png = pix.encode_png().ok()?;
-    Some(Rendered { png, warnings })
+    Some((pix, warnings))
 }
 
 /// Largest plugin icon file read.
@@ -277,6 +308,11 @@ fn draw_image(pix: &mut Pixmap, path: &Path, fit: Fit) -> Result<(), String> {
             canvas
         }
     };
+    draw_layer(pix, &fitted)
+}
+
+/// Draw a key-sized image over `pix`.
+fn draw_layer(pix: &mut Pixmap, fitted: &RgbaImage) -> Result<(), String> {
     let mut layer = Pixmap::new(KEY_PX, KEY_PX).ok_or("no layer")?;
     for (dst, src) in layer.pixels_mut().iter_mut().zip(fitted.pixels()) {
         let [r, g, b, a] = src.0;
