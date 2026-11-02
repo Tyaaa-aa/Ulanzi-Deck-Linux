@@ -49,6 +49,12 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.3.1" date="2026-11-02">
+      <description>
+        <p>First-run polish: Discover opens with a loading placeholder and shows plugins sooner, the setup
+        assistant asks before importing an old setup, and auto-switch leaves a profile you chose alone.</p>
+      </description>
+    </release>
     <release version="2.3.0" date="2026-11-02">
       <description>
         <p>Keys that move: GIFs that play on the deck, and Glow, Pulse, Chase and Fire effects in any
