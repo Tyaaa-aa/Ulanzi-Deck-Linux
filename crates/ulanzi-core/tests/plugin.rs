@@ -725,13 +725,13 @@ fn short_names_drop_a_shared_leading_phrase() {
     let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(
         short_names(&names(&[
-            "Satya Bedroom Floor Lamp",
-            "Satya Bedroom Fan",
-            "Satya Bedroom Lights",
-            "Privacy Satya",
-            "Satya Fan Speed",
+            "Home Bedroom Floor Lamp",
+            "Home Bedroom Fan",
+            "Home Bedroom Lights",
+            "Privacy Mode",
+            "Home Fan Speed",
         ])),
-        ["Floor Lamp", "Fan", "Lights", "Privacy Satya", "Fan Speed"]
+        ["Floor Lamp", "Fan", "Lights", "Privacy Mode", "Fan Speed"]
     );
     // Alone, or the whole name shared: kept.
     assert_eq!(short_names(&names(&["Kitchen Lamp"])), ["Kitchen Lamp"]);

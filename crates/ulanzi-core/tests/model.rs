@@ -389,7 +389,7 @@ fn widgets_round_trip_with_options() {
                 pomodoro: true,
             },
             Widget::Weather {
-                place: "Singapore".into(),
+                place: "Oslo".into(),
                 fahrenheit: false,
                 lat: None,
                 lon: None,

@@ -108,7 +108,7 @@ fn frame(cc: u8, pid: u8, payload: &[u8]) -> Vec<u8> {
 
 #[test]
 fn device_reports() {
-    let info = br#"{ "SerialNumber": "02C51A015U3672946", "Dversion": "5.1.7" }"#;
+    let info = br#"{ "SerialNumber": "02C5XXXXXXXXXXXXX", "Dversion": "5.1.7" }"#;
     assert_eq!(
         parse_report(&frame(3, 3, info)),
         DeviceReport::DeviceInfo(String::from_utf8_lossy(info).into_owned())

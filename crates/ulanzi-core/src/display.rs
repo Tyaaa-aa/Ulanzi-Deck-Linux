@@ -3,8 +3,8 @@
 
 use crate::model::{BrightnessOp, DisplayTarget};
 
-/// The same monitor under two names: KDE puts the maker first ("LG Electronics LG TV") and ddcutil
-/// gives the model alone ("LG TV"), so a key still finds it on another desktop.
+/// The same monitor under two names: KDE puts the maker first ("Acme Electronics Acme TV") and ddcutil
+/// gives the model alone ("Acme TV"), so a key still finds it on another desktop.
 fn same_monitor(a: &str, b: &str) -> bool {
     a.ends_with(&format!(" {b}")) || b.ends_with(&format!(" {a}"))
 }
@@ -115,11 +115,11 @@ mod tests {
 
     #[test]
     fn a_monitor_is_found_under_another_desktops_name() {
-        let kde = labels(&["LG Electronics LG TV", "Samsung Electric Company LS27C33xG"]);
-        assert_eq!(pick(&kde, &named("LS27C33xG", 0)), Some(vec![1]));
-        let ddc = labels(&["LG TV", "LS27C33xG"]);
+        let kde = labels(&["Acme Electronics Acme TV", "Globex Electric Company GX27"]);
+        assert_eq!(pick(&kde, &named("GX27", 0)), Some(vec![1]));
+        let ddc = labels(&["Acme TV", "GX27"]);
         assert_eq!(
-            pick(&ddc, &named("Samsung Electric Company LS27C33xG", 0)),
+            pick(&ddc, &named("Globex Electric Company GX27", 0)),
             Some(vec![1])
         );
         assert_eq!(pick(&ddc, &named("TV 2", 0)), None);
@@ -127,16 +127,16 @@ mod tests {
 
     #[test]
     fn the_exact_name_wins_over_a_longer_one() {
-        let both = labels(&["Big LG TV", "LG TV"]);
-        assert_eq!(pick(&both, &named("LG TV", 0)), Some(vec![1]));
+        let both = labels(&["Big Acme TV", "Acme TV"]);
+        assert_eq!(pick(&both, &named("Acme TV", 0)), Some(vec![1]));
     }
 
     #[test]
     fn opening_a_key_saved_under_another_name_keeps_it() {
-        let saved = named("Samsung Electric Company LS27C33xG", 0);
-        let list = choices(&labels(&["LS27C33xG"]), &saved);
+        let saved = named("Globex Electric Company GX27", 0);
+        let list = choices(&labels(&["GX27"]), &saved);
         assert_eq!(list.len(), 2);
-        assert_eq!((list[1].title.as_str(), &list[1].target), ("LS27C33xG", &saved));
+        assert_eq!((list[1].title.as_str(), &list[1].target), ("GX27", &saved));
     }
 
     #[test]

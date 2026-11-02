@@ -147,7 +147,7 @@ fn each_widget_draws_with_and_without_data() {
         weather: Some(WeatherData::Ok {
             temp: 31.4,
             code: 2,
-            place: "Singapore".into(),
+            place: "Oslo".into(),
             high: 33.0,
             low: 26.0,
         }),

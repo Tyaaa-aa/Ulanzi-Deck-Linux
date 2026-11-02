@@ -233,7 +233,7 @@ async fn kde_goes_first_when_it_is_there() {
     let Some(desk) = Desktop::new().await else { return };
     let tv = level(2000);
     desk.plug(1, "LG TV", &tv).await;
-    let tool = Ddcutil::new(&[(8, "LHC:X340 PRO 165:", "VCP 10 C 50 100")]);
+    let tool = Ddcutil::new(&[(8, "ACM:MX34 Pro:", "VCP 10 C 50 100")]);
     let client = DisplayClient::new(connect(&desk._bus).await).with_ddcutil(tool.path(), WAIT);
     assert_eq!(client.labels().await.expect("labels"), ["LG TV"]);
     assert!(tool.calls().is_empty());
@@ -316,68 +316,65 @@ async fn no_kde(tool: PathBuf, wait: Duration) -> Option<(Bus, DisplayClient)> {
     Some((bus, client))
 }
 
-fn x340() -> DisplayTarget {
+fn first() -> DisplayTarget {
     DisplayTarget::Named {
-        name: "X340 PRO 165".into(),
+        name: "MX34 Pro".into(),
         nth: 0,
     }
 }
 
-const X340: (u32, &str, &str) = (8, "LHC:X340 PRO 165:", "VCP 10 C 50 100");
-const SAMSUNG: (u32, &str, &str) = (9, "SAM:LS27C33xG:H9TWA00931", "VCP 10 C 30 100");
+const FIRST: (u32, &str, &str) = (8, "ACM:MX34 Pro:", "VCP 10 C 50 100");
+const SECOND: (u32, &str, &str) = (9, "GBX:GX27:SN0000001", "VCP 10 C 30 100");
 
 #[tokio::test]
 async fn without_kde_the_monitors_come_from_ddcutil() {
-    let tool = Ddcutil::new(&[X340, SAMSUNG]);
+    let tool = Ddcutil::new(&[FIRST, SECOND]);
     let Some((_bus, client)) = no_kde(tool.path(), WAIT).await else {
         return;
     };
-    assert_eq!(
-        client.labels().await.expect("labels"),
-        ["X340 PRO 165", "LS27C33xG"]
-    );
+    assert_eq!(client.labels().await.expect("labels"), ["MX34 Pro", "GX27"]);
 }
 
 #[tokio::test]
 async fn a_monitor_that_cannot_report_brightness_is_left_out() {
-    let tool = Ddcutil::new(&[X340, (9, "SAM:LS27C33xG:", "VCP 10 ERR")]);
+    let tool = Ddcutil::new(&[FIRST, (9, "GBX:GX27:", "VCP 10 ERR")]);
     let Some((_bus, client)) = no_kde(tool.path(), WAIT).await else {
         return;
     };
-    assert_eq!(client.labels().await.expect("labels"), ["X340 PRO 165"]);
+    assert_eq!(client.labels().await.expect("labels"), ["MX34 Pro"]);
 }
 
 #[tokio::test]
 async fn a_key_changes_only_its_monitor_through_ddcutil() {
-    let tool = Ddcutil::new(&[X340, SAMSUNG]);
+    let tool = Ddcutil::new(&[FIRST, SECOND]);
     let Some((_bus, client)) = no_kde(tool.path(), WAIT).await else {
         return;
     };
     let up = BrightnessOp::Up { step: 10 };
-    client.change(&x340(), up).await.expect("change");
+    client.change(&first(), up).await.expect("change");
     assert_eq!((tool.level(8), tool.level(9)), ("60".into(), "30".into()));
     assert_eq!(tool.writes(), ["--bus 8 setvcp 10 60 --noverify"]);
 }
 
 #[tokio::test]
 async fn a_monitors_own_scale_is_respected() {
-    let tool = Ddcutil::new(&[(8, "LHC:X340 PRO 165:", "VCP 10 C 50 200")]);
+    let tool = Ddcutil::new(&[(8, "ACM:MX34 Pro:", "VCP 10 C 50 200")]);
     let Some((_bus, client)) = no_kde(tool.path(), WAIT).await else {
         return;
     };
     let set = BrightnessOp::Set { percent: 50 };
-    client.change(&x340(), set).await.expect("change");
+    client.change(&first(), set).await.expect("change");
     assert_eq!(tool.level(8), "100");
 }
 
 #[tokio::test]
 async fn quick_turns_wait_and_add_up() {
-    let tool = Ddcutil::new(&[X340]);
+    let tool = Ddcutil::new(&[FIRST]);
     let Some((_bus, client)) = no_kde(tool.path(), WAIT).await else {
         return;
     };
     let up = BrightnessOp::Up { step: 1 };
-    let (target, c) = (x340(), &client);
+    let (target, c) = (first(), &client);
     let turns = tokio::join!(
         c.change(&target, up),
         c.change(&target, up),
@@ -424,7 +421,7 @@ async fn no_monitor_answering_points_to_the_guide() {
 
 #[tokio::test]
 async fn a_failed_write_says_what_ddcutil_said() {
-    let tool = Ddcutil::new(&[X340]);
+    let tool = Ddcutil::new(&[FIRST]);
     let script = std::fs::read_to_string(tool.path()).expect("script");
     let refused = script.replace("*setvcp*) ", "*setvcp*) echo 'DDC: refused'; exit 1 ;; *never*) ");
     std::fs::write(tool.path(), refused).expect("script");
@@ -433,14 +430,14 @@ async fn a_failed_write_says_what_ddcutil_said() {
     };
     let set = BrightnessOp::Set { percent: 20 };
     assert_eq!(
-        client.change(&x340(), set).await,
+        client.change(&first(), set).await,
         Err(ActionError::Failed("DDC: refused".into()))
     );
 }
 
 #[tokio::test]
 async fn a_hung_ddcutil_gives_up() {
-    let tool = Ddcutil::new(&[X340]);
+    let tool = Ddcutil::new(&[FIRST]);
     std::fs::write(tool.path(), "#!/bin/sh\nexec sleep 30\n").expect("script");
     let wait = Duration::from_millis(100);
     let Some((_bus, client)) = no_kde(tool.path(), wait).await else {

@@ -162,17 +162,16 @@ mod tests {
 
     #[test]
     fn weather_parsing() {
-        let geo =
-            r#"{"results":[{"name":"Singapore","latitude":1.29,"longitude":103.85,"country":"Singapore"}]}"#;
-        assert_eq!(parse_geocode(geo), Some((1.29, 103.85, "Singapore".to_string())));
+        let geo = r#"{"results":[{"name":"Oslo","latitude":59.91,"longitude":10.75,"country":"Oslo"}]}"#;
+        assert_eq!(parse_geocode(geo), Some((59.91, 10.75, "Oslo".to_string())));
         assert_eq!(parse_geocode(r#"{"generationtime_ms":0.5}"#), None);
         let fc = r#"{"current":{"temperature_2m":31.4,"weather_code":2},"daily":{"temperature_2m_max":[33.0],"temperature_2m_min":[26.1]}}"#;
         assert_eq!(
-            parse_forecast(fc, "Singapore"),
+            parse_forecast(fc, "Oslo"),
             Ok(WeatherData::Ok {
                 temp: 31.4,
                 code: 2,
-                place: "Singapore".into(),
+                place: "Oslo".into(),
                 high: 33.0,
                 low: 26.1
             })
@@ -186,13 +185,13 @@ mod tests {
         let json = r#"{"results":[
             {"name":"Portland","latitude":45.52,"longitude":-122.68,"admin1":"Oregon","country":"United States"},
             {"name":"Portland","latitude":43.66,"longitude":-70.25,"admin1":"Maine","country":"United States"},
-            {"name":"Singapore","latitude":1.29,"longitude":103.85,"admin1":"Singapore","country":"Singapore"}]}"#;
+            {"name":"Oslo","latitude":59.91,"longitude":10.75,"admin1":"Oslo","country":"Oslo"}]}"#;
         let p = parse_places(json);
         assert_eq!(p.len(), 3);
         assert_eq!(p[0].label(), "Portland, Oregon, United States");
         assert_eq!(p[1].lat, 43.66);
         // No repeats when the region or country is the town itself.
-        assert_eq!(p[2].label(), "Singapore");
+        assert_eq!(p[2].label(), "Oslo");
         assert!(parse_places("{}").is_empty());
         assert!(places_url("New York").contains("count=8"));
         assert_eq!(short_name("Portland, Oregon, United States"), "Portland");

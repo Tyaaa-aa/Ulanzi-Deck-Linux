@@ -82,7 +82,7 @@ buttons:
     action: toggle_scene
     scene1: Gaming
     scene2: Desktop
-- label: AHHH
+- label: Horn
   action: command
   params:
     cmd: "pw-play '/x/y.mp3'"
