@@ -118,9 +118,37 @@ fn main() {
         };
         if p.name == "Media Desk" {
             default = Some(p.id);
+            // One of each effect, on the page the screenshots show.
+            let looks = [
+                (EffectKind::Glow, Color::rgb(0x62, 0xa0, 0xea)),
+                (EffectKind::Fire, Color::rgb(0xff, 0x78, 0x00)),
+                (EffectKind::Chase, Color::rgb(0x2e, 0xc2, 0x7e)),
+                (EffectKind::Pulse, Color::rgb(0xc0, 0x61, 0xcb)),
+            ];
+            for (key, (kind, color)) in p.pages[0].keys.values_mut().zip(looks) {
+                key.look.effect = Effect {
+                    color: Some(color),
+                    ..Effect::of(kind)
+                };
+            }
         }
         order.push(p.id);
         store.save_profile(&p).expect("save profile");
+        let icon = match p.name.as_str() {
+            "Streaming" => "radio",
+            "Media Desk" => "music",
+            "Video Editing" => "clapperboard",
+            _ => "briefcase",
+        };
+        let look = ProfileLook {
+            source: Some(ImageSource::Icon {
+                set: IconSet::Lucide,
+                name: icon.into(),
+            }),
+            color: Some(accent),
+            from_app: None,
+        };
+        store.save_profile_look(p.id, &look).expect("save look");
     }
     let mut settings = store.load_settings().unwrap_or_default();
     settings.default_profile = default;

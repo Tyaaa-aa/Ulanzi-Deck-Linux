@@ -50,8 +50,16 @@ shot() { # name theme app-args...
   local name=$1 theme=$2
   shift 2
   if [ $board = 1 ]; then sb_stage "$name"; fi
-  ULANZI_BIN="$PWD/target/debug" timeout 90 scripts/sandbox.sh --demo --dir "$box" -- \
-    --screenshot "$out/$name-$theme.png" --size 1400x900 --theme "$theme" "$@" >/dev/null 2>&1 </dev/null || true
+  # Long enough for the side panel's fade and for debug builds to draw the effects.
+  local wait=(--wait 5000)
+  [[ " $* " == *" --wait "* ]] && wait=()
+  # An old file must not pass for a new one, and a shot sometimes fails on a busy machine.
+  rm -f "$out/$name-$theme.png"
+  for _ in 1 2 3; do
+    ULANZI_BIN="$PWD/target/debug" timeout 90 scripts/sandbox.sh --demo --dir "$box" -- \
+      --screenshot "$out/$name-$theme.png" --size 1400x900 --theme "$theme" "${wait[@]}" "$@" >/dev/null 2>&1 </dev/null || true
+    [ -s "$out/$name-$theme.png" ] && break
+  done
   if [ -s "$out/$name-$theme.png" ]; then echo "  $name-$theme"; else echo "  $name-$theme FAILED"; fi
   done_shots=$((done_shots + 1))
   if [ $board = 1 ]; then
