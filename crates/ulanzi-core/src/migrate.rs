@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_norway::{Mapping, Value};
 
 use crate::model::*;
-use crate::store::{Store, write_atomic};
+use crate::store::{ProfileLoad, Store, write_atomic};
 use crate::{Color, CoreError};
 
 const MARKER: &str = "migrated-from-legacy";
@@ -128,6 +128,17 @@ pub fn migrate_legacy(yaml: &Path, store: &Store, force: bool) -> Result<Migrati
     let keys = profile.pages[0].keys.len();
     store.save_profile(&profile)?;
     store.save_settings(&settings)?;
+    // The service starts with an empty profile, which the import takes the place of.
+    for load in store.list_profiles() {
+        if let ProfileLoad::Ok(p) = load
+            && p.id != profile.id
+            && p.name == "Default"
+            && p.pages.len() == 1
+            && p.pages[0].keys.is_empty()
+        {
+            let _ = store.delete_profile(p.id);
+        }
+    }
     let marker = store.state_dir().join(MARKER);
     write_atomic(&marker, yaml.to_string_lossy().as_bytes()).map_err(|e| CoreError::io(&marker, e))?;
     Ok(MigrationReport {

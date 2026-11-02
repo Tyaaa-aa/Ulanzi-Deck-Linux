@@ -314,7 +314,8 @@ controls while a video editor is focused and streaming controls while OBS is.
 1. Right-click a profile, select **Auto-Switch** and add one or more applications.
 2. Make sure **Auto-Switch** at the top of the sidebar is on.
 
-When none of the assigned applications is focused, the deck returns to the default profile.
+When you leave that app, the deck returns to the profile you were on. An app with no profile changes
+nothing, so a profile you chose yourself stays until you change it.
 
 The dialog shows whether auto-switch is supported on your desktop. KDE Plasma, Hyprland, Sway and
 X11 are supported directly; GNOME requires the bundled shell extension (see

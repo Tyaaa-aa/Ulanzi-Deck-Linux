@@ -30,6 +30,18 @@ fn net_err(what: &str) -> impl Fn(String) -> PluginError + '_ {
     move |e| PluginError::Io(format!("Can't reach the plugin store ({what}): {e}"))
 }
 
+/// One for all the store's downloads: they come from the same server, and a connection it already
+/// has saves a new secure handshake for each file, which takes seconds on some networks.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(60)))
+            .build()
+            .into()
+    })
+}
+
 /// `url` (https only), at most `max` bytes.
 fn get(url: &str, max: u64) -> Result<Vec<u8>, String> {
     get_with(url, max, &|_| {})
@@ -41,11 +53,7 @@ fn get_with(url: &str, max: u64, progress: &dyn Fn(u64)) -> Result<Vec<u8>, Stri
     if !url.starts_with("https://") {
         return Err(format!("{url} is not an https address"));
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(60)))
-        .build()
-        .into();
-    let mut reader = agent
+    let mut reader = agent()
         .get(url)
         .call()
         .map_err(|e| match e {
@@ -127,7 +135,7 @@ pub fn fetch_index(plugins: &Path, refresh: bool) -> Result<Listing, PluginError
             if fs::create_dir_all(plugins).is_ok() {
                 let _ = fs::write(&cache, kept.to_string());
             }
-            let icons = icons(plugins, &index, true);
+            let icons = icons(plugins, &index, false);
             Ok(Listing {
                 index,
                 offline: false,
@@ -146,6 +154,14 @@ pub fn fetch_index(plugins: &Path, refresh: bool) -> Result<Listing, PluginError
             None => Err(e),
         },
     }
+}
+
+/// The kept list's icons as local files, fetching any that are missing. Separate from
+/// [`fetch_index`], so the list shows without waiting for a second server.
+pub fn fetch_icons(plugins: &Path) -> std::collections::BTreeMap<String, std::path::PathBuf> {
+    kept_index(&plugins.join(CACHE))
+        .map(|index| icons(plugins, &index, true))
+        .unwrap_or_default()
 }
 
 /// Kept store icons, in the plugins folder (hidden).
@@ -217,6 +233,12 @@ mod tests {
 
     const INDEX: &[u8] = include_bytes!("../../tests/fixtures/store/index.json");
     const SIG: &str = include_str!("../../tests/fixtures/store/index.json.minisig");
+
+    #[test]
+    fn no_kept_list_means_no_icons() {
+        let d = tempfile::tempdir().expect("dir");
+        assert!(fetch_icons(d.path()).is_empty());
+    }
 
     #[test]
     fn the_signed_index_reads_and_a_changed_one_does_not() {

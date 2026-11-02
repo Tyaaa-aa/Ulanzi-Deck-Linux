@@ -320,6 +320,8 @@ struct Deck {
     upload_seq: u32,
     /// The window in front, as last reported by the desktop.
     focused: Option<ulanzi_core::autoswitch::Window>,
+    /// The profile to go back to when the app that auto-switch followed loses focus.
+    auto_from: Option<Uuid>,
     /// Widgets and the volume overlay on the wide screen.
     screen: ScreenRuntime,
     /// Hash of the wide-screen picture last handed to the page.
@@ -417,6 +419,7 @@ impl Deck {
             live: LiveKeys::default(),
             upload_seq: 0,
             focused: None,
+            auto_from: None,
             screen: ScreenRuntime::new(now),
             screen_hash: None,
             level_tx,
@@ -611,7 +614,10 @@ impl Deck {
                     self.push_page(false).await;
                 }
             }
-            DeckMsg::SwitchProfile(id) => self.switch_profile(id).await,
+            DeckMsg::SwitchProfile(id) => {
+                self.auto_from = None;
+                self.switch_profile(id).await;
+            }
             DeckMsg::RemoveProfile(id) => {
                 if self.profiles.len() > 1
                     && let Some(i) = self.profiles.iter().position(|p| p.id == id)
@@ -1392,6 +1398,7 @@ impl Deck {
                 None => return self.missing("folder"),
             },
             Action::SwitchProfile { profile } => {
+                self.auto_from = None;
                 self.switch_profile(*profile).await;
                 return true;
             }
@@ -1479,15 +1486,16 @@ impl Deck {
         if rules.is_empty() {
             return;
         }
-        let fallback = self
-            .settings
-            .default_profile
-            .filter(|d| self.profiles.iter().any(|p| p.id == *d))
-            .or_else(|| order.first().map(|(id, _)| *id));
-        let Some(fallback) = fallback else { return };
-        if let Some(target) = pick_profile(&rules, &w, fallback)
-            && target != self.profile().id
+        // An app with no profile changes nothing, unless auto-switch brought us here.
+        let current = self.profile().id;
+        let back = self
+            .auto_from
+            .filter(|p| self.profiles.iter().any(|q| q.id == *p))
+            .unwrap_or(current);
+        if let Some(target) = pick_profile(&rules, &w, back)
+            && target != current
         {
+            self.auto_from = (target != back).then_some(back);
             tracing::info!(
                 "{} is in front: switching profile",
                 if w.class.is_empty() {

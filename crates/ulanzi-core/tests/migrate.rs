@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 
 use ulanzi_core::migrate::migrate_legacy;
 use ulanzi_core::model::*;
-use ulanzi_core::store::Store;
+use ulanzi_core::store::{ProfileLoad, Store};
 use ulanzi_core::{Color, CoreError};
+use uuid::Uuid;
 
 struct Env {
     _dir: tempfile::TempDir,
@@ -281,4 +282,34 @@ fn clock_modes_map() {
             "clock_mode {mode}"
         );
     }
+}
+
+fn loaded(store: &Store) -> Vec<Uuid> {
+    store
+        .list_profiles()
+        .into_iter()
+        .filter_map(|l| match l {
+            ProfileLoad::Ok(p) => Some(p.id),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_import_takes_the_place_of_the_empty_starting_profile() {
+    let e = env();
+    let empty = Profile::new_default("Default", Model::D200X);
+    e.store.save_profile(&empty).expect("save");
+    let r = migrate_legacy(&e.yaml, &e.store, false).expect("import");
+    assert_eq!(loaded(&e.store), [r.profile_id]);
+}
+
+#[test]
+fn an_import_keeps_a_profile_with_keys() {
+    let e = env();
+    let mut mine = Profile::new_default("Default", Model::D200X);
+    mine.pages[0].keys.insert(0, Key::default());
+    e.store.save_profile(&mine).expect("save");
+    migrate_legacy(&e.yaml, &e.store, false).expect("import");
+    assert_eq!(loaded(&e.store).len(), 2);
 }

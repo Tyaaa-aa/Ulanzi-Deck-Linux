@@ -282,6 +282,13 @@ impl Host {
         blocking(move || super::store::fetch_index(&dir, refresh)).await
     }
 
+    pub(super) async fn store_icons(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, std::path::PathBuf>, PluginError> {
+        let dir = self.dir.clone();
+        blocking(move || Ok(super::store::fetch_icons(&dir))).await
+    }
+
     pub(super) async fn store_install(
         &self,
         id: &str,

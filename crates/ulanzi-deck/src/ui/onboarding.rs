@@ -185,6 +185,19 @@ fn dots(current: usize) -> gtk::Box {
 const STEPS: usize = 6;
 
 /// A page: header, scrollable content, step dots and a bottom button row.
+const SKIP: &str = "Skip for Now";
+
+/// A step's button: orange once the step is done, grey while moving on would skip it, so it doesn't
+/// compete with the button that does the step.
+fn set_next(next: &gtk::Button, done: bool) {
+    next.set_label(if done { "Continue" } else { SKIP });
+    if done {
+        next.add_css_class("suggested-action");
+    } else {
+        next.remove_css_class("suggested-action");
+    }
+}
+
 fn page(
     tag: &str,
     title: &str,
@@ -208,10 +221,13 @@ fn page(
         .build();
     view.set_content(Some(&scroller));
     let bottom = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    bottom.set_margin_top(12);
     if let Some(n) = next {
         n.set_halign(gtk::Align::Center);
         n.add_css_class("pill");
-        n.add_css_class("suggested-action");
+        if n.label().as_deref() != Some(SKIP) {
+            n.add_css_class("suggested-action");
+        }
         bottom.append(n);
     }
     bottom.append(&dots(step));
@@ -506,7 +522,7 @@ fn connect_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationPage
             if matches!(s, Status::ServiceDown) {
                 start.set_sensitive(true);
             }
-            next.set_label(if found { "Continue" } else { "Skip for Now" });
+            set_next(&next, found);
         }
     };
     update();
@@ -591,8 +607,10 @@ fn permissions_page(state: &State, nav: &adw::NavigationView) -> adw::Navigation
     body.append(&manual_group);
 
     let rows: Rc<std::cell::RefCell<Vec<adw::ActionRow>>> = Rc::default();
+    let next = gtk::Button::with_label("Continue");
     let refresh: Rc<dyn Fn()> = {
         let (state, group, grant) = (state.clone(), group.downgrade(), grant.downgrade());
+        let next = next.downgrade();
         let rows = rows.clone();
         Rc::new(move || {
             let (Some(group), Some(grant)) = (group.upgrade(), grant.upgrade()) else {
@@ -609,6 +627,9 @@ fn permissions_page(state: &State, nav: &adw::NavigationView) -> adw::Navigation
             }
             let needed = needs_rules(&checks);
             grant.set_visible(needed);
+            if let Some(next) = next.upgrade() {
+                set_next(&next, !needed);
+            }
         })
     };
     refresh();
@@ -652,7 +673,6 @@ fn permissions_page(state: &State, nav: &adw::NavigationView) -> adw::Navigation
             }
         });
     }
-    let next = gtk::Button::with_label("Continue");
     {
         let nav = nav.clone();
         next.connect_clicked(move |_| nav.push_by_tag("import"));
@@ -845,6 +865,19 @@ fn background_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationP
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_button_that_moves_on_is_grey_until_the_step_is_done() {
+        crate::ui::with_gtk(|| {
+            let next = gtk::Button::new();
+            set_next(&next, false);
+            assert_eq!(next.label().as_deref(), Some(SKIP));
+            assert!(!next.has_css_class("suggested-action"));
+            set_next(&next, true);
+            assert_eq!(next.label().as_deref(), Some("Continue"));
+            assert!(next.has_css_class("suggested-action"));
+        });
+    }
 
     #[test]
     fn checks_follow_device_state_and_uinput() {

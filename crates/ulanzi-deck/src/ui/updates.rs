@@ -147,6 +147,7 @@ fn dialog(state: &State, parent: &impl IsA<gtk::Widget>, status: &UpdateStatus, 
         .margin_end(18)
         .margin_top(6)
         .margin_bottom(12)
+        .focusable(true)
         .build();
     body.append(
         &gtk::Label::builder()
@@ -270,6 +271,8 @@ fn dialog(state: &State, parent: &impl IsA<gtk::Widget>, status: &UpdateStatus, 
         update.connect_clicked(move |_| start(run.clone(), kind));
     }
     dialog.present(Some(parent));
+    // Left alone, focus lands on the first link, and the notes open scrolled down to it.
+    dialog.set_focus(Some(&body));
 }
 
 /// The widgets an update in progress changes.

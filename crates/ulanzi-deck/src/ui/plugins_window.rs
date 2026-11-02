@@ -2,7 +2,7 @@
 //! status and settings, and installs a file; **Discover** is the plugin store, searchable, with
 //! category chips that wrap, a card per plugin and one button that installs, updates or opens it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, VecDeque};
 use std::rc::{Rc, Weak};
 
@@ -92,6 +92,10 @@ struct Discover {
     category: RefCell<String>,
     /// Plugins being installed now.
     busy: RefCell<BTreeSet<String>>,
+    /// Waiting for the icons of the list on show.
+    icons_coming: Cell<bool>,
+    /// Where each card shows its icon.
+    icon_slots: RefCell<std::collections::HashMap<String, gtk::Stack>>,
     /// The progress bar and words on each card under install.
     bars: RefCell<std::collections::HashMap<String, (gtk::ProgressBar, gtk::Label)>>,
     /// The last progress per plugin, so a redrawn card shows it straight away.
@@ -140,12 +144,6 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         .row_spacing(12)
         .valign(gtk::Align::Start)
         .build();
-    let spinner = adw::Spinner::builder()
-        .width_request(32)
-        .height_request(32)
-        .halign(gtk::Align::Center)
-        .margin_top(48)
-        .build();
     let error = adw::StatusPage::builder()
         .icon_name("network-offline-symbolic")
         .title("Can’t Reach the Plugin Store")
@@ -164,7 +162,7 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         .css_classes(["compact"])
         .build();
     let stack = gtk::Stack::builder().vhomogeneous(false).build();
-    stack.add_named(&spinner, Some("loading"));
+    stack.add_named(&skeleton_page(), Some("loading"));
     stack.add_named(&error, Some("error"));
     stack.add_named(&empty, Some("empty"));
     stack.add_named(&grid, Some("list"));
@@ -188,6 +186,8 @@ fn discover_page(state: &State, dialog: &adw::PreferencesDialog) -> adw::Prefere
         listing: RefCell::default(),
         category: RefCell::default(),
         busy: RefCell::default(),
+        icons_coming: Cell::new(false),
+        icon_slots: RefCell::default(),
         bars: RefCell::default(),
         last: RefCell::default(),
     });
@@ -287,6 +287,7 @@ pub fn button_text(offer: &Offer, busy: bool) -> (String, bool) {
 
 impl Discover {
     fn fetch(self: &Rc<Self>, refresh: bool) {
+        self.chips.set_visible(false);
         self.stack.set_visible_child_name("loading");
         let Some(c) = self.state.client.borrow().clone() else {
             self.failed("The Ulanzi Deck service isn’t running");
@@ -297,11 +298,39 @@ impl Discover {
             let Some(d) = weak.upgrade() else { return };
             match r {
                 Ok(listing) => {
+                    let coming = icons_missing(&listing);
+                    d.icons_coming.set(coming);
                     *d.listing.borrow_mut() = Some(listing);
                     d.render_chips();
                     d.render();
+                    if coming {
+                        d.fetch_icons();
+                    }
                 }
                 Err(e) => d.failed(&e.to_string()),
+            }
+        });
+    }
+
+    /// Fetch the icons the list is missing and fade them in, so the list never waits for them.
+    fn fetch_icons(self: &Rc<Self>) {
+        let Some(c) = self.state.client.borrow().clone() else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        runtime::run(async move { c.plugin_store_icons().await }, move |r| {
+            let Some(d) = weak.upgrade() else { return };
+            d.icons_coming.set(false);
+            if let (Ok(icons), Some(listing)) = (r, d.listing.borrow_mut().as_mut()) {
+                listing.icons = icons;
+            }
+            let listing = d.listing.borrow();
+            let Some(listing) = listing.as_ref() else { return };
+            for (id, slot) in d.icon_slots.borrow().iter() {
+                if slot.child_by_name("icon").is_none() {
+                    slot.add_named(&store_icon(listing, id, 48), Some("icon"));
+                    slot.set_visible_child_name("icon");
+                }
             }
         });
     }
@@ -374,6 +403,7 @@ impl Discover {
         self.update_all.set_label(&format!("Update All ({waiting})"));
         self.update_all.set_visible(waiting > 1);
         let mut any = false;
+        self.icon_slots.borrow_mut().clear();
         for e in listing
             .index
             .plugins
@@ -476,7 +506,9 @@ impl Discover {
             .css_classes(["card", "store-card"])
             .build();
         let top = gtk::Box::builder().spacing(12).build();
-        top.append(&store_icon(listing, &e.id, 48));
+        let slot = icon_slot(listing, e, 48, self.icons_coming.get());
+        self.icon_slots.borrow_mut().insert(e.id.clone(), slot.clone());
+        top.append(&slot);
         let titles = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(2)
@@ -714,6 +746,92 @@ pub fn trust_badge(official: bool, verified: bool) -> Option<gtk::Label> {
     )
 }
 
+/// A piece of a loading placeholder that shimmers.
+fn skeleton(width: i32, height: i32) -> gtk::Box {
+    let piece = gtk::Box::builder()
+        .css_classes(["skeleton"])
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Center)
+        .build();
+    piece.set_size_request(width, height);
+    piece
+}
+
+/// A card as it will look, before there is anything to put on it.
+fn skeleton_card() -> gtk::Box {
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .css_classes(["card", "store-card"])
+        .build();
+    let top = gtk::Box::builder().spacing(12).build();
+    top.append(&skeleton(48, 48));
+    let titles = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .valign(gtk::Align::Center)
+        .build();
+    titles.append(&skeleton(150, 14));
+    titles.append(&skeleton(210, 10));
+    top.append(&titles);
+    card.append(&top);
+    let line = skeleton(0, 12);
+    line.set_halign(gtk::Align::Fill);
+    card.append(&line);
+    card.append(&skeleton(240, 12));
+    let foot = gtk::Box::builder().margin_top(6).build();
+    let spacer = gtk::Box::builder().hexpand(true).build();
+    foot.append(&spacer);
+    let button = skeleton(108, 36);
+    button.add_css_class("skeleton-pill");
+    foot.append(&button);
+    card.append(&foot);
+    card
+}
+
+/// What Discover shows until the list arrives: its chips and cards, so nothing jumps.
+fn skeleton_page() -> gtk::Box {
+    let page = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(12)
+        .build();
+    let chips = gtk::Box::builder().spacing(6).build();
+    for width in [64, 108, 96] {
+        let chip = skeleton(width, 32);
+        chip.add_css_class("skeleton-pill");
+        chips.append(&chip);
+    }
+    page.append(&chips);
+    for _ in 0..2 {
+        page.append(&skeleton_card());
+    }
+    page
+}
+
+/// Whether the list has icons the service hasn't fetched yet.
+fn icons_missing(listing: &Listing) -> bool {
+    listing
+        .index
+        .plugins
+        .iter()
+        .any(|e| e.icon.is_some() && !listing.icons.contains_key(&e.id))
+}
+
+/// A card's icon: a shimmering square while it is on its way, then a fade into the real one.
+fn icon_slot(listing: &Listing, e: &StoreEntry, size: i32, coming: bool) -> gtk::Stack {
+    let slot = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(250)
+        .valign(gtk::Align::Center)
+        .build();
+    if coming && e.icon.is_some() && !listing.icons.contains_key(&e.id) {
+        slot.add_named(&skeleton(size, size), Some("waiting"));
+    } else {
+        slot.add_named(&store_icon(listing, &e.id, size), Some("icon"));
+    }
+    slot
+}
+
 /// A store plugin's icon from the copy the service keeps, `size` px; the add-on icon until then.
 fn store_icon(listing: &Listing, id: &str, size: i32) -> gtk::Image {
     let px = u32::try_from(size * 2).unwrap_or(96);
@@ -733,7 +851,24 @@ fn store_icon(listing: &Listing, id: &str, size: i32) -> gtk::Image {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ulanzi_core::plugin::store::StorePackage;
+    use ulanzi_core::plugin::store::{StoreIndex, StorePackage};
+
+    #[test]
+    fn a_listed_icon_that_is_not_here_yet_is_missing() {
+        let mut with_icon = entry("ha", "Home Assistant", &[]);
+        with_icon.icon = Some("https://example.org/icon.svg".into());
+        let mut listing = Listing {
+            index: StoreIndex {
+                format: 1,
+                plugins: vec![with_icon, entry("obs", "OBS", &[])],
+            },
+            offline: false,
+            icons: Default::default(),
+        };
+        assert!(icons_missing(&listing));
+        listing.icons.insert("ha".into(), "icon.svg".into());
+        assert!(!icons_missing(&listing));
+    }
 
     fn entry(id: &str, name: &str, categories: &[&str]) -> StoreEntry {
         StoreEntry {

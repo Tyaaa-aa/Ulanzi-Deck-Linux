@@ -173,12 +173,28 @@ fn inline(s: &str) -> String {
     out
 }
 
+/// The lines of `notes`, with a paragraph or bullet wrapped over several lines put back together.
+fn joined_lines(notes: &str) -> Vec<String> {
+    let starts_block = |t: &str| t.starts_with('#') || t.starts_with("- ") || t.starts_with("* ");
+    let mut out: Vec<String> = Vec::new();
+    for line in notes.lines() {
+        let t = line.trim();
+        match out.last_mut() {
+            Some(last) if !t.is_empty() && !starts_block(t) && !last.is_empty() && !last.starts_with('#') => {
+                last.push(' ');
+                last.push_str(t);
+            }
+            _ => out.push(t.to_string()),
+        }
+    }
+    out
+}
+
 /// Release notes as Pango markup: headings, bullets, bold, inline code and links.
 pub fn notes_markup(notes: &str) -> String {
-    notes
-        .lines()
-        .map(|line| {
-            let t = line.trim();
+    joined_lines(notes)
+        .iter()
+        .map(|t| {
             if t.starts_with('#') {
                 format!("<b>{}</b>", inline(t.trim_start_matches('#').trim()))
             } else if let Some(item) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
@@ -327,6 +343,12 @@ mod tests {
         assert!(rest.contains("### New"));
         assert!(!rest.contains("Back up"));
         assert_eq!(split_notes("Just notes").0, None);
+    }
+
+    #[test]
+    fn notes_put_wrapped_lines_back_together() {
+        let m = notes_markup("Intro that\nwraps.\n\n### New\n\n- One that\n  wraps\n- Two\n");
+        assert_eq!(m, "Intro that wraps.\n\n<b>New</b>\n\n• One that wraps\n• Two");
     }
 
     #[test]

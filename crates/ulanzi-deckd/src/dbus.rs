@@ -808,6 +808,12 @@ impl DeckService {
         serde_json::to_string(&listing).map_err(|e| DeckError::Invalid(e.to_string()))
     }
 
+    /// The icons of the plugin store's list as JSON (id → file), fetching any it doesn't have yet.
+    async fn plugin_store_icons(&self) -> Result<String> {
+        let icons = self.plugins()?.store_icons().await.map_err(plugin_err)?;
+        serde_json::to_string(&icons).map_err(|e| DeckError::Invalid(e.to_string()))
+    }
+
     /// The names of the connected PC monitors; empty when the desktop can't say.
     async fn list_displays(&self, #[zbus(connection)] conn: &zbus::Connection) -> Vec<String> {
         let client = crate::actions::display::DisplayClient::new(conn.clone());

@@ -275,7 +275,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .build();
     header.pack_end(&plugins);
     let macros = gtk::Button::builder()
-        .icon_name("media-record-symbolic")
+        .icon_name("io.github.tyaaa_aa.UlanziDeck-macro-symbolic")
         .tooltip_text("Macros")
         .action_name("win.macros")
         .build();

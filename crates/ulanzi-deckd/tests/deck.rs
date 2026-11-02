@@ -666,6 +666,54 @@ async fn profiles_follow_the_app_in_front() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_profile_you_chose_stays_when_another_app_comes_to_the_front() {
+    let mut coding = Profile::new_default("Coding", Model::D200X);
+    coding.r#match.apps = vec!["code.desktop".into()];
+    let media = Profile::new_default("Media", Model::D200X);
+    let media_id = media.id;
+    let r = rig_full(Settings::default(), vec![coding, media]).await;
+    r.tx.send(DeckMsg::SwitchProfile(media_id)).await.expect("send");
+    settle().await;
+    r.tx.send(focus("firefox")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, media_id);
+}
+
+#[tokio::test(start_paused = true)]
+async fn leaving_a_switched_app_returns_to_the_profile_you_were_on() {
+    let mut coding = Profile::new_default("Coding", Model::D200X);
+    coding.r#match.apps = vec!["code.desktop".into()];
+    let coding_id = coding.id;
+    let media = Profile::new_default("Media", Model::D200X);
+    let media_id = media.id;
+    let r = rig_full(Settings::default(), vec![coding, media]).await;
+    r.tx.send(DeckMsg::SwitchProfile(media_id)).await.expect("send");
+    settle().await;
+    r.tx.send(focus("code")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, coding_id);
+    r.tx.send(focus("firefox")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, media_id);
+}
+
+#[tokio::test(start_paused = true)]
+async fn choosing_a_profile_during_a_switched_app_keeps_it() {
+    let mut coding = Profile::new_default("Coding", Model::D200X);
+    coding.r#match.apps = vec!["code.desktop".into()];
+    let media = Profile::new_default("Media", Model::D200X);
+    let media_id = media.id;
+    let r = rig_full(Settings::default(), vec![coding, media]).await;
+    r.tx.send(focus("code")).await.expect("send");
+    settle().await;
+    r.tx.send(DeckMsg::SwitchProfile(media_id)).await.expect("send");
+    settle().await;
+    r.tx.send(focus("firefox")).await.expect("send");
+    settle().await;
+    assert_eq!(active_profile(&r).await, media_id);
+}
+
+#[tokio::test(start_paused = true)]
 async fn auto_switch_can_be_turned_off() {
     let mut coding = Profile::new_default("Coding", Model::D200X);
     coding.r#match.apps = vec!["code.desktop".into()];

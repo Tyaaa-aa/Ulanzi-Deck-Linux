@@ -625,6 +625,12 @@ impl Client {
         serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
     }
 
+    /// The icons of the plugin store's list (id → file), fetching any the service doesn't have.
+    pub async fn plugin_store_icons(&self) -> Result<std::collections::BTreeMap<String, std::path::PathBuf>> {
+        let text: String = self.inner.proxy.call("PluginStoreIcons", &()).await?;
+        serde_json::from_str(&text).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
     /// Install or update plugin `id` from the store; returns its id.
     pub async fn plugin_store_install(&self, id: &str) -> Result<String> {
         Ok(self.inner.proxy.call("PluginStoreInstall", &(id,)).await?)

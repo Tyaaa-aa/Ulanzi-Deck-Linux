@@ -3,6 +3,24 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+
+- The setup assistant asks before importing a version 1 setup, instead of the service importing it by
+  itself. The import takes the place of the empty starting profile.
+- Auto-switch leaves a profile you chose alone when an app with no profile comes to the front, and leaving
+  a switched app returns to the profile you were on, not the default.
+- In the setup assistant, the button that moves on is grey and says **Skip for Now** until a step is done.
+- The Macros button in the header uses the same icon as the action list.
+- Discover shows an animated placeholder straight away, the plugins as soon as the list arrives, and their
+  icons a moment later, so slow downloads no longer hold up the page.
+
+### Fixed
+
+- What's New opens at the top, not scrolled down to its first link.
+- Release notes no longer break mid-sentence where the text was wrapped.
+
 ## [2.3.0] - 2026-11-02
 
 ### Added

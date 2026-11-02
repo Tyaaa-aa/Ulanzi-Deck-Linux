@@ -104,7 +104,6 @@ async fn main() -> ExitCode {
     }
     tracing::info!("ulanzi-deckd {} starting", env!("CARGO_PKG_VERSION"));
 
-    first_run(&store);
     // Version 2.1 reads 2.0's files and saves them in its own format: keep the originals once.
     match store.keep_v1_copy() {
         Ok(Some(dir)) => tracing::info!(
@@ -294,25 +293,6 @@ async fn start_plugins(store: &Store, settings: &Settings, deck: mpsc::Sender<De
         deck,
     )
     .await
-}
-
-/// Import the Python version's config the first time, if there are no profiles yet.
-fn first_run(store: &Store) {
-    if !store.list_profiles().is_empty() || ulanzi_core::migrate::already_migrated(store) {
-        return;
-    }
-    let Some(path) = ulanzi_core::migrate::legacy_config_path().filter(|p| p.is_file()) else {
-        return;
-    };
-    match ulanzi_core::migrate::migrate_legacy(&path, store, false) {
-        Ok(r) => {
-            tracing::info!("imported {} keys from {}", r.keys, path.display());
-            for w in r.warnings {
-                tracing::warn!("import: {w}");
-            }
-        }
-        Err(e) => tracing::error!("could not import {}: {e}", path.display()),
-    }
 }
 
 /// Watch for the deck appearing, disappearing or changing permissions, and (re)connect. A connection
