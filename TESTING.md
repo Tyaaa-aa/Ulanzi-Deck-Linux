@@ -136,6 +136,24 @@ Start some music or a video in any player (browser tab is fine).
 - [ ] 7a.7 Run a macro on https://www.atk.store/pages/mouse-keyboard-test-tool. → Downs, ups and
   timing match.
 
+## 7b. Effects and GIFs (8 min)
+
+- [ ] 7b.1 Give a key an action and Glow under **Look → Effects**. → The app and the deck both show
+  it, and **Speed** starts on Slow.
+- [ ] 7b.2 Tap that key, then hold it. → A tap shows only the deck's shrink. A hold starts a Pulse after
+  about a third of a second, and letting go returns to Glow.
+- [ ] 7b.3 On a key with no action, hold it, then choose Fire under **When Held** and hold it again. →
+  Nothing the first time, Fire the second.
+- [ ] 7b.4 Set the same effect at rest and under **When Held**, and hold the key. → No black flash.
+- [ ] 7b.5 Give a key with a live state an effect for that state and change the state. → The deck and
+  the app change together.
+- [ ] 7b.6 Choose a GIF for a key, then one over 300 KB. → Both play, and the big one says it was
+  shortened if frames went. A GIF over 500 frames is refused with a message.
+- [ ] 7b.7 Fill a page with seven moving keys. → A note appears under the deck. Switch pages. → Under
+  2 seconds.
+- [ ] 7b.8 Preferences → turn **Key Effects** off and hold a key on Default. → No Pulse, and a key with
+  its own effect keeps it.
+
 ## 8. Unplug and sleep (2 min)
 
 - [ ] 8.1 Unplug the deck. → The header says it's not connected. Plug it back in. → Within a few seconds

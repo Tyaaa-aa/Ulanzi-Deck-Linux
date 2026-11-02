@@ -34,10 +34,14 @@ widgets on the wide screen, and switch profiles with the app in focus.
   action. Edits are sent to the deck immediately.
 - Actions for media playback and seeking, volume per output, app or microphone, output switching,
   keyboard shortcuts, typing text, running commands, opening apps and websites, playing sounds,
-  multi-step sequences, and keys that cycle through several actions.
+  PC monitor brightness, multi-step sequences, and keys that cycle through several actions.
+- Keys that move: GIFs that play on the deck, and Glow, Pulse, Chase and Fire effects in any colour,
+  with a different effect for each live state and another while a key is held.
+- Macros: record keys, mouse buttons and scrolling, arrange the steps, and play them four ways.
 - Wide-screen widgets: clocks, system graphs, Now Playing, a Pomodoro timer, weather, command output,
   images and OBS status, plus a volume bar while you change the volume.
-- Profiles that switch with the focused app on KDE Plasma, GNOME, Hyprland, Sway and X11.
+- Profiles with their own icons and colours, which switch with the focused app on KDE Plasma, GNOME,
+  Hyprland, Sway and X11.
 - A plugin store with signed, sandboxed plugins, starting with OBS Studio and Home Assistant. Plugin
   keys show live state, such as the scene on air, recording time, or whether a light is on.
 - Templates, `.ulanzideck` files for sharing setups, and daily automatic backups.
@@ -45,8 +49,8 @@ widgets on the wide screen, and switch profiles with the app in focus.
 
 ## Roadmap
 
-Coming next: GIF keys and animated key effects. After that, live Home Assistant icons, Ulanzi Workshop
-icon packs, an instruments plugin and firmware updates on Linux. See the [roadmap](ROADMAP.md).
+Coming next: upload progress in the app, live Home Assistant icons, Ulanzi Workshop icon packs, a sound
+library, an instruments plugin and firmware updates on Linux. See the [roadmap](ROADMAP.md).
 
 ## Screenshots
 

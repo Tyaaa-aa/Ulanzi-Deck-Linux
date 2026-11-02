@@ -162,7 +162,7 @@ interface `io.github.tyaaa_aa.UlanziDeck1` (API version 1). To inspect it, run
 
 | Group | Methods |
 |---|---|
-| State | `Hello`, `Firmware`, `ListProfiles`, `GetProfile`, `ApplyProfile` (with revision), `ProfileRevision`, `CreateProfile`, `DeleteProfile`, `SwitchProfile`, `SetPage`, `NextPage`, `PrevPage`, `SetBrightness`, `Reload` |
+| State | `Hello`, `Firmware`, `LiveKeys` (profile, page, then the cycle step and live state of each key), `ListProfiles`, `GetProfile`, `ApplyProfile` (with revision), `ProfileRevision`, `CreateProfile`, `DeleteProfile`, `SwitchProfile`, `SetPage`, `NextPage`, `PrevPage`, `SetBrightness`, `Reload` |
 | Settings | `GetSettings`, `ApplySettings` (TOML; plugin secrets are never sent back, a placeholder keeps them) |
 | Sharing and backups | `PreviewBundle`, `BundleCommands`, `ImportBundle`, `ExportBundle`, `ListSnapshots`, `TakeSnapshot`, `RestoreSnapshot`, `Migrate` |
 | Auto-switch | `WindowActivated` (used by the KWin script and GNOME extension), `FocusedWindow`, `FocusStatus` |

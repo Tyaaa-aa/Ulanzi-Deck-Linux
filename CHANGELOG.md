@@ -7,18 +7,31 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ### Added
 
-- The keys in the app now show their live state and cycle step, as the deck does, so a fan that is on looks on.
-- A new page shows on the deck straight away.
-- **Update All** in Plugins → Discover, with the number of updates waiting, when two or more are.
-- **Display Brightness** action for PC monitors, through KDE Plasma 6 or `ddcutil` on any other desktop: one monitor or all, brighter, dimmer
-  or a set level. Keys remember a monitor by name, so changing display numbers don't break them.
-- **GIF keys**: a GIF plays on the deck, shrunk to fit if it's too big.
-- **Key effects**: Glow, Pulse, Chase and Fire, in any colour, one per live state and one while held. Keys
-  pulse while held by default; **Preferences → Key Effects** turns that off.
+- **GIF keys**: a GIF plays on the deck by itself. Big ones are shrunk to fit, and the app says if frames
+  were cut. A GIF over 16 MB, 500 frames or 4096 pixels across is refused with a message.
+- **Key effects**: Glow, Pulse, Chase and Fire, in any colour and at three speeds, one per live state and
+  one while held. Keys with an action pulse while held by default; **Preferences → Key Effects** turns
+  that off. New resting effects start on Slow.
+- A note under the deck on a page with seven or more moving keys.
 - **Saved colours** in the colour picker.
 - **Profile icons and colours**, and Ctrl+1 to Ctrl+9 to go to a profile.
+- **Display Brightness** action for PC monitors, through KDE Plasma 6 or `ddcutil` on any other desktop: one
+  monitor or all, brighter, dimmer or a set level. Keys remember a monitor by name, so changing display
+  numbers don't break them.
+- **Update All** in Plugins → Discover, with the number of updates waiting, when two or more are.
 - The deck's firmware version and **Restart Service** in the status menu at the top left.
 - Plugin contract 1.3: plugins can set default effects and offer effect presets.
+- `LiveKeys` and the `LiveKeysChanged` signal on the D-Bus API.
+
+### Changed
+
+- Keys in the app show their live state and cycle step, as the deck does, so a fan that is on looks on.
+- A new page, or a key set added on a new page, shows on the deck straight away.
+- The deck gets a small message every 200 ms, so the first press after a quiet spell no longer stalls.
+- Uploads go out a packet at a time with input read in between, so an action never waits for one.
+- In the macro editor, a click selects a step and a right click opens it.
+- `.ulanzideck` files and backups can reach 200 MB, up from 50 MB. Export refuses anything larger, so a
+  backup can't turn out too big to restore.
 
 ### Compatibility
 

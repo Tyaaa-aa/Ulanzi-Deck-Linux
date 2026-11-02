@@ -164,8 +164,9 @@ the status menu at the top left of the main window.
 |---|---|---|
 | Turning a dial sets the deck to full brightness | 5.2.3 seen on a real deck, 5.3.1 read in the firmware; 5.3.6 no longer does this | The firmware sets brightness to 100 on every turn, whatever you chose. Sending your level back makes the deck flicker, so the app doesn't |
 | A key's picture shrinks while pressed | 5.3.6 read in the firmware; the same on 5.2.3 by eye | Built into the firmware, with no setting to turn it off |
-| A GIF shows a yellow question mark | 5.2.3 | The deck can't show a GIF over about 300 KB. The app shrinks GIFs to fit |
-| A key goes black for about 0.2 seconds when its picture changes | 5.2.3 | The deck takes that long to show any new picture. Actions run on time, and effects on press start after a short hold |
+| A GIF shows a yellow question mark | 5.2.3 | The deck can't show a GIF over about 300 KB. The app shrinks GIFs to fit, so you should only see this on a file put there by something else |
+| A key goes black for about 0.2 seconds when its picture changes | 5.2.3 | The deck takes that long to show any new picture. Actions run on time, and effects while held start after a short hold |
+| The deck feels slow on a page with many GIFs or effects | 5.2.3 | The deck draws every moving key itself, and each one costs it time. Three are fine, twelve are not. A page switch went from about 0.2 seconds to about 1 second with all 13 keys moving. Slower effects and fewer moving keys help, and the app shows a note from seven up |
 
 Details are in the [hardware notes](hardware-notes.md).
 

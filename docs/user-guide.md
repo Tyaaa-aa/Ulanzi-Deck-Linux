@@ -42,9 +42,9 @@ the main menu (☰) and select **Set Up Deck**.
 | Area | Contents |
 |---|---|
 | Sidebar (left) | The Auto-Switch toggle, profiles, the pages of the current profile, and brightness. |
-| Deck (centre) | A preview of the deck. Select a key, dial, small button or the wide screen to edit it. |
+| Deck (centre) | A preview of the deck that follows it live, so a key shows its current state and cycle step. Select a key, dial, small button or the wide screen to edit it. |
 | Side panel (right) | The action list when nothing is selected, or the editor for the selection. Close the editor with **×** or Escape. |
-| Header bar | Connection status, undo and redo, the **Plugins** button and the main menu. |
+| Header bar | Connection status, undo and redo, the **Plugins** button and the main menu. Click the status to see the deck's firmware version, or to use **Restart Service** if something is stuck. |
 
 In a narrow window the sidebar is hidden; the button at the top left shows it.
 
@@ -103,6 +103,9 @@ Open the **Effects** section under **Look**:
 
 A page with seven or more moving keys (effects or GIFs) shows a note under the deck, because many
 moving keys slow the deck down.
+
+A GIF can be up to 16 MB, 500 frames and 4096 pixels across. The deck can only play small ones, so the
+app cuts colours and then frames until it fits, and says so under **Image** if frames went.
 
 With **Show Live State** on, a key that has live states gets one Effect row per state, so an air
 conditioner can burn while it's off and chase while it's on. **Effect Otherwise** covers any other
@@ -294,8 +297,10 @@ application name. To turn this off, disable **Show Volume Changes** in Preferenc
 ## Profiles, pages and folders
 
 - A **profile** is a complete configuration. Create one with **+** next to Profiles, either empty
-  or from a template. Right-click a profile to give it an icon and colour, rename, export or delete it. A profile set to follow an app takes that app's icon and colour unless you've chosen your own, and both travel with exports, save it as a template,
-  or set its auto-switch applications. A backup is made before a profile is deleted. Drag profiles
+  or from a template. Right-click a profile to give it an icon and colour, rename it, export it, save
+  it as a template, delete it, or set its auto-switch applications. A profile set to follow an app
+  takes that app's icon and colour unless you've chosen your own, and both travel with exports. A
+  backup is made before a profile is deleted. Drag profiles
   to reorder them, or double-click to rename.
 - A profile can have several **pages**. Switch pages with the **‹ ›** buttons on the deck or with
   the Next Page and Previous Page actions.
