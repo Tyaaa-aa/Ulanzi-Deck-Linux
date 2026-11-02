@@ -14,6 +14,7 @@ pkgbase = ulanzi-deck
 	optdepends = pipewire-pulse: switch audio outputs
 	optdepends = wireplumber: volume control and the volume overlay
 	optdepends = wl-clipboard: Type Text with characters a US keyboard lacks
+	optdepends = ddcutil: Display Brightness outside KDE Plasma
 	optdepends = obs-studio: OBS actions and widget
 	options = !lto
 	source = ulanzi-deck-2.3.0.tar.gz::https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/archive/refs/tags/v2.3.0.tar.gz
