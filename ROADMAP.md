@@ -4,6 +4,8 @@ What's planned for Ulanzi Deck, roughly in order. Plans can change, and nothing 
 
 ## Planned
 
+- **Template store:** download and share templates, such as a profile for each of your apps, into a template
+  library. Use them as profiles, or bring single pages into your own.
 - **Upload progress:** show in the app how far a page or effect upload to the deck has got.
 - **Effects per Cycle step:** give each step of a Cycle Through Actions key its own effect, so a key that
   steps through modes can show which one it is on.
@@ -16,6 +18,9 @@ What's planned for Ulanzi Deck, roughly in order. Plans can change, and nothing 
   place.
 - **Discord plugin:** mute and deafen toggles with live status, and a voice activity widget showing who is
   talking. To be scoped: joining channels and per-person volume.
+- **Plugin widgets:** plugins that draw on the wide screen, with the OBS widget moving into its plugin.
+- **Plugin setup wizards:** guided steps with links and forms.
+- **GIFs on the wide screen**, if the deck can play them.
 - **Instruments plugin:** piano, drums and synth sounds played from the deck, as an optional plugin.
 - **Firmware updates on Linux:** update the deck from this app, using a copy of Ulanzi's installer that
   you download yourself. Only firmware that has been tested would be allowed. This comes last among
