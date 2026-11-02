@@ -3,7 +3,7 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [2.3.0] - 2026-11-02
 
 ### Added
 
@@ -248,5 +248,8 @@ A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python)
   diagnostics.
 - Packages: Arch, .deb, .rpm, AppImage and a tarball with an installer.
 
+[2.3.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.1.1...v2.2.0
+[2.1.1]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/releases/tag/v2.0.0

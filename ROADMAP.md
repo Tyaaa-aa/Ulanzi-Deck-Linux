@@ -2,18 +2,7 @@
 
 What's planned for Ulanzi Deck, roughly in order. Plans can change, and nothing here has a date.
 
-## Next release
-
-- GIF keys, which play on the deck by themselves.
-- Key effects: Glow, Pulse, Chase and Fire, in any colour, with one effect per live state and one while
-  a key is held.
-- Saved colours in the colour picker.
-- Profile icons and colours.
-- Keys in the app that show their live state.
-- Display Brightness for PC monitors, through KDE Plasma 6 or `ddcutil`.
-- Update All in the plugin store.
-
-## After that
+## Planned
 
 - **Upload progress:** show in the app how far a page or effect upload to the deck has got.
 - **Effects per Cycle step:** give each step of a Cycle Through Actions key its own effect, so a key that
