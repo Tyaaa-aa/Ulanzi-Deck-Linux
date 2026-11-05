@@ -357,7 +357,10 @@ static CATALOG: &[ActionSpec] = &[
         "Switch Output",
         Audio,
         "speaker",
-        Action::SwitchOutput { devices: vec![] },
+        Action::SwitchOutput {
+            devices: vec![],
+            outputs: Default::default(),
+        },
         Action::SwitchOutput { .. }
     ),
     spec!(
@@ -705,8 +708,8 @@ pub fn describe(a: &Action) -> String {
         Action::TypeText { text } => format!("Type “{}”", ellipsize(text, 32)),
         Action::Seek { seconds, .. } if *seconds < 0 => format!("Back {} s", -seconds),
         Action::Seek { seconds, .. } => format!("Forward {seconds} s"),
-        Action::SwitchOutput { devices } if devices.is_empty() => "Next output".into(),
-        Action::SwitchOutput { devices } => format!("Next of {} outputs", devices.len()),
+        Action::SwitchOutput { devices, .. } if devices.is_empty() => "Next output".into(),
+        Action::SwitchOutput { devices, .. } => format!("Next of {} outputs", devices.len()),
         Action::PlaySound { path, .. } => {
             let file = std::path::Path::new(path)
                 .file_name()

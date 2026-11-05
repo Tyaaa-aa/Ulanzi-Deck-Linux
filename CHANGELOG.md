@@ -3,6 +3,15 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **Switch Output** per output: an image, colour and label the key shows while that output plays, its
+  volume, and app volumes, set before the switch. An app that is silent at the switch gets its volume
+  when it next plays. The key follows the default output however it changed.
+- `{output_name}` label value: the default sound output.
+
 ## [2.3.1] - 2026-11-02
 
 ### Changed

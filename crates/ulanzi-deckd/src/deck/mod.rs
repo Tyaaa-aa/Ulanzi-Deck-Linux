@@ -106,6 +106,8 @@ pub enum DeckMsg {
     },
     /// A plugin instance ended (stopped, crashed, replaced or removed): forget its state values.
     PluginCleared(String),
+    /// The default sound output changed: its name and description.
+    Output(String, String),
     /// The macro library changed.
     Macros(MacroLibrary),
     /// Play a macro from the editor.
@@ -691,6 +693,12 @@ impl Deck {
                     }
                     self.push_page(false).await;
                 }
+            }
+            DeckMsg::Output(name, desc) => {
+                let vars = &mut self.dynamic.vars;
+                vars.insert("output".into(), name);
+                vars.insert("output_name".into(), desc);
+                self.push_page(false).await;
             }
             DeckMsg::PluginCleared(plugin) => {
                 if self.dynamic.clear_plugin(&plugin) {

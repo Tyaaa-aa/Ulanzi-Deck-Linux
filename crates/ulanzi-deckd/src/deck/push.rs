@@ -166,7 +166,7 @@ impl Default for RenderCache {
 }
 
 /// Variables the deck itself fills (the sampler doesn't know them).
-pub const DECK_VARS: [&str; 2] = ["timer", "timer_running"];
+pub const DECK_VARS: [&str; 4] = ["timer", "timer_running", "output", "output_name"];
 
 impl DynamicState {
     /// Take over what the deck owns from `old`: the screen picture, OBS state, plugin values and the
@@ -273,6 +273,11 @@ fn live_look(
         let next = dynamic.cycles.get(at).copied().unwrap_or(0);
         steps[show.step(next, steps.len())].look.apply(&mut look);
     }
+    if let Some(Action::SwitchOutput { outputs, .. }) = tap
+        && let Some(o) = vars.get("output").and_then(|now| outputs.get(now))
+    {
+        o.look.apply(&mut look);
+    }
     if !look.dynamic {
         return look;
     }
@@ -359,6 +364,9 @@ pub fn live_keys(page: &Page, dynamic: &DynamicState) -> BTreeMap<u8, LiveKey> {
                 let next = dynamic.cycles.get(&at).copied().unwrap_or(0);
                 Some(show.step(next, steps.len()))
             }
+            Some(Action::SwitchOutput { outputs, .. }) => vars
+                .get("output")
+                .and_then(|now| ulanzi_core::model::playing_output(outputs, now)),
             _ => None,
         };
         let vars = key_vars(key, dynamic.macros.get(&at), &vars);
@@ -1124,5 +1132,56 @@ mod tests {
         assert_eq!(shown(&d), "Two");
         d.cycles.insert(at.clone(), 5);
         assert_eq!(shown(&d), "Two", "a step count that shrank wraps around");
+    }
+
+    #[test]
+    fn switch_output_keys_show_the_output_that_plays() {
+        use ulanzi_core::model::{LookOverride, OutputSettings};
+        let headset = OutputSettings {
+            look: LookOverride {
+                label: Some("Headset".into()),
+                ..LookOverride::default()
+            },
+            ..OutputSettings::default()
+        };
+        let tap = Action::SwitchOutput {
+            devices: vec![],
+            outputs: [
+                ("usb.headset".to_string(), headset),
+                ("hdmi.tv".to_string(), OutputSettings::default()),
+            ]
+            .into(),
+        };
+        let mut page = Page::new("P");
+        page.keys.insert(
+            0,
+            Key {
+                look: KeyLook::default(),
+                tap: Some(tap.clone()),
+                hold: None,
+            },
+        );
+        let mut d = DynamicState::default();
+        let shown = |d: &DynamicState| {
+            live_look(&KeyLook::default(), &Some(tap.clone()), d, &d.vars, None)
+                .label
+                .text
+        };
+        assert_eq!(shown(&d), KeyLook::default().label.text, "output not known yet");
+        assert!(live_keys(&page, &d).is_empty());
+        d.vars.insert("output".into(), "usb.headset".into());
+        assert_eq!(shown(&d), "Headset");
+        assert_eq!(
+            live_keys(&page, &d)[&0].step,
+            Some(1),
+            "the app counts outputs by name"
+        );
+        d.vars.insert("output".into(), "speakers".into());
+        assert_eq!(shown(&d), KeyLook::default().label.text);
+        // The sampler's values never wipe the output out.
+        let mut fresh = DynamicState::default();
+        d.vars.insert("output".into(), "usb.headset".into());
+        fresh.keep_deck_fields(&d);
+        assert_eq!(fresh.vars["output"], "usb.headset");
     }
 }

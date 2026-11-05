@@ -454,3 +454,60 @@ async fn plugin_action_turned_off() {
     );
     host.shutdown().await;
 }
+
+#[test]
+fn switching_sets_levels_first_and_keeps_silent_apps_for_later() {
+    use ulanzi_core::model::OutputSettings;
+    use ulanzi_deckd::actions::audio::{switch_commands, take_playing};
+    let inputs = r#"[{"index":7,"properties":{"application.name":"Vivaldi"},"volume":{}},
+                     {"index":9,"properties":{"application.name":"Vivaldi"},"volume":{}},
+                     {"index":12,"properties":{"application.name":"Discord"},"volume":{}}]"#;
+    let headset = OutputSettings {
+        volume: Some(100),
+        apps: [("vivaldi".to_string(), 30), ("Spotify".to_string(), 40)].into(),
+        ..OutputSettings::default()
+    };
+    let (cmds, waiting) = switch_commands("usb.headset", Some(&headset), inputs);
+    let lines: Vec<String> = cmds.iter().map(|c| c.join(" ")).collect();
+    assert_eq!(
+        lines,
+        [
+            "pactl set-sink-input-volume 7 30%",
+            "pactl set-sink-input-volume 9 30%",
+            "pactl set-sink-volume usb.headset 100%",
+            "pactl set-default-sink usb.headset",
+        ]
+    );
+    // Spotify makes no sound now: it gets its level when it does.
+    assert_eq!(waiting, [("Spotify".to_string(), 40)].into());
+    // An output with nothing set only switches.
+    let (cmds, waiting) = switch_commands("speakers", None, "");
+    assert_eq!(cmds, [vec!["pactl", "set-default-sink", "speakers"]]);
+    assert!(waiting.is_empty());
+    // A stream that starts later is matched the same way, and only once.
+    let mut apps: std::collections::BTreeMap<String, u8> = [("Spotify".to_string(), 40)].into();
+    assert!(take_playing(&mut apps, inputs).is_empty());
+    let later = r#"[{"index":20,"properties":{"application.name":"Spotify"},"volume":{}}]"#;
+    assert_eq!(take_playing(&mut apps, later), [(20, 40)]);
+    assert!(apps.is_empty());
+}
+
+#[test]
+fn sound_events_are_read_from_pactl_subscribe() {
+    use ulanzi_deckd::actions::audio::{SoundEvent, parse_sound_event};
+    assert_eq!(
+        parse_sound_event("Event 'change' on server #4294967295"),
+        SoundEvent::Server
+    );
+    assert_eq!(
+        parse_sound_event("Event 'new' on sink-input #42"),
+        SoundEvent::StreamStarted
+    );
+    assert_eq!(
+        parse_sound_event("Event 'change' on sink-input #42"),
+        SoundEvent::Other
+    );
+    assert_eq!(parse_sound_event("Event 'remove' on sink #3"), SoundEvent::Output);
+    assert_eq!(parse_sound_event("Event 'change' on sink #3"), SoundEvent::Other);
+    assert_eq!(parse_sound_event("garbage"), SoundEvent::Other);
+}

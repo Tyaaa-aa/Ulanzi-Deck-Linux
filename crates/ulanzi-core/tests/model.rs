@@ -1032,3 +1032,55 @@ fn a_key_shows_the_live_state_the_service_reports() {
         "a stale state"
     );
 }
+
+#[test]
+fn switch_output_settings_round_trip_and_old_keys_still_load() {
+    let old: Key =
+        toml::from_str("tap = { type = \"switch_output\", devices = [\"a\", \"b\"] }").expect("old key");
+    assert_eq!(
+        old.tap,
+        Some(Action::SwitchOutput {
+            devices: vec!["a".into(), "b".into()],
+            outputs: Default::default(),
+        })
+    );
+    let headset = OutputSettings {
+        volume: Some(100),
+        apps: [("Vivaldi".to_string(), 30)].into(),
+        look: LookOverride {
+            label: Some("Headset".into()),
+            ..LookOverride::default()
+        },
+    };
+    let a = Action::SwitchOutput {
+        devices: vec!["usb.headset".into()],
+        outputs: [
+            ("usb.headset".to_string(), headset),
+            ("hdmi.tv".to_string(), OutputSettings::default()),
+        ]
+        .into(),
+    };
+    let key = Key {
+        look: KeyLook::default(),
+        tap: Some(a.clone()),
+        hold: None,
+    };
+    let back: Key = toml::from_str(&toml::to_string(&key).expect("toml")).expect("parse");
+    assert_eq!(back.tap, Some(a.clone()));
+    // The key shows the look of the output that plays, and its own for any other.
+    let Some(Action::SwitchOutput { outputs, .. }) = &key.tap else {
+        unreachable!()
+    };
+    let at = playing_output(outputs, "usb.headset");
+    assert_eq!(at, Some(1), "stored in name order");
+    let live = LiveKey {
+        step: at,
+        state: None,
+    };
+    assert_eq!(key.live_look(&live).label.text, "Headset");
+    assert_eq!(playing_output(outputs, "speakers"), None);
+    assert_eq!(
+        key.live_look(&LiveKey::default()).label.text,
+        KeyLook::default().label.text
+    );
+}

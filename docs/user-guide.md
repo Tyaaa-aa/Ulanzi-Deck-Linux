@@ -55,8 +55,8 @@ Select a key to open its editor. The editor has four sections:
 - **Press**: the action that runs when the key is pressed. Choosing an action also sets a matching
   icon and colours.
 - **Label**: the text on the key, and its position (top, middle, bottom or hidden). Labels can
-  include live values such as `{cpu}`, `{ram}`, `{time}`, `{media_title}` and `{timer}`; insert
-  them with the **{ }** button. For plugin actions, **Label Shows** displays a value reported by
+  include live values such as `{cpu}`, `{ram}`, `{time}`, `{media_title}`, `{output_name}` and
+  `{timer}`; insert them with the **{ }** button. For plugin actions, **Label Shows** displays a value reported by
   the plugin instead, such as an OBS scene name or a room temperature.
 - **When Held**: a second action that runs when the key is held for half a second. The hold time
   is set in Preferences.
@@ -161,6 +161,11 @@ Notes on specific actions:
 - **Multi Action** runs several actions in sequence, with optional delays between them.
 - **App volume**: select an installed application, or use the speaker button to choose from the
   applications currently playing audio.
+- **Switch Output**: each press makes the next ticked output the default. Open an output to give
+  the key an image, colour and label while that output plays (whatever changed it), and the volumes
+  a switch to it sets: the output's own and any app's. Volumes are set before the switch, so nothing
+  plays loud on the new output. An app that makes no sound at that moment gets its volume when it
+  next plays, as long as that output is still the default.
 - **Plugin actions**: fields that refer to an item, such as an OBS scene or a Home Assistant
   entity, open a searchable list (with a group filter where the plugin provides one). Some lists
   allow multiple selections; confirm with **Done**. If the list is empty or the plugin is not

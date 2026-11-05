@@ -246,6 +246,11 @@ impl Key {
                 step.look.apply(&mut look);
             }
         }
+        if let Some(Action::SwitchOutput { outputs, .. }) = &self.tap
+            && let Some(o) = live.step.and_then(|at| outputs.values().nth(at))
+        {
+            o.look.apply(&mut look);
+        }
         if look.dynamic
             && let Some(state) = live.state.and_then(|at| self.live_states().into_iter().nth(at))
         {
@@ -268,7 +273,8 @@ impl Key {
 /// Where a key stands right now, which only the service knows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LiveKey {
-    /// The cycle step it shows.
+    /// The cycle step it shows; for a Switch Output key, which of its outputs (in the order
+    /// they are stored) is the default output.
     pub step: Option<usize>,
     /// The live state that holds.
     pub state: Option<usize>,

@@ -184,6 +184,12 @@ async fn main() -> ExitCode {
         store.state_dir().to_path_buf(),
         tx.clone(),
     ));
+    {
+        let deck = tx.clone();
+        tokio::spawn(ulanzi_deckd::actions::audio::watch_outputs(move |name, desc| {
+            let _ = deck.try_send(DeckMsg::Output(name, desc));
+        }));
+    }
     tokio::spawn(sample_loop(
         tx.clone(),
         Sampler::new(media, store.cache_dir().to_path_buf()),

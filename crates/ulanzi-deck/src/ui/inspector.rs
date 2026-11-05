@@ -743,7 +743,7 @@ fn mixed_text<T>(m: &Mixed<T>, f: impl Fn(&T) -> String) -> String {
 }
 
 /// Label variables the daemon fills in.
-const VARIABLES: [(&str, &str); 10] = [
+const VARIABLES: [(&str, &str); 11] = [
     ("cpu", "CPU usage %"),
     ("ram", "Memory usage %"),
     ("cpu_temp", "CPU temperature"),
@@ -752,6 +752,7 @@ const VARIABLES: [(&str, &str); 10] = [
     ("media_title", "Song title"),
     ("media_artist", "Artist"),
     ("media_status", "Playing / Paused"),
+    ("output_name", "Sound output"),
     ("page", "Page number"),
     ("profile", "Profile name"),
 ];

@@ -102,7 +102,10 @@ fn samples() -> Vec<Action> {
             seconds: -10,
             player: None,
         },
-        Action::SwitchOutput { devices: vec![] },
+        Action::SwitchOutput {
+            devices: vec![],
+            outputs: Default::default(),
+        },
     ]
 }
 
@@ -122,10 +125,17 @@ fn seek_and_output_read_well() {
         }),
         "Forward 30 s"
     );
-    assert_eq!(describe(&Action::SwitchOutput { devices: vec![] }), "Next output");
     assert_eq!(
         describe(&Action::SwitchOutput {
-            devices: vec!["a".into(), "b".into()]
+            devices: vec![],
+            outputs: Default::default(),
+        }),
+        "Next output"
+    );
+    assert_eq!(
+        describe(&Action::SwitchOutput {
+            devices: vec!["a".into(), "b".into()],
+            outputs: Default::default(),
         }),
         "Next of 2 outputs"
     );

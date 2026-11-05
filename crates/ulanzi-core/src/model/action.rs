@@ -61,6 +61,10 @@ pub enum Action {
     SwitchOutput {
         #[serde(default)]
         devices: Vec<String>,
+        /// What switching to an output sets, and how the key looks while it plays, by output
+        /// name. Any output can have one, in the ring or not.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        outputs: std::collections::BTreeMap<String, OutputSettings>,
     },
     Volume {
         target: AudioTarget,
@@ -163,6 +167,36 @@ pub struct CycleStep {
     pub action: Action,
     #[serde(default, skip_serializing_if = "crate::model::LookOverride::is_empty")]
     pub look: crate::model::LookOverride,
+}
+
+/// One output of an [`Action::SwitchOutput`]: the levels a switch to it sets (before the
+/// switch, so nothing plays loud) and the key's look while it is the default output.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OutputSettings {
+    /// The output's own volume in percent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume: Option<u8>,
+    /// App volumes in percent, by app name (matched like the Volume action matches).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub apps: std::collections::BTreeMap<String, u8>,
+    #[serde(skip_serializing_if = "crate::model::LookOverride::is_empty")]
+    pub look: crate::model::LookOverride,
+}
+
+/// Which of a Switch Output key's `outputs` is `current` (the default output's name), as
+/// [`crate::model::LiveKey::step`] counts them.
+pub fn playing_output(
+    outputs: &std::collections::BTreeMap<String, OutputSettings>,
+    current: &str,
+) -> Option<usize> {
+    outputs.keys().position(|name| name == current)
+}
+
+impl OutputSettings {
+    pub fn is_empty(&self) -> bool {
+        *self == OutputSettings::default()
+    }
 }
 
 /// What a timer key does.

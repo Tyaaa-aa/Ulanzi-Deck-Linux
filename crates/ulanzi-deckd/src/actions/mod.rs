@@ -232,7 +232,7 @@ impl ActionRunner for Executor {
                     "media control needs the session bus".into(),
                 )),
             },
-            Action::SwitchOutput { devices } => audio::switch_output(devices).await,
+            Action::SwitchOutput { devices, outputs } => audio::switch_output(devices, outputs).await,
             Action::Volume {
                 target,
                 op,

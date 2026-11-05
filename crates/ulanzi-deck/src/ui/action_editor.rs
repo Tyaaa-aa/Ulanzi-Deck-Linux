@@ -449,33 +449,47 @@ fn sound_volume_row(ed: &Ed, volume: u8) -> gtk::Widget {
         .title("Volume")
         .subtitle("Of the sound volume in Preferences")
         .build();
+    let ed = ed.clone();
+    let (scale, value) = percent_slider(volume, "Volume", 150, move |v| {
+        ed.apply(How::Typing("soundvol"), |a| {
+            if let Action::PlaySound { volume, .. } = a {
+                *volume = v;
+            }
+        });
+    });
+    row.add_suffix(&scale);
+    row.add_suffix(&value);
+    row.upcast()
+}
+
+/// A 0-100% slider in steps of 5 and the label that shows its value.
+fn percent_slider(
+    percent: u8,
+    name: &str,
+    width: i32,
+    changed: impl Fn(u8) + 'static,
+) -> (gtk::Scale, gtk::Label) {
     let value = gtk::Label::builder()
-        .label(format!("{volume}%"))
+        .label(format!("{percent}%"))
         .width_chars(4)
         .xalign(1.0)
         .css_classes(["numeric", "dim-label"])
         .build();
     let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 5.0);
-    scale.set_value(f64::from(volume));
+    scale.set_value(f64::from(percent));
     scale.set_draw_value(false);
-    scale.set_width_request(150);
+    scale.set_width_request(width);
     scale.set_valign(gtk::Align::Center);
-    scale.update_property(&[gtk::accessible::Property::Label("Volume")]);
+    scale.update_property(&[gtk::accessible::Property::Label(name)]);
     {
-        let (ed, value) = (ed.clone(), value.clone());
+        let value = value.clone();
         scale.connect_value_changed(move |s| {
             let v = s.value().round().clamp(0.0, 100.0) as u8;
             value.set_label(&format!("{v}%"));
-            ed.apply(How::Typing("soundvol"), |a| {
-                if let Action::PlaySound { volume, .. } = a {
-                    *volume = v;
-                }
-            });
+            changed(v);
         });
     }
-    row.add_suffix(&scale);
-    row.add_suffix(&value);
-    row.upcast()
+    (scale, value)
 }
 
 fn sound_file_row(ed: &Ed, state: &State, path: &str) -> gtk::Widget {
@@ -1446,7 +1460,7 @@ pub fn rows_for(state: &State, path: &str, action: &Action, on: OnChange) -> Vec
                 },
             ),
         ],
-        Action::SwitchOutput { devices } => output_rows(&ed, devices),
+        Action::SwitchOutput { devices, outputs } => output_rows(&ed, state, path, devices, outputs),
         Action::Brightness { op } => brightness_rows(&ed, *op),
         Action::DisplayBrightness { display, op } => {
             let mut rows = vec![display_row(&ed, state, display)];
@@ -1685,7 +1699,15 @@ fn app_volume_row(ed: &Ed, name: &str) -> gtk::Widget {
             set(app.name)
         })
     };
-    // Apps making sound now, as the sound system names them (always matches).
+    let now = playing_now_button(move |n| set(n));
+    row.add_suffix(&now);
+    row.add_suffix(&picker);
+    row.upcast()
+}
+
+/// Lists the apps making sound now, as the sound system names them (always matches); `pick` gets
+/// the one clicked.
+fn playing_now_button(pick: impl Fn(String) + 'static) -> gtk::MenuButton {
     let now = gtk::MenuButton::builder()
         .icon_name("audio-volume-high-symbolic")
         .tooltip_text("Apps playing sound now")
@@ -1733,12 +1755,10 @@ fn app_volume_row(ed: &Ed, name: &str) -> gtk::Widget {
             if let Some(p) = popover.upgrade() {
                 p.popdown();
             }
-            set(r.widget_name().to_string());
+            pick(r.widget_name().to_string());
         });
     }
-    row.add_suffix(&now);
-    row.add_suffix(&picker);
-    row.upcast()
+    now
 }
 
 /// Outputs (name, description) from `pactl`, for the Switch Output checklist.
@@ -1763,17 +1783,53 @@ fn audio_outputs() -> Vec<(String, String)> {
         .collect()
 }
 
-fn output_rows(ed: &Ed, devices: &[String]) -> Vec<gtk::Widget> {
+/// Changes what Switch Output sets for output `name`, forgetting outputs left with nothing set.
+fn edit_output(a: &mut Action, name: &str, f: impl FnOnce(&mut OutputSettings)) {
+    if let Action::SwitchOutput { outputs, .. } = a {
+        let o = outputs.entry(name.to_string()).or_default();
+        f(o);
+        if o.is_empty() {
+            outputs.remove(name);
+        }
+    }
+}
+
+/// An output's row when closed: its label, volume and app volumes.
+fn output_summary(o: &OutputSettings) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(l) = &o.look.label {
+        parts.push(format!("“{l}”"));
+    }
+    if let Some(v) = o.volume {
+        parts.push(format!("Volume {v}%"));
+    }
+    parts.extend(o.apps.iter().map(|(app, v)| format!("{app} {v}%")));
+    if parts.is_empty() {
+        "Nothing set".into()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// Switch Output: each output opens to the look the key has while it plays, and the volumes a
+/// switch to it sets. The switch on each row puts it in the ring a press moves through.
+fn output_rows(
+    ed: &Ed,
+    state: &State,
+    path: &str,
+    devices: &[String],
+    outputs: &std::collections::BTreeMap<String, OutputSettings>,
+) -> Vec<gtk::Widget> {
     let mut rows: Vec<gtk::Widget> = vec![
         adw::ActionRow::builder()
-            .subtitle("Each press makes the next ticked output the default. None ticked: every output.")
+            .subtitle("Each press makes the next ticked output the default (none ticked: every one). Open an output for its look and volumes.")
             .css_classes(["dim-label"])
             .build()
             .upcast(),
     ];
     let mut known = audio_outputs();
-    // Chosen outputs that aren't plugged in now still show, so they can be unticked.
-    for d in devices {
+    // Outputs this key knows that aren't plugged in now still show, so they can be changed.
+    for d in devices.iter().chain(outputs.keys()) {
         if !known.iter().any(|(n, _)| n == d) {
             known.push((d.clone(), format!("{d} (not connected)")));
         }
@@ -1788,17 +1844,218 @@ fn output_rows(ed: &Ed, devices: &[String]) -> Vec<gtk::Widget> {
         );
     }
     for (name, desc) in known {
-        let on = devices.contains(&name);
-        rows.push(switch_row(ed, &desc, "", on, move |a, v| {
-            if let Action::SwitchOutput { devices } = a {
-                devices.retain(|d| *d != name);
-                if v {
-                    devices.push(name.clone());
-                }
-            }
-        }));
+        let o = outputs.get(&name).cloned().unwrap_or_default();
+        rows.push(output_row(ed, state, path, &name, &desc, devices.contains(&name), &o).upcast());
     }
     rows
+}
+
+fn output_row(
+    ed: &Ed,
+    state: &State,
+    path: &str,
+    name: &str,
+    desc: &str,
+    ticked: bool,
+    o: &OutputSettings,
+) -> adw::ExpanderRow {
+    let exp = adw::ExpanderRow::builder()
+        .title(glib::markup_escape_text(desc).as_str())
+        .subtitle(glib::markup_escape_text(&output_summary(o)).as_str())
+        .build();
+    exp.add_prefix(&step_thumb(state, &o.look, 32));
+    state.remember_expanded(&exp, &format!("{path}/output:{name}"));
+    let tick = gtk::Switch::builder()
+        .active(ticked)
+        .valign(gtk::Align::Center)
+        .tooltip_text("Switch to this output")
+        .build();
+    {
+        let (ed, name) = (ed.clone(), name.to_string());
+        tick.connect_active_notify(move |t| {
+            let on = t.is_active();
+            ed.apply(How::Set, |a| {
+                if let Action::SwitchOutput { devices, .. } = a {
+                    devices.retain(|d| *d != name);
+                    if on {
+                        devices.push(name.clone());
+                    }
+                }
+            })
+        });
+    }
+    exp.add_suffix(&tick);
+    // Typing and sliding keep the closed row's summary current without a rebuild.
+    let edit = {
+        let (ed, name, exp) = (ed.clone(), name.to_string(), exp.clone());
+        Rc::new(move |how: How, f: &dyn Fn(&mut OutputSettings)| {
+            ed.apply(how, |a| edit_output(a, &name, f));
+            if let Action::SwitchOutput { outputs, .. } = &*ed.cur.borrow() {
+                let now = outputs.get(&name).cloned().unwrap_or_default();
+                exp.set_subtitle(&glib::markup_escape_text(&output_summary(&now)));
+            }
+        })
+    };
+
+    // The picture while it plays.
+    let image = adw::ActionRow::builder()
+        .title("Image")
+        .subtitle("While this output plays")
+        .build();
+    let choose = gtk::Button::builder()
+        .label("Choose…")
+        .valign(gtk::Align::Center)
+        .build();
+    {
+        let (edit, state, current) = (edit.clone(), state.clone(), o.look.source.clone());
+        choose.connect_clicked(move |b| {
+            let edit = edit.clone();
+            crate::ui::icon_picker::choose(&state, b, current.clone(), move |src| {
+                edit(How::Structure, &|o| o.look.source = Some(src.clone()));
+            });
+        });
+    }
+    image.add_suffix(&choose);
+    if o.look.source.is_some() {
+        let clear = gtk::Button::builder()
+            .icon_name("edit-clear-symbolic")
+            .tooltip_text("Use the key's own image")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        let edit = edit.clone();
+        clear.connect_clicked(move |_| edit(How::Structure, &|o| o.look.source = None));
+        image.add_suffix(&clear);
+    }
+    exp.add_row(&image);
+    let colour = adw::ActionRow::builder().title("Icon Colour").build();
+    {
+        let edit = edit.clone();
+        let button = crate::ui::color_popover::color_button(
+            o.look.foreground,
+            |_| {},
+            move |c| edit(How::Typing("outputfg"), &|o| o.look.foreground = Some(c)),
+        );
+        colour.add_suffix(&button);
+        colour.set_activatable_widget(Some(&button));
+    }
+    exp.add_row(&colour);
+    let label = adw::EntryRow::builder()
+        .title("Label")
+        .text(o.look.label.as_deref().unwrap_or(""))
+        .build();
+    {
+        let edit = edit.clone();
+        label.connect_changed(move |r| {
+            let t = r.text().to_string();
+            edit(How::Typing("outputlabel"), &|o| {
+                o.look.label = (!t.is_empty()).then(|| t.clone())
+            });
+        });
+    }
+    exp.add_row(&label);
+
+    // The output's own volume, when the key sets it.
+    let volume = adw::ActionRow::builder().title("Output Volume").build();
+    let (scale, value) = {
+        let edit = edit.clone();
+        percent_slider(o.volume.unwrap_or(100), "Output volume", 120, move |v| {
+            edit(How::Typing("outputvol"), &|o| o.volume = Some(v))
+        })
+    };
+    let set_volume = gtk::Switch::builder()
+        .active(o.volume.is_some())
+        .valign(gtk::Align::Center)
+        .build();
+    let show = {
+        let (volume, scale, value) = (volume.clone(), scale.clone(), value.clone());
+        move |on: bool| {
+            scale.set_visible(on);
+            value.set_visible(on);
+            volume.set_subtitle(if on { "" } else { "Left as it is" });
+        }
+    };
+    show(o.volume.is_some());
+    {
+        let (edit, scale) = (edit.clone(), scale.clone());
+        set_volume.connect_active_notify(move |t| {
+            let on = t.is_active();
+            show(on);
+            let v = scale.value().round() as u8;
+            edit(How::Set, &|o| o.volume = on.then_some(v));
+        });
+    }
+    volume.add_suffix(&scale);
+    volume.add_suffix(&value);
+    volume.add_suffix(&set_volume);
+    exp.add_row(&volume);
+
+    // App volumes.
+    for (app, pct) in &o.apps {
+        let row = adw::ActionRow::builder()
+            .title(glib::markup_escape_text(app).as_str())
+            .build();
+        let icon = gtk::Image::builder().pixel_size(20).build();
+        match installed_app_named(app).and_then(|a| crate::ui::app_picker::app_texture(&a.desktop_id)) {
+            Some(t) => icon.set_paintable(Some(&t)),
+            None => icon.set_icon_name(Some("application-x-executable-symbolic")),
+        }
+        row.add_prefix(&icon);
+        let (scale, value) = {
+            let (edit, app) = (edit.clone(), app.clone());
+            percent_slider(*pct, &format!("{app} volume"), 110, move |v| {
+                edit(How::Typing("outputapp"), &|o| {
+                    o.apps.insert(app.clone(), v);
+                })
+            })
+        };
+        let remove = gtk::Button::builder()
+            .icon_name("edit-clear-symbolic")
+            .tooltip_text("Leave this app's volume alone")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        {
+            let (edit, app) = (edit.clone(), app.clone());
+            remove.connect_clicked(move |_| {
+                edit(How::Structure, &|o| {
+                    o.apps.remove(&app);
+                })
+            });
+        }
+        row.add_suffix(&scale);
+        row.add_suffix(&value);
+        row.add_suffix(&remove);
+        exp.add_row(&row);
+    }
+    let add = adw::ActionRow::builder()
+        .title("App Volumes")
+        .subtitle("Set on switching here; silent apps get theirs when they next play")
+        .build();
+    let add_app = {
+        let edit = edit.clone();
+        Rc::new(move |n: String| {
+            edit(How::Structure, &|o| {
+                o.apps.entry(n.clone()).or_insert(50);
+            })
+        })
+    };
+    let now = {
+        let add_app = add_app.clone();
+        playing_now_button(move |n| add_app(n))
+    };
+    let shown = gtk::Label::new(Some("Add App…"));
+    // Apps already listed are left out (the picker goes by desktop id).
+    let listed = o
+        .apps
+        .keys()
+        .filter_map(|n| installed_app_named(n).map(|a| a.desktop_id))
+        .collect();
+    let picker = crate::ui::app_picker::button(&shown, None, listed, move |app| add_app(app.name));
+    add.add_suffix(&now);
+    add.add_suffix(&picker);
+    exp.add_row(&add);
+    exp
 }
 
 /// A small rendered key showing the action's default look (or an empty slot).

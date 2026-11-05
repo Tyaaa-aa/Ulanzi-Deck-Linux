@@ -1,6 +1,8 @@
 //! Volume and sound playback through PipeWire's `wpctl` and the PulseAudio-compatible `pactl`.
 
-use ulanzi_core::model::{AudioTarget, VolumeOp};
+use std::collections::BTreeMap;
+
+use ulanzi_core::model::{AudioTarget, OutputSettings, VolumeOp};
 
 use super::ActionError;
 use super::command::{run_capture, spawn_detached, which};
@@ -142,14 +144,37 @@ async fn pactl(args: &[&str]) -> Result<String, ActionError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Make the next output the default.
-pub async fn switch_output(chosen: &[String]) -> Result<(), ActionError> {
+/// Make the next output the default. Its volume and its apps' volumes are set first, so nothing
+/// plays loud on it; apps making no sound now get theirs when they next do.
+pub async fn switch_output(
+    chosen: &[String],
+    outputs: &BTreeMap<String, OutputSettings>,
+) -> Result<(), ActionError> {
     let sinks = parse_sinks(&pactl(&["-f", "json", "list", "sinks"]).await?);
     let names: Vec<String> = sinks.iter().map(|s| s.0.clone()).collect();
     let current = pactl(&["get-default-sink"]).await.unwrap_or_default();
     let next = next_output(&current, &names, chosen)
         .ok_or_else(|| ActionError::Unavailable("none of this key's outputs is connected".into()))?;
-    pactl(&["set-default-sink", &next]).await?;
+    let inputs = match outputs.get(&next) {
+        Some(o) if !o.apps.is_empty() => pactl(&["-f", "json", "list", "sink-inputs"])
+            .await
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let (cmds, waiting) = switch_commands(&next, outputs.get(&next), &inputs);
+    set_pending(PendingApps {
+        output: next.clone(),
+        apps: waiting,
+    });
+    // App streams may end meanwhile; only the switch itself must work.
+    let last = cmds.len() - 1;
+    for (i, c) in cmds.iter().enumerate() {
+        match run_capture(c).await {
+            Err(e) if i == last => return Err(e),
+            Err(e) => tracing::debug!("{}: {e}", c.join(" ")),
+            Ok(_) => {}
+        }
+    }
     let desc = sinks
         .iter()
         .find(|s| s.0 == next)
@@ -157,6 +182,197 @@ pub async fn switch_output(chosen: &[String]) -> Result<(), ActionError> {
         .unwrap_or(&next);
     tracing::info!("default output: {desc}");
     Ok(())
+}
+
+/// The commands that switch to output `next` with `settings`, levels first and the switch last,
+/// and the apps of `settings` with no stream in `inputs_json` (`pactl -f json list sink-inputs`).
+pub fn switch_commands(
+    next: &str,
+    settings: Option<&OutputSettings>,
+    inputs_json: &str,
+) -> (Vec<Vec<String>>, BTreeMap<String, u8>) {
+    let mut cmds = Vec::new();
+    let mut waiting = BTreeMap::new();
+    if let Some(o) = settings {
+        waiting = o.apps.clone();
+        for (id, pct) in take_playing(&mut waiting, inputs_json) {
+            cmds.push(s(&[
+                "pactl",
+                "set-sink-input-volume",
+                &id.to_string(),
+                &format!("{pct}%"),
+            ]));
+        }
+        if let Some(v) = o.volume {
+            cmds.push(s(&["pactl", "set-sink-volume", next, &format!("{v}%")]));
+        }
+    }
+    cmds.push(s(&["pactl", "set-default-sink", next]));
+    (cmds, waiting)
+}
+
+async fn set_stream_volume(id: u32, percent: u8) {
+    if let Err(e) = pactl(&["set-sink-input-volume", &id.to_string(), &format!("{percent}%")]).await {
+        tracing::debug!("cannot set the volume of sound stream {id}: {e}");
+    }
+}
+
+/// App volumes a switch could not set because the app made no sound then: each is set on the
+/// app's next sound, while `output` is still the default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PendingApps {
+    pub output: String,
+    pub apps: BTreeMap<String, u8>,
+}
+
+static PENDING: std::sync::Mutex<Option<PendingApps>> = std::sync::Mutex::new(None);
+
+fn set_pending(p: PendingApps) {
+    if let Ok(mut slot) = PENDING.lock() {
+        *slot = (!p.apps.is_empty()).then_some(p);
+    }
+}
+
+/// The streams in `inputs_json` (`pactl -f json list sink-inputs`) of the apps in `apps`, each
+/// with its app's volume. Apps with a stream are taken out of `apps`.
+pub fn take_playing(apps: &mut BTreeMap<String, u8>, inputs_json: &str) -> Vec<(u32, u8)> {
+    let mut out = Vec::new();
+    apps.retain(|name, pct| {
+        let streams = match_sink_inputs(inputs_json, name);
+        out.extend(streams.iter().map(|(id, _)| (*id, *pct)));
+        streams.is_empty()
+    });
+    out
+}
+
+/// The default output changed to `now`: app volumes waiting for another output are dropped.
+fn output_changed(now: &str) {
+    if let Ok(mut slot) = PENDING.lock()
+        && slot.as_ref().is_some_and(|p| p.output != now)
+    {
+        *slot = None;
+    }
+}
+
+/// A sound stream started: set the volumes of the apps waiting for one.
+async fn stream_started() {
+    let mut apps = match PENDING.lock() {
+        Ok(slot) => match slot.as_ref() {
+            Some(p) => p.apps.clone(),
+            None => return,
+        },
+        Err(_) => return,
+    };
+    let Ok(json) = pactl(&["-f", "json", "list", "sink-inputs"]).await else {
+        return;
+    };
+    let streams = take_playing(&mut apps, &json);
+    if streams.is_empty() {
+        return;
+    }
+    if let Ok(mut slot) = PENDING.lock()
+        && let Some(p) = slot.as_mut()
+    {
+        p.apps.retain(|name, _| apps.contains_key(name));
+        if p.apps.is_empty() {
+            *slot = None;
+        }
+    }
+    for (id, pct) in &streams {
+        set_stream_volume(*id, *pct).await;
+    }
+    // The sound server may still put back the app's last volume as the stream settles.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    for (id, pct) in &streams {
+        set_stream_volume(*id, *pct).await;
+    }
+}
+
+/// What a `pactl subscribe` line is about.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SoundEvent {
+    /// The server changed, which includes its default output.
+    Server,
+    /// An output came or went.
+    Output,
+    /// An app's sound stream started.
+    StreamStarted,
+    Other,
+}
+
+/// Reads a `pactl subscribe` line, such as "Event 'new' on sink-input #42".
+pub fn parse_sound_event(line: &str) -> SoundEvent {
+    let mut words = line.split_whitespace();
+    let (Some("Event"), Some(kind), Some("on"), Some(facility)) =
+        (words.next(), words.next(), words.next(), words.next())
+    else {
+        return SoundEvent::Other;
+    };
+    match (kind.trim_matches('\''), facility) {
+        (_, "server") => SoundEvent::Server,
+        ("new" | "remove", "sink") => SoundEvent::Output,
+        ("new", "sink-input") => SoundEvent::StreamStarted,
+        _ => SoundEvent::Other,
+    }
+}
+
+/// The default output: (name, description).
+pub async fn default_output() -> Option<(String, String)> {
+    let name = pactl(&["get-default-sink"]).await.ok()?;
+    let sinks = parse_sinks(&pactl(&["-f", "json", "list", "sinks"]).await.ok()?);
+    let desc = sinks
+        .into_iter()
+        .find(|s| s.0 == name)
+        .map(|s| s.1)
+        .unwrap_or_else(|| name.clone());
+    Some((name, desc))
+}
+
+/// Follow the sound server: `changed` gets the default output whenever it changes, and apps
+/// waiting for a volume get it when they start making sound. Starts over when the server restarts.
+pub async fn watch_outputs(changed: impl Fn(String, String) + Send + 'static) {
+    use tokio::io::AsyncBufReadExt;
+    let mut last: Option<String> = None;
+    loop {
+        let child = tokio::process::Command::new("pactl")
+            .arg("subscribe")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        let Ok(mut child) = child else {
+            tracing::info!("pactl is missing: keys do not follow the default output");
+            return;
+        };
+        let mut check = true;
+        if let Some(out) = child.stdout.take() {
+            let mut lines = tokio::io::BufReader::new(out).lines();
+            loop {
+                if check {
+                    check = false;
+                    if let Some((name, desc)) = default_output().await
+                        && last.as_deref() != Some(name.as_str())
+                    {
+                        output_changed(&name);
+                        last = Some(name.clone());
+                        changed(name, desc);
+                    }
+                }
+                let Ok(Some(line)) = lines.next_line().await else {
+                    break;
+                };
+                match parse_sound_event(&line) {
+                    SoundEvent::Server | SoundEvent::Output => check = true,
+                    SoundEvent::StreamStarted => {
+                        tokio::spawn(stream_started());
+                    }
+                    SoundEvent::Other => {}
+                }
+            }
+        }
+        let _ = child.kill().await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
 }
 
 /// Percent and mute state from `wpctl get-volume` ("Volume: 0.45 [MUTED]").
