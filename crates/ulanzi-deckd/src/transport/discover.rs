@@ -54,7 +54,12 @@ pub fn find_node(sysfs_hidraw: &Path, dev: &Path) -> Option<PathBuf> {
     })
 }
 
-/// Another process with `node` open, as (pid, process name).
+/// Programs that open every input device they may, looking for game controllers, and never write
+/// to the deck: sharing it with them is fine (the deck sends its key reports to every reader).
+const SHARE_WITH: [&str; 2] = ["steam", "steamwebhelper"];
+
+/// Another process with `node` open, as (pid, process name). Programs in [`SHARE_WITH`] don't
+/// count.
 pub fn find_holder(proc_root: &Path, node: &Path, self_pid: u32) -> Option<(u32, String)> {
     let entries = std::fs::read_dir(proc_root).ok()?;
     for e in entries.flatten() {
@@ -81,6 +86,9 @@ pub fn find_holder(proc_root: &Path, node: &Path, self_pid: u32) -> Option<(u32,
                         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                 })
                 .unwrap_or_else(|| "unknown".into());
+            if SHARE_WITH.contains(&name.as_str()) {
+                continue;
+            }
             return Some((pid, name));
         }
     }
@@ -170,6 +178,19 @@ mod tests {
         assert_eq!(
             find_holder(t.path(), Path::new("/dev/hidraw16"), 1),
             Some((4242, "python3".into()))
+        );
+    }
+
+    #[test]
+    fn steam_shares_the_deck() {
+        let t = tempfile::tempdir().expect("tmp");
+        fake_proc(t.path(), 100, "steamwebhelper", Path::new("/dev/hidraw16"));
+        fake_proc(t.path(), 101, "steam", Path::new("/dev/hidraw16"));
+        assert_eq!(find_holder(t.path(), Path::new("/dev/hidraw16"), 1), None);
+        fake_proc(t.path(), 102, "wine64-preloader", Path::new("/dev/hidraw16"));
+        assert_eq!(
+            find_holder(t.path(), Path::new("/dev/hidraw16"), 1),
+            Some((102, "wine64-preloader".into()))
         );
     }
 

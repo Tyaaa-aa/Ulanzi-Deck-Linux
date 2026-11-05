@@ -6,7 +6,6 @@ Find the symptom below and work through the steps in order. If the problem remai
 ## Contents
 
 - [The deck is not detected](#the-deck-is-not-detected)
-- [Steam is using the deck](#steam-is-using-the-deck)
 - [The service is not running](#the-service-is-not-running)
 - [Keys do not respond](#keys-do-not-respond)
 - [Keyboard Shortcut or Type Text does nothing](#keyboard-shortcut-or-type-text-does-nothing)
@@ -29,26 +28,10 @@ Find the symptom below and work through the steps in order. If the problem remai
    open the main menu, select **Set Up Deck**, then **Grant Access…**), enter your password, and
    reconnect the deck.
 3. If the window reports that another program is using the deck, close it. This is usually Ulanzi
-   Studio running under Wine, or Steam (see [Steam is using the deck](#steam-is-using-the-deck)).
-   `ulanzictl status` shows which program holds the device.
+   Studio running under Wine. `ulanzictl status` shows which program holds the device. Steam also
+   opens the deck while it looks for game controllers; that is harmless, and Ulanzi Deck shares the
+   deck with it.
 4. Check that the system sees the device: `lsusb | grep -i 2207` should list `2207:0019`.
-
-## Steam is using the deck
-
-Steam Input opens every USB input device it is allowed to, looking for game controllers, and the deck
-is one of them. Steam never uses the deck, but while it has the deck open, Ulanzi Deck will not
-connect to it. `ulanzictl status` then shows `busy: /dev/hidrawN is in use by steamwebhelper`.
-
-This only happens when Steam gets to the deck first: when the deck is plugged in, or the service
-(re)starts, while Steam is running. Once Ulanzi Deck has the deck, Steam can start or run alongside
-it without trouble. Reconnecting the deck does not help while Steam runs, because Steam takes it
-again straight away.
-
-To fix it:
-
-1. Quit Steam completely (Steam → **Exit**, not just closing its window).
-2. Wait a few seconds: the header shows **Connected** and `ulanzictl status` shows `ready`.
-3. Start Steam again.
 
 ## The service is not running
 

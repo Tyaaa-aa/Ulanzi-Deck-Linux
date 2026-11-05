@@ -100,11 +100,6 @@ you can also enable the service yourself:
 systemctl --user enable --now ulanzi-deckd
 ```
 
-**Steam users:** Steam opens every input device it finds, the deck included. If Steam is running
-when you plug the deck in or the service starts, Ulanzi Deck reports the deck as in use by
-`steamwebhelper`. Quit Steam, wait for the deck to connect, then start Steam again; from then on both
-run side by side. See [Steam is using the deck](docs/troubleshooting.md#steam-is-using-the-deck).
-
 To build from source, see [Building](docs/technical.md#building) in the technical guide.
 
 ## Documentation

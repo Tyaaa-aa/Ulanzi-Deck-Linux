@@ -12,6 +12,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   when it next plays. The key follows the default output however it changed.
 - `{output_name}` label value: the default sound output.
 
+### Fixed
+
+- The deck connects while Steam is running. Steam opens every input device looking for game
+  controllers, and the service took that as another program using the deck.
+
 ## [2.3.1] - 2026-11-02
 
 ### Changed
