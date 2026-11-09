@@ -124,6 +124,13 @@ fn program_to_start(exe: &Path, appimage: Option<&Path>, appdir: Option<&Path>) 
     }
 }
 
+/// Whether this window should restart to run what is installed: the service it talks to is another
+/// version (one of the two was restarted after an update outside the app), or a package update
+/// replaced this program on disk.
+pub fn restart_needed(app: &str, service: Option<&str>, exe: &Path) -> bool {
+    service.is_some_and(|s| s != app) || exe.to_string_lossy().ends_with(" (deleted)")
+}
+
 async fn restart_unit() -> bool {
     let systemctl = |args: &'static [&'static str]| {
         tokio::process::Command::new("systemctl")
@@ -260,5 +267,17 @@ mod tests {
         assert_eq!(c[0], "sh");
         assert!(c[2].starts_with("sleep 1"));
         assert_eq!(c[3], "/usr/bin/ulanzi deck");
+    }
+
+    #[test]
+    fn a_restart_is_needed_when_versions_differ_or_this_program_was_replaced() {
+        let exe = Path::new("/usr/bin/ulanzi-deck");
+        assert!(!restart_needed("2.4.0", Some("2.4.0"), exe));
+        assert!(!restart_needed("2.4.0", None, exe));
+        assert!(restart_needed("2.3.1", Some("2.4.0"), exe));
+        assert!(restart_needed("2.4.0", Some("2.3.1"), exe));
+        let replaced = Path::new("/usr/bin/ulanzi-deck (deleted)");
+        assert!(restart_needed("2.4.0", Some("2.4.0"), replaced));
+        assert!(restart_needed("2.4.0", None, replaced));
     }
 }

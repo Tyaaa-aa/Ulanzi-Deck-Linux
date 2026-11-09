@@ -115,6 +115,75 @@ pub fn banner(state: &State) -> adw::Banner {
     banner
 }
 
+/// The banner asking for a restart when this window and the service are not the same version, as
+/// after an update through the package manager. Checked on each status change and window focus.
+pub fn restart_banner(state: &State) -> adw::Banner {
+    let banner = adw::Banner::builder()
+        .title("Ulanzi Deck was updated. Restart to finish.")
+        .button_label("Restart")
+        .build();
+    {
+        let state = state.clone();
+        banner.connect_button_clicked(move |b| {
+            let Some(c) = state.client.borrow().clone() else {
+                return;
+            };
+            b.set_button_label(Some("Restarting…"));
+            b.set_sensitive(false);
+            let (st, b) = (state.clone(), b.clone());
+            runtime::run(
+                async move { crate::updates::restart(&c).await },
+                move |r| match r {
+                    Ok(()) => {
+                        if let Some(app) = st.window.borrow().as_ref().and_then(|w| w.application()) {
+                            app.quit();
+                        }
+                    }
+                    Err(e) => {
+                        b.set_button_label(Some("Restart"));
+                        b.set_sensitive(true);
+                        crate::ui::toast(&st, &format!("{FINISH_BY_HAND} ({e})"));
+                    }
+                },
+            );
+        });
+    }
+    let check = {
+        let (state, banner) = (state.clone(), banner.clone());
+        move || {
+            let connected = matches!(*state.status.borrow(), crate::state::Status::Device { .. });
+            let needed = std::env::current_exe().is_ok_and(|exe| {
+                crate::updates::restart_needed(
+                    env!("CARGO_PKG_VERSION"),
+                    state.service_version.borrow().as_deref(),
+                    &exe,
+                )
+            });
+            banner.set_revealed(connected && needed && !state.demo.get());
+        }
+    };
+    check();
+    {
+        let check = check.clone();
+        state.on(move |c| {
+            if c == Change::Status {
+                check();
+            }
+        });
+    }
+    banner.connect_realize(move |b| {
+        if let Some(window) = b.root().and_downcast::<gtk::Window>() {
+            let check = check.clone();
+            window.connect_is_active_notify(move |w| {
+                if w.is_active() {
+                    check();
+                }
+            });
+        }
+    });
+    banner
+}
+
 /// Show `status`'s release: the one on offer, or the one this copy is.
 pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
     let status = state.update.borrow().clone();

@@ -307,6 +307,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     content_view.add_top_bar(&header);
     content_view.add_top_bar(&banner(state));
     content_view.add_top_bar(&crate::ui::updates::banner(state));
+    content_view.add_top_bar(&crate::ui::updates::restart_banner(state));
     let inner_split = adw::OverlaySplitView::builder()
         .sidebar_position(gtk::PackType::End)
         .min_sidebar_width(320.0)
@@ -687,6 +688,7 @@ pub fn connect(state: &State, ready: impl FnOnce() + 'static) {
                     *state.profiles.borrow_mut() = profiles;
                     *state.too_new.borrow_mut() = too_new;
                     crate::ui::updates::refresh(&state);
+                    *state.service_version.borrow_mut() = Some(hello.daemon_version);
                     *state.settings.borrow_mut() = settings;
                     *state.status.borrow_mut() = Status::Device {
                         state: hello.device_state,
@@ -785,6 +787,7 @@ fn follow_events(state: &State, c: &Client) {
                     if let Some(c) = state.client.borrow().clone() {
                         runtime::run(async move { c.hello().await }, move |h| {
                             if let Ok(h) = h {
+                                *s.service_version.borrow_mut() = Some(h.daemon_version);
                                 *s.status.borrow_mut() = Status::Device {
                                     state: h.device_state,
                                     detail: h.device_detail,

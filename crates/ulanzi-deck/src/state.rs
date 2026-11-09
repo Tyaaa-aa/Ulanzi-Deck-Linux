@@ -78,6 +78,8 @@ pub struct AppState {
     pub window: RefCell<Option<gtk::Window>>,
     pub status: RefCell<Status>,
     pub client: RefCell<Option<Client>>,
+    /// The connected service's version.
+    pub service_version: RefCell<Option<String>>,
     /// True while showing built-in demo data (no service).
     pub demo: Cell<bool>,
     /// True while the inspector applies its own edit (it then refreshes itself without a rebuild).
@@ -143,6 +145,7 @@ impl AppState {
             window: RefCell::new(None),
             status: RefCell::new(Status::Connecting),
             client: RefCell::new(None),
+            service_version: RefCell::new(None),
             demo: Cell::new(false),
             inspector_edit: Cell::new(false),
             preview: RefCell::new(None),

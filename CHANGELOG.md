@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+
+- A banner asks for a restart when the window and the service run different versions, or a package
+  update replaced the app while it was open. **Restart** restarts both.
+
 ## [2.4.0] - 2026-11-09
 
 ### Added

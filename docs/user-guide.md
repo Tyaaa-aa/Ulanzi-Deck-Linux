@@ -416,6 +416,10 @@ release notes, with any important note first.
 
 The backup is listed in **Preferences → Backups** as "Before updating to *version*".
 
+After an update through your package manager, or a new AppImage, the open window and the service
+keep running the old version. The window then shows "Ulanzi Deck was updated. Restart to finish."
+**Restart** restarts the service and the app.
+
 ### Files from a newer version
 
 A profile or `.ulanzideck` file from a newer version opens with everything this version understands.
