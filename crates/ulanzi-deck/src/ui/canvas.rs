@@ -1167,7 +1167,7 @@ pub fn build(state: &State) -> Canvas {
         });
     }
 
-    // Drag a dial onto another spot: the others slide aside, then they swap (one undo step).
+    // Drag a dial onto another: that one slides into its place, then they swap (one undo step).
     {
         let (allowed_state, state) = (state.clone(), state.clone());
         crate::ui::dial_swap::attach(
@@ -1175,10 +1175,10 @@ pub fn build(state: &State) -> Canvas {
             &dials,
             move |from, to| {
                 let e = allowed_state.editor.borrow();
-                spots_between(from, to).all(|i| !e.is_foreign(Slot::Dial(i)))
+                !e.is_foreign(Slot::Dial(from)) && !e.is_foreign(Slot::Dial(to))
             },
             move |from, to| {
-                state.edit(|e| move_dial(e, from, to));
+                state.edit(|e| e.swap_dials(from, to));
                 state.select(|s| s.click(Slot::Dial(to)));
             },
         );
@@ -1615,25 +1615,6 @@ fn key_menu() -> gio::Menu {
     m
 }
 
-/// The spots from `from` to `to`, both included.
-fn spots_between(from: u8, to: u8) -> std::ops::RangeInclusive<u8> {
-    from.min(to)..=from.max(to)
-}
-
-/// Move dial `from` to `to`, the ones between moving one spot back toward `from`, as one undo
-/// step (a single swap for neighbours).
-fn move_dial(e: &mut ulanzi_core::edit::Editor, from: u8, to: u8) {
-    let mut at = from;
-    while at != to {
-        let next = if to > at { at + 1 } else { at - 1 };
-        if at != from {
-            e.merge_next();
-        }
-        e.swap_dials(at, next);
-        at = next;
-    }
-}
-
 /// What the dial menu does to dial `n` (`dial.copy`, `dial.paste`, ...).
 fn dial_actions(state: &State, n: u8) -> gio::SimpleActionGroup {
     let group = gio::SimpleActionGroup::new();
@@ -1676,14 +1657,20 @@ fn small_menu(pinned: bool) -> gio::Menu {
 /// The right-click menu of a dial as it works on this page; Paste is greyed out without a copied
 /// dial.
 fn dial_menu(info: &ulanzi_core::model::DialInfo, can_paste: bool) -> gio::Menu {
+    // Shown with the window shortcuts that do the same to a selected dial (see key_routing).
+    let item = |section: &gio::Menu, label: &str, action: &str, shortcut: Option<&str>| {
+        let it = gio::MenuItem::new(Some(label), Some(action));
+        if let Some(accel) = shortcut.and_then(crate::ui::key_routing::accel_for) {
+            it.set_attribute_value("accel", Some(&accel.to_variant()));
+        }
+        section.append_item(&it);
+    };
     let m = gio::Menu::new();
     let clip = gio::Menu::new();
-    clip.append(Some("Copy"), Some("dial.copy"));
+    item(&clip, "Copy", "dial.copy", Some("copy"));
     // An action nobody installs leaves the item insensitive.
-    clip.append(
-        Some("Paste"),
-        Some(if can_paste { "dial.paste" } else { "dial.no-paste" }),
-    );
+    let paste = if can_paste { "dial.paste" } else { "dial.no-paste" };
+    item(&clip, "Paste", paste, Some("paste"));
     if info.library.is_some() {
         clip.append(Some("Edit for This Page Only"), Some("dial.own-copy"));
     } else {
@@ -1699,7 +1686,7 @@ fn dial_menu(info: &ulanzi_core::model::DialInfo, can_paste: bool) -> gio::Menu 
     spot.append(Some("Rename"), Some("dial.rename"));
     // A pin covers this page's own dial, so there is nothing of this page's to remove.
     if !info.pinned {
-        spot.append(Some("Remove from This Page"), Some("dial.remove"));
+        item(&spot, "Remove from This Page", "dial.remove", Some("clear"));
     }
     m.append_section(None, &spot);
     m
@@ -1761,6 +1748,25 @@ mod tests {
                 "Remove from This Page"
             ]
         );
+    }
+
+    #[test]
+    fn dial_menu_shows_the_window_shortcuts() {
+        let own = ulanzi_core::model::DialInfo {
+            dial: Default::default(),
+            pinned: false,
+            library: None,
+        };
+        let m = dial_menu(&own, true);
+        let clip = m.item_link(0, "section").expect("copy section");
+        let accel = |menu: &gio::MenuModel, i| {
+            menu.item_attribute_value(i, "accel", None)
+                .and_then(|v| v.str().map(str::to_owned))
+        };
+        assert_eq!(accel(&clip, 0).as_deref(), Some("<Control>c"));
+        assert_eq!(accel(&clip, 1).as_deref(), Some("<Control>v"));
+        let spot = m.item_link(1, "section").expect("spot section");
+        assert_eq!(accel(&spot, 2).as_deref(), Some("Delete"));
     }
 
     #[test]

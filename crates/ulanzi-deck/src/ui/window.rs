@@ -432,6 +432,14 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     Window { window, inner_split }
 }
 
+/// The dial when it alone is selected: copy, paste and Delete then act on it.
+fn selected_dial(state: &State) -> Option<u8> {
+    match state.selection.borrow().slots()[..] {
+        [ulanzi_core::edit::Slot::Dial(n)] => Some(n),
+        _ => None,
+    }
+}
+
 fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: Rc<dyn Fn() -> bool>) {
     let action = |name: &str, f: Box<dyn Fn()>| {
         let a = gio::SimpleAction::new(name, None);
@@ -460,6 +468,9 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
     action(
         "copy",
         Box::new(move || {
+            if let Some(n) = selected_dial(&s) {
+                return s.editor.borrow_mut().copy_dial(n);
+            }
             let keys = s.selection.borrow().keys();
             s.editor.borrow_mut().copy_keys(&keys);
         }),
@@ -468,6 +479,9 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
     action(
         "paste",
         Box::new(move || {
+            if let Some(n) = selected_dial(&s) {
+                return s.edit(|e| e.paste_dial(n));
+            }
             let at = s.selection.borrow().keys().first().copied();
             if let Some(at) = at {
                 s.edit(|e| e.paste_keys(at));
@@ -495,6 +509,9 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
     action(
         "clear",
         Box::new(move || {
+            if let Some(n) = selected_dial(&s) {
+                return s.edit(|e| e.remove_dial(n));
+            }
             let keys = s.selection.borrow().keys();
             s.edit(|e| e.clear(&keys));
         }),

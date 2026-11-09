@@ -22,17 +22,15 @@ pub fn target(from: u8, dx: f64, pitch: f64) -> u8 {
     (from as f64 + dx / pitch).round().clamp(0.0, 2.0) as u8
 }
 
-/// How far each dial sits from its place while `from` is held over `to`: the ones between slide
-/// one pitch toward `from`. The dragged dial follows the pointer instead, so its entry is 0.
+/// How far each dial sits from its place while `from` is held over `to`: the dial at `to` slides
+/// into `from`'s place, the others stay. The dragged dial follows the pointer instead, so its
+/// entry is 0.
 pub fn offsets(from: u8, to: u8, pitch: f64) -> [f64; 3] {
     let mut o = [0.0; 3];
-    for (i, x) in o.iter_mut().enumerate() {
-        let i = i as u8;
-        if from < to && i > from && i <= to {
-            *x = -pitch;
-        } else if to < from && i >= to && i < from {
-            *x = pitch;
-        }
+    if from != to
+        && let Some(x) = o.get_mut(to as usize)
+    {
+        *x = (from as f64 - to as f64) * pitch;
     }
     o
 }
@@ -46,6 +44,10 @@ mod imp {
         pub offsets: Cell<[f64; 3]>,
         /// The dial being dragged, drawn over the others.
         pub lifted: Cell<Option<u8>>,
+        /// The spot the dragged dial would land on, outlined.
+        pub drop: Cell<Option<u8>>,
+        /// The dial buttons, for where to draw that outline.
+        pub dials: std::cell::RefCell<Vec<gtk::Button>>,
     }
 
     #[glib::object_subclass]
@@ -81,6 +83,14 @@ mod imp {
                 row.snapshot_child(c, snapshot);
                 snapshot.restore();
             };
+            if let Some(b) = self
+                .drop
+                .get()
+                .and_then(|i| self.dials.borrow().get(i as usize).cloned())
+                .and_then(|b| b.compute_bounds(&*row))
+            {
+                draw_drop_spot(snapshot, &b);
+            }
             let mut top = None;
             let mut child = row.first_child();
             let mut i = 0;
@@ -98,6 +108,29 @@ mod imp {
             }
         }
     }
+}
+
+/// A dashed ring in the accent colour around the dial at `b` (where a dragged dial will land).
+fn draw_drop_spot(snapshot: &gtk::Snapshot, b: &gtk::graphene::Rect) {
+    let pad = 4.0;
+    let area = gtk::graphene::Rect::new(
+        b.x() - pad,
+        b.y() - pad,
+        b.width() + 2.0 * pad,
+        b.height() + 2.0 * pad,
+    );
+    let cr = snapshot.append_cairo(&area);
+    let c = adw::StyleManager::default().accent_color_rgba();
+    cr.set_source_rgba(c.red() as f64, c.green() as f64, c.blue() as f64, 0.9);
+    cr.set_line_width(2.0);
+    cr.set_dash(&[6.0, 5.0], 0.0);
+    let (cx, cy) = (
+        (b.x() + b.width() / 2.0) as f64,
+        (b.y() + b.height() / 2.0) as f64,
+    );
+    let r = (b.width().min(b.height()) as f64) / 2.0 + 2.0;
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    let _ = cr.stroke();
 }
 
 glib::wrapper! {
@@ -127,6 +160,11 @@ impl DialRow {
 
     fn offsets(&self) -> [f64; 3] {
         self.imp().offsets.get()
+    }
+
+    fn set_drop(&self, n: Option<u8>) {
+        self.imp().drop.set(n);
+        self.queue_draw();
     }
 
     fn set_lifted(&self, n: Option<u8>) {
@@ -213,6 +251,7 @@ pub fn attach(
         })
     };
     let dials: Rc<Vec<gtk::Button>> = Rc::new(dials.to_vec());
+    *row.imp().dials.borrow_mut() = dials.to_vec();
     let allowed = Rc::new(allowed);
     {
         let (drag, row, dials) = (drag.clone(), weak_row.clone(), dials.clone());
@@ -273,6 +312,7 @@ pub fn attach(
                     drag.moving.set(true);
                     dial.add_css_class("lifted");
                     row.set_lifted(Some(n));
+                    row.set_drop(Some(n));
                 }
                 let pitch = drag.pitch.get();
                 let x = dx.clamp(-(n as f64) * pitch, (2.0 - n as f64) * pitch);
@@ -280,6 +320,7 @@ pub fn attach(
                 let to = target(n, dx, pitch);
                 if to != drag.to.get() {
                     drag.to.set(to);
+                    row.set_drop(Some(to));
                     slide(offsets(n, to, pitch));
                 } else {
                     let mut o = row.offsets();
@@ -289,7 +330,8 @@ pub fn attach(
             });
         }
         {
-            let (drag, slide, allowed) = (drag.clone(), slide.clone(), allowed.clone());
+            let (drag, row, slide, allowed) =
+                (drag.clone(), weak_row.clone(), slide.clone(), allowed.clone());
             g.connect_drag_end(move |_, _, _| {
                 if drag.from.get() != Some(n) || drag.released.get() {
                     return;
@@ -308,6 +350,9 @@ pub fn attach(
                 let mut end = offsets(n, to, pitch);
                 end[n as usize] = (to as f64 - n as f64) * pitch;
                 drag.released.set(true);
+                if let Some(row) = row.upgrade() {
+                    row.set_drop(None);
+                }
                 slide(end);
             });
         }
@@ -333,9 +378,9 @@ mod tests {
     #[test]
     fn offsets_make_room() {
         let p = 100.0;
-        let o = offsets(0, 2, p);
-        assert_eq!(o[1..], [-p, -p]);
-        assert_eq!(offsets(2, 0, p)[..2], [p, p]);
+        // A swap: only the dial being dropped on moves, into the dragged dial's place.
+        assert_eq!(offsets(0, 2, p)[1..], [0.0, -2.0 * p]);
+        assert_eq!(offsets(2, 0, p)[..2], [2.0 * p, 0.0]);
         assert_eq!(offsets(1, 2, p), [0.0, 0.0, -p]);
         assert_eq!(offsets(1, 1, p), [0.0; 3]);
     }
