@@ -12,7 +12,8 @@ for f in "$HOME/.local/bin/ulanzi-deckd" "$HOME/.local/bin/ulanzictl" "$HOME/.lo
          "$data/icons/hicolor/scalable/apps/io.github.tyaaa_aa.UlanziDeck.svg" \
          "$data/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-symbolic.svg" \
          "$data/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-auto-symbolic.svg" \
-         "$data/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-macro-symbolic.svg"; do
+         "$data/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-macro-symbolic.svg" \
+         "$data/icons/hicolor/symbolic/apps/io.github.tyaaa_aa.UlanziDeck-library-symbolic.svg"; do
     [ -e "$f" ] && rm -f -- "$f"
 done
 systemctl --user daemon-reload

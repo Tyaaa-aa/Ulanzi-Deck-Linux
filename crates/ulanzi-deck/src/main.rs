@@ -24,7 +24,7 @@ struct Shot {
     size: (i32, i32),
     dark: Option<bool>,
     select: Option<String>,
-    /// `library`, `dial-menu:<n>`, `picker:<tab>`, `plugins`, `discover`, `integrations:<plugin id>`, `action-picker`, ….
+    /// `library`, `library-tray[:<page>]`, `dial-menu:<n>`, `picker:<tab>`, `plugins`, `discover`, `integrations:<plugin id>`, `action-picker`, ….
     open: Option<String>,
     /// 1-based page to show.
     page: Option<usize>,
@@ -318,6 +318,13 @@ fn main() -> glib::ExitCode {
             match shot.open.as_deref() {
                 Some("library") => {
                     WidgetExt::activate_action(&window, "win.library", None).ok();
+                }
+                Some(o) if o.starts_with("library-tray") => {
+                    // `library-tray:<n>` opens it at page n (1-based).
+                    if let Some(n) = o.split_once(':').and_then(|(_, n)| n.parse::<usize>().ok()) {
+                        state2.tray_page.set(n.saturating_sub(1));
+                    }
+                    WidgetExt::activate_action(&window, "win.library-tray", None).ok();
                 }
                 Some(o) if o.starts_with("dial-menu") => {
                     // The right-click menu of dial N (1-based, default 1).

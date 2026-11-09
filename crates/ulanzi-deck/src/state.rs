@@ -112,6 +112,10 @@ pub struct AppState {
     pub picker_memory: RefCell<crate::action_list::Memory>,
     /// Plugin pickers' answers for naming the ids item rows show, kept a few seconds.
     pub item_labels: RefCell<crate::plugins::LabelCache<LabelWaiter>>,
+    /// The library dial picked in the Library tray; picking a slot clears it.
+    pub selected_library: RefCell<Option<Uuid>>,
+    /// The Library tray's page, kept while the app runs.
+    pub tray_page: Cell<usize>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -165,6 +169,8 @@ impl AppState {
             library_memory: RefCell::default(),
             picker_memory: RefCell::default(),
             item_labels: RefCell::default(),
+            selected_library: RefCell::new(None),
+            tray_page: Cell::new(0),
             listeners: RefCell::new(Vec::new()),
         })
     }
@@ -347,6 +353,14 @@ impl AppState {
 
     pub fn select(&self, f: impl FnOnce(&mut Selection)) {
         f(&mut self.selection.borrow_mut());
+        *self.selected_library.borrow_mut() = None;
+        self.notify(Change::Selection);
+    }
+
+    /// Pick library dial `id` (in the Library tray) instead of any slot.
+    pub fn select_library(&self, id: Uuid) {
+        self.selection.borrow_mut().clear();
+        *self.selected_library.borrow_mut() = Some(id);
         self.notify(Change::Selection);
     }
 
@@ -358,6 +372,7 @@ impl AppState {
         editor.set_page(page);
         *self.editor.borrow_mut() = editor;
         self.selection.borrow_mut().clear();
+        *self.selected_library.borrow_mut() = None;
         self.notify(Change::Profile);
         self.notify(Change::Page);
         self.notify(Change::Selection);

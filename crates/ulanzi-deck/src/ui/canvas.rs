@@ -66,15 +66,24 @@ pub enum Payload {
     Action(ulanzi_core::model::Action),
     /// An image file dropped from a file manager.
     File(std::path::PathBuf),
+    /// A dial from the Library tray.
+    LibraryDial(uuid::Uuid),
 }
 
 pub fn action_payload(a: &ulanzi_core::model::Action) -> String {
     format!("ulanzi-action:{}", serde_json::to_string(a).unwrap_or_default())
 }
 
+pub fn library_dial_payload(id: uuid::Uuid) -> String {
+    format!("ulanzi-library-dial:{id}")
+}
+
 pub fn parse_payload(s: &str) -> Option<Payload> {
     if let Some(n) = s.strip_prefix("ulanzi-key:") {
         return n.parse().ok().map(Payload::Key);
+    }
+    if let Some(id) = s.strip_prefix("ulanzi-library-dial:") {
+        return id.parse().ok().map(Payload::LibraryDial);
     }
     let json = s.strip_prefix("ulanzi-action:")?;
     serde_json::from_str(json).ok().map(Payload::Action)
@@ -166,14 +175,14 @@ fn label_valign(align: &str) -> gtk::Align {
 }
 
 /// The icons drawn on a dial.
-struct DialFace {
-    overlay: gtk::Overlay,
+pub(crate) struct DialFace {
+    pub(crate) overlay: gtk::Overlay,
     press: gtk::Image,
     left: (gtk::Box, gtk::Image),
     right: (gtk::Box, gtk::Image),
 }
 
-fn dial_face(zones: &gtk::DrawingArea) -> DialFace {
+pub(crate) fn dial_face(zones: &gtk::DrawingArea) -> DialFace {
     let overlay = gtk::Overlay::builder().child(zones).build();
     let press = gtk::Image::builder()
         .pixel_size(22)
@@ -205,7 +214,7 @@ fn dial_face(zones: &gtk::DrawingArea) -> DialFace {
 }
 
 impl DialFace {
-    fn show(&self, d: &ulanzi_core::model::Dial) {
+    pub(crate) fn show(&self, d: &ulanzi_core::model::Dial) {
         let set = |img: &gtk::Image, a: &Option<ulanzi_core::model::Action>, px: i32| match a
             .as_ref()
             .and_then(|a| action_icon(a, px))
@@ -323,7 +332,7 @@ pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Textu
 }
 
 /// A round badge on a corner of a dial or small button: `link` or `pin`, hidden until shown.
-fn slot_badge(kind: &str, h: gtk::Align) -> gtk::Image {
+pub(crate) fn slot_badge(kind: &str, h: gtk::Align) -> gtk::Image {
     let img = gtk::Image::builder()
         .pixel_size(10)
         .css_classes(["slot-badge", kind])
@@ -348,7 +357,7 @@ fn caption() -> gtk::Label {
 }
 
 /// `w` with room around it (`top`, `side`, `bottom` px) for corner badges, laid in an overlay.
-fn with_room(w: &impl IsA<gtk::Widget>, top: i32, side: i32, bottom: i32) -> gtk::Overlay {
+pub(crate) fn with_room(w: &impl IsA<gtk::Widget>, top: i32, side: i32, bottom: i32) -> gtk::Overlay {
     w.set_margin_top(top);
     w.set_margin_start(side);
     w.set_margin_end(side);
@@ -927,6 +936,7 @@ fn screen_plays_media(state: &State) -> bool {
 pub struct Canvas {
     pub widget: gtk::Widget,
     pub set_compact: Rc<dyn Fn(bool)>,
+    pub tray: Rc<crate::ui::library_tray::Tray>,
 }
 
 pub const COMPACT_KEY_PX: i32 = 62;
@@ -1029,6 +1039,12 @@ pub fn build(state: &State) -> Canvas {
         .visible(false)
         .build();
 
+    // These fade while the Library tray is open.
+    let under: Vec<gtk::Widget> = vec![
+        dots.clone().upcast(),
+        hint.clone().upcast(),
+        note.clone().upcast(),
+    ];
     let column = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .halign(gtk::Align::Center)
@@ -1088,7 +1104,7 @@ pub fn build(state: &State) -> Canvas {
                 state.edit(|e| e.swap(from, n));
                 state.select(|s| s.click(Slot::Key(n)));
             }
-            Payload::Key(_) => {}
+            Payload::Key(_) | Payload::LibraryDial(_) => {}
             Payload::Action(a) => {
                 state.edit(|e| e.drop_action(Slot::Key(n), a));
                 state.select(|s| s.click(Slot::Key(n)));
@@ -1152,8 +1168,8 @@ pub fn build(state: &State) -> Canvas {
         d.add_controller(motion);
         let state = state.clone();
         let dial = d.clone();
-        accept_drops(d, move |p, x| {
-            if let Payload::Action(a) = p {
+        accept_drops(d, move |p, x| match p {
+            Payload::Action(a) => {
                 let zone = hit_zone(dial.width() as f64, x);
                 state.edit(|e| {
                     e.set_dial(n as u8, |d| match zone {
@@ -1164,6 +1180,12 @@ pub fn build(state: &State) -> Canvas {
                 });
                 state.select(|s| s.click(Slot::Dial(n as u8)));
             }
+            // From the Library tray: link it here.
+            Payload::LibraryDial(id) => {
+                state.edit(|e| e.place_dial(n as u8, id));
+                state.select(|s| s.click(Slot::Dial(n as u8)));
+            }
+            _ => {}
         });
     }
 
@@ -1557,8 +1579,23 @@ pub fn build(state: &State) -> Canvas {
     redraw(Change::Profile);
     redraw(Change::Selection);
     state.on(redraw);
+    // The Library tray opens under the deck.
+    let tray = crate::ui::library_tray::Tray::new(
+        state,
+        scroller.upcast_ref(),
+        body.upcast_ref(),
+        bottom.upcast_ref(),
+        &dial_row,
+        under,
+    );
     let set_compact: Rc<dyn Fn(bool)> = {
-        let (keys, screen, body, grid) = (keys.clone(), screen.clone(), body.clone(), grid.clone());
+        let (keys, screen, body, grid, tray) = (
+            keys.clone(),
+            screen.clone(),
+            body.clone(),
+            grid.clone(),
+            tray.clone(),
+        );
         Rc::new(move |compact: bool| {
             let (px, gap) = if compact {
                 (COMPACT_KEY_PX, 8)
@@ -1574,15 +1611,17 @@ pub fn build(state: &State) -> Canvas {
             grid.set_row_spacing(gap as u32);
             grid.set_column_spacing(gap as u32);
             set_class(&body, "compact", compact);
+            tray.set_compact(compact);
         })
     };
     Canvas {
-        widget: scroller.upcast(),
+        widget: tray.widget(),
         set_compact,
+        tray,
     }
 }
 
-fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
+pub(crate) fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     if on {
         w.add_css_class(class);
     } else {
@@ -1855,6 +1894,16 @@ mod tests {
         let a = ulanzi_core::model::Action::NextPage;
         assert_eq!(parse_payload(&action_payload(&a)), Some(Payload::Action(a)));
         assert_eq!(parse_payload("hello"), None);
+    }
+
+    #[test]
+    fn library_payload_roundtrips() {
+        let id = uuid::Uuid::new_v4();
+        assert_eq!(
+            parse_payload(&library_dial_payload(id)),
+            Some(Payload::LibraryDial(id))
+        );
+        assert_eq!(parse_payload("ulanzi-library-dial:nope"), None);
     }
 
     #[test]

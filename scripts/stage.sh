@@ -23,6 +23,7 @@ install -Dm0644 "$gui/icons/$id.svg" "$root/share/icons/hicolor/scalable/apps/$i
 install -Dm0644 "$gui/icons/$id-symbolic.svg" "$root/share/icons/hicolor/symbolic/apps/$id-symbolic.svg"
 install -Dm0644 "$gui/icons/$id-auto-symbolic.svg" "$root/share/icons/hicolor/symbolic/apps/$id-auto-symbolic.svg"
 install -Dm0644 "$gui/icons/$id-macro-symbolic.svg" "$root/share/icons/hicolor/symbolic/apps/$id-macro-symbolic.svg"
+install -Dm0644 "$gui/icons/$id-library-symbolic.svg" "$root/share/icons/hicolor/symbolic/apps/$id-library-symbolic.svg"
 install -Dm0644 packaging/dbus/$id.Service.service "$root/share/dbus-1/services/$id.Service.service"
 mkdir -p "$root/lib/systemd/user"
 sed "s|@BINDIR@|$prefix/bin|" packaging/systemd/ulanzi-deckd.service >"$root/lib/systemd/user/ulanzi-deckd.service"

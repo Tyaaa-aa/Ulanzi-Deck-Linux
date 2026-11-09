@@ -46,6 +46,8 @@ mod imp {
         pub lifted: Cell<Option<u8>>,
         /// The spot the dragged dial would land on, outlined.
         pub drop: Cell<Option<u8>>,
+        /// A spot marked from outside (the Library tray's drop spot), outlined the same way.
+        pub marked: Cell<Option<u8>>,
         /// The dial buttons, for where to draw that outline.
         pub dials: std::cell::RefCell<Vec<gtk::Button>>,
     }
@@ -83,13 +85,16 @@ mod imp {
                 row.snapshot_child(c, snapshot);
                 snapshot.restore();
             };
-            if let Some(b) = self
-                .drop
-                .get()
-                .and_then(|i| self.dials.borrow().get(i as usize).cloned())
-                .and_then(|b| b.compute_bounds(&*row))
-            {
-                draw_drop_spot(snapshot, &b);
+            for spot in [
+                self.drop.get(),
+                self.marked.get().filter(|m| self.drop.get() != Some(*m)),
+            ] {
+                if let Some(b) = spot
+                    .and_then(|i| self.dials.borrow().get(i as usize).cloned())
+                    .and_then(|b| b.compute_bounds(&*row))
+                {
+                    draw_drop_spot(snapshot, &b);
+                }
             }
             let mut top = None;
             let mut child = row.first_child();
@@ -164,6 +169,12 @@ impl DialRow {
 
     fn set_drop(&self, n: Option<u8>) {
         self.imp().drop.set(n);
+        self.queue_draw();
+    }
+
+    /// Outline dial `n` as where something will land, or none.
+    pub fn set_marked(&self, n: Option<u8>) {
+        self.imp().marked.set(n);
         self.queue_draw();
     }
 

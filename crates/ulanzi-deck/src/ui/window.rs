@@ -280,6 +280,12 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         .action_name("win.macros")
         .build();
     header.pack_end(&macros);
+    let tray_toggle = gtk::ToggleButton::builder()
+        .icon_name("io.github.tyaaa_aa.UlanziDeck-library-symbolic")
+        .tooltip_text("Library")
+        .action_name("win.library-tray")
+        .build();
+    header.pack_end(&tray_toggle);
     let redo = gtk::Button::builder()
         .icon_name("edit-redo-symbolic")
         .tooltip_text("Redo (Ctrl+Shift+Z)")
@@ -337,6 +343,31 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         });
         window.add_action(&a);
         app.set_accels_for_action("win.library", &["<Ctrl>l"]);
+    }
+    {
+        // The Library tray under the deck; the header button shows whether it is open.
+        let a = gio::SimpleAction::new_stateful("library-tray", None, &false.to_variant());
+        let tray = canvas.tray.clone();
+        a.connect_change_state(move |a, v| {
+            let Some(open) = v.and_then(|v| v.get::<bool>()) else {
+                return;
+            };
+            a.set_state(&open.to_variant());
+            if open {
+                tray.open(crate::ui::library_tray::Tab::Dials);
+            } else {
+                tray.close();
+            }
+        });
+        let weak = a.downgrade();
+        canvas.tray.connect_toggled(move |open| {
+            if let Some(a) = weak.upgrade() {
+                a.set_state(&open.to_variant());
+            }
+        });
+        window.add_action(&a);
+        // The tray's ? button: the first-time guide hooks in here.
+        window.add_action(&gio::SimpleAction::new("library-guide", None));
     }
     // Ctrl+1 to Ctrl+9: the profiles, in the sidebar's order.
     for n in 1..=9usize {
