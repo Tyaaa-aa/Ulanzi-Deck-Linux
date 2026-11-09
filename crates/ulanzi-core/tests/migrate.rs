@@ -313,3 +313,95 @@ fn an_import_keeps_a_profile_with_keys() {
     migrate_legacy(&e.yaml, &e.store, false).expect("import");
     assert_eq!(loaded(&e.store).len(), 2);
 }
+
+fn press(a: Action) -> Dial {
+    Dial {
+        press: Some(a),
+        ..Default::default()
+    }
+}
+
+fn pages(n: usize) -> Profile {
+    let mut p = Profile::new_default("Test", Model::D200);
+    while p.pages.len() < n {
+        p.pages.push(Page::new(&format!("P{}", p.pages.len())));
+    }
+    p.pages.truncate(n);
+    p
+}
+
+#[test]
+fn old_profile_wide_dials_become_pinned() {
+    let mut p = pages(2);
+    p.dials[0] = press(Action::NextPage);
+    p.dials[2] = press(Action::PrevPage);
+    p.normalize();
+    assert_eq!(p.pinned.dials.len(), 2);
+    assert_eq!(p.pinned.dials[&0], press(Action::NextPage));
+    assert_eq!(p.pinned.dials[&2], press(Action::PrevPage));
+    assert!(p.dials.iter().all(Dial::is_empty));
+    assert!(p.pages.iter().all(|pg| pg.dials.iter().all(Dial::is_empty)));
+}
+
+#[test]
+fn a_dial_the_same_on_every_page_becomes_pinned() {
+    let mut p = pages(3);
+    for pg in &mut p.pages {
+        pg.dials[1] = press(Action::NextPage);
+    }
+    p.pages[0].dials[0] = press(Action::NextPage);
+    p.pages[1].dials[0] = press(Action::PrevPage);
+    p.pages[2].dials[0] = press(Action::NextPage);
+    p.normalize();
+    assert_eq!(p.pinned.dials.len(), 1);
+    assert_eq!(p.pinned.dials[&1], press(Action::NextPage));
+    assert!(p.pages.iter().all(|pg| pg.dials[1].is_empty()));
+    assert!(p.pages.iter().all(|pg| !pg.dials[0].is_empty()));
+}
+
+#[test]
+fn a_single_page_keeps_its_dials() {
+    let mut p = pages(1);
+    p.pages[0].dials[1] = press(Action::NextPage);
+    p.normalize();
+    assert!(p.pinned.is_empty());
+    assert_eq!(p.pages[0].dials[1], press(Action::NextPage));
+}
+
+#[test]
+fn migration_runs_once() {
+    let mut p = pages(3);
+    for pg in &mut p.pages {
+        pg.dials[1] = press(Action::NextPage);
+    }
+    p.normalize();
+    let once = p.clone();
+    p.normalize();
+    assert_eq!(p, once);
+
+    // A profile with a pin is left alone, even if another dial is the same everywhere.
+    let mut q = pages(3);
+    q.pinned.dials.insert(0, press(Action::PrevPage));
+    for pg in &mut q.pages {
+        pg.dials[2] = press(Action::NextPage);
+    }
+    let before = q.clone();
+    q.normalize();
+    assert_eq!(q, before);
+}
+
+#[test]
+fn a_page_with_a_foreign_dial_blocks_pinning_that_dial() {
+    let mut p = pages(3);
+    for pg in &mut p.pages[..2] {
+        pg.dials[2] = press(Action::NextPage);
+    }
+    p.foreign.push(ForeignSlot {
+        page: Some(p.pages[2].id),
+        slot: Slot::Dial(2),
+        raw: toml::Value::Table(toml::Table::new()),
+    });
+    p.normalize();
+    assert!(p.pinned.is_empty());
+    assert_eq!(p.pages[0].dials[2], press(Action::NextPage));
+}

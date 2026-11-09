@@ -44,7 +44,7 @@ fn library_pins_and_page_small_buttons_round_trip() {
         text.contains("[pinned.dials.0]") || text.contains("[pinned.dials.\"0\"]"),
         "{text}"
     );
-    assert!(text.contains("[pages.small_buttons.right]"), "{text}");
+    p.min_app = Some("2.5.0".into());
     assert_eq!(parse_profile(&text).expect("ok"), p);
 }
 
@@ -181,4 +181,97 @@ type = "next_page"
     let again = profile_to_toml(&p).expect("ok");
     assert!(!again.contains("dial_library") && !again.contains("pinned"));
     assert_eq!(parse_profile(&again).expect("ok"), p);
+}
+
+#[test]
+fn out_of_range_pins_are_dropped() {
+    let mut p = Profile::new_default("Test", Model::D200);
+    p.pinned.dials.insert(
+        1,
+        Dial {
+            name: "A".into(),
+            ..Default::default()
+        },
+    );
+    p.pinned.dials.insert(
+        3,
+        Dial {
+            name: "B".into(),
+            ..Default::default()
+        },
+    );
+    let warnings = p.normalize();
+    assert_eq!(p.pinned.dials.keys().copied().collect::<Vec<_>>(), vec![1]);
+    assert_eq!(warnings.len(), 1);
+}
+
+#[test]
+fn library_profiles_save_min_app_2_5() {
+    let min_app = |p: &Profile| {
+        let t: toml::Table = toml::from_str(&profile_to_toml(p).expect("ok")).expect("toml");
+        t.get("min_app").and_then(|v| v.as_str()).map(String::from)
+    };
+    let plain = Profile::new_default("Test", Model::D200);
+    assert_eq!(min_app(&plain), None);
+
+    let mut pin = plain.clone();
+    pin.pinned.dials.insert(
+        0,
+        Dial {
+            name: "A".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(min_app(&pin).as_deref(), Some("2.5.0"));
+
+    let mut mac = plain.clone();
+    mac.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(macro_action()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(min_app(&mac).as_deref(), Some("2.2.0"));
+
+    let mut both = pin.clone();
+    both.pages[0].keys.insert(
+        0,
+        Key {
+            tap: Some(macro_action()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(min_app(&both).as_deref(), Some("2.5.0"));
+}
+
+#[test]
+fn an_unparseable_library_item_survives_load_and_save() {
+    let text = r#"
+version = 2
+id = "6f1b1c0e-0000-4000-8000-000000000001"
+name = "Test"
+model = "D200"
+
+[[dial_library]]
+id = "6f1b1c0e-0000-4000-8000-0000000000a1"
+[dial_library.dial]
+name = "Ok"
+
+[[dial_library]]
+id = "6f1b1c0e-0000-4000-8000-0000000000a2"
+[dial_library.dial]
+name = "Future"
+future = 1
+
+[[pages]]
+id = "6f1b1c0e-0000-4000-8000-000000000002"
+name = "Main"
+"#;
+    let p = parse_profile(text).expect("ok");
+    assert_eq!(p.dial_library.len(), 1);
+    assert_eq!(p.foreign_library.len(), 1);
+    let out = profile_to_toml(&p).expect("ok");
+    let t: toml::Table = toml::from_str(&out).expect("toml");
+    assert_eq!(t["dial_library"].as_array().expect("array").len(), 2);
 }

@@ -319,18 +319,15 @@ fn label_position_override_is_optional_and_clearable() {
 }
 
 #[test]
-fn old_profile_wide_dials_move_onto_every_page() {
+fn old_profile_wide_dials_are_pinned() {
     use ulanzi_core::model::{Action, Model, Page, Profile};
     let mut old = Profile::new_default("P", Model::D200X);
     old.pages.push(Page::new("Two"));
     old.dials[1].press = Some(Action::NextPage);
     let text = toml::to_string(&old).expect("ser");
     let p = ulanzi_core::store::parse_profile(&text).expect("parse");
-    assert!(
-        p.pages
-            .iter()
-            .all(|pg| pg.dials[1].press == Some(Action::NextPage))
-    );
+    assert_eq!(p.pinned.dials[&1].press, Some(Action::NextPage));
+    assert!(p.pages.iter().all(|pg| pg.dials[1].is_empty()));
     assert!(p.dials.iter().all(|d| *d == ulanzi_core::model::Dial::default()));
     // Saved again, the profile-wide table is gone.
     let again = toml::to_string(&p).expect("ser");

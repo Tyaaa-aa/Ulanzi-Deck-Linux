@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::foreign::ForeignSlot;
+use super::foreign::{ForeignSlot, Slot};
 use super::{Action, Background, KeyLook, LibraryDial, MediaTakeover, Pinned, Rotation, Widget};
 use crate::Color;
 
@@ -53,6 +53,9 @@ pub struct Profile {
     /// Parts from a newer version, kept as written. The store puts them back on save.
     #[serde(skip)]
     pub foreign: Vec<ForeignSlot>,
+    /// Library dials from a newer version, kept as written.
+    #[serde(skip)]
+    pub foreign_library: Vec<toml::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -451,6 +454,7 @@ impl Profile {
             pages: vec![Page::new("Main")],
             min_app: None,
             foreign: Vec::new(),
+            foreign_library: Vec::new(),
         }
     }
 
@@ -464,12 +468,36 @@ impl Profile {
                 self.name
             ));
         }
-        // Dials used to be one set per profile: give every page that set.
+        // Dials used to be one set per profile: they are the pinned ones now.
         if !no_dials(&self.dials) {
             let old = std::mem::take(&mut self.dials);
-            for page in &mut self.pages {
-                if no_dials(&page.dials) {
-                    page.dials = old.clone();
+            for (i, d) in old.into_iter().enumerate() {
+                if !d.is_empty() {
+                    self.pinned.dials.entry(i as u8).or_insert(d);
+                }
+            }
+        }
+        let bad: Vec<u8> = self.pinned.dials.keys().copied().filter(|i| *i >= 3).collect();
+        for i in bad {
+            self.pinned.dials.remove(&i);
+            warnings.push(format!("removed pinned dial {i} (dials are 0-2)"));
+        }
+        // A dial that is the same on every page is a pinned one. Only for profiles that have none
+        // yet, so a dial the user unpins is not pinned again.
+        if self.pinned.is_empty() && self.pages.len() >= 2 {
+            for i in 0..3usize {
+                let first = &self.pages[0].dials[i];
+                let same = !first.is_empty() && self.pages.iter().all(|p| &p.dials[i] == first);
+                let blocked = self
+                    .foreign
+                    .iter()
+                    .any(|f| f.slot == Slot::Dial(i as u8) && f.page.is_some());
+                if same && !blocked {
+                    let d = std::mem::take(&mut self.pages[0].dials[i]);
+                    for p in &mut self.pages[1..] {
+                        p.dials[i] = Dial::default();
+                    }
+                    self.pinned.dials.insert(i as u8, d);
                 }
             }
         }

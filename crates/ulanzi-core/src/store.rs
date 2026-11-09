@@ -19,6 +19,8 @@ pub const SETTINGS_FILE: &str = "settings.toml";
 pub const MACROS_FILE: &str = "macros.toml";
 /// The first version that reads macros.
 const MACROS_MIN_APP: &str = "2.2.0";
+/// The first version that reads the dial library, pins and per-page small buttons.
+pub const LIBRARY_MIN_APP: &str = "2.5.0";
 
 /// A profile's sidebar look, beside its `profile.toml`.
 const LOOK_FILE: &str = "look.toml";
@@ -370,13 +372,20 @@ pub fn parse_profile(text: &str) -> Result<Profile, CoreError> {
 
 /// A profile as TOML, with what a newer version wrote back in its place.
 pub fn profile_to_toml(p: &Profile) -> Result<String, CoreError> {
-    let min_app = if p.uses_macros() {
-        let existing = p.min_app.as_deref().unwrap_or(MACROS_MIN_APP);
-        let newest = [existing, MACROS_MIN_APP]
+    let floor = [
+        p.uses_macros().then_some(MACROS_MIN_APP),
+        p.uses_library().then_some(LIBRARY_MIN_APP),
+    ]
+    .into_iter()
+    .flatten()
+    .max_by_key(|v| crate::update::parse_version(v));
+    let min_app = if let Some(floor) = floor {
+        let existing = p.min_app.as_deref().unwrap_or(floor);
+        [existing, floor]
             .into_iter()
-            .max_by_key(|v| crate::update::parse_version(v));
-        newest.map(String::from)
-    } else if p.foreign.is_empty() {
+            .max_by_key(|v| crate::update::parse_version(v))
+            .map(String::from)
+    } else if p.foreign.is_empty() && p.foreign_library.is_empty() {
         None
     } else {
         p.min_app.clone()
@@ -388,13 +397,14 @@ pub fn profile_to_toml(p: &Profile) -> Result<String, CoreError> {
         with_version = Profile { min_app, ..p.clone() };
         &with_version
     };
-    if p.foreign.is_empty() {
+    if p.foreign.is_empty() && p.foreign_library.is_empty() {
         return to_toml(p);
     }
     // Through text: a table converted directly turns dates into private keys.
     let mut table: toml::Table =
         toml::from_str(&to_toml(p)?).map_err(|e| CoreError::Serialize(e.to_string()))?;
     crate::model::foreign::restore(&mut table, &p.foreign);
+    crate::model::foreign::restore_library(&mut table, &p.foreign_library);
     to_toml(&table)
 }
 
@@ -415,12 +425,14 @@ fn parse_tolerant(path: &Path, text: &str) -> Result<Profile, CoreError> {
         return Err(first);
     };
     let foreign = crate::model::foreign::separate(&mut table);
-    if foreign.is_empty() {
+    let foreign_library = crate::model::foreign::separate_library(&mut table);
+    if foreign.is_empty() && foreign_library.is_empty() {
         return Err(first);
     }
     let rest = toml::to_string(&table).map_err(|e| CoreError::Serialize(e.to_string()))?;
     let mut p: Profile = parse_versioned(path, &rest)?;
     p.foreign = foreign;
+    p.foreign_library = foreign_library;
     Ok(p)
 }
 

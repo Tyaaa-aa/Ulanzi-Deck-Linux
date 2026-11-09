@@ -5,7 +5,7 @@
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-use super::{Action, Dial, Key, Profile, ScreenConfig};
+use super::{Action, Dial, Key, LibraryDial, Profile, ScreenConfig};
 
 pub use crate::edit::Slot;
 
@@ -106,6 +106,30 @@ pub fn separate(table: &mut toml::Table) -> Vec<ForeignSlot> {
         }
     }
     out
+}
+
+/// Take the library dials that do not parse out of a profile's table and return them.
+pub fn separate_library(table: &mut toml::Table) -> Vec<toml::Value> {
+    let Some(items) = table.get_mut("dial_library").and_then(|v| v.as_array_mut()) else {
+        return Vec::new();
+    };
+    let (good, bad): (Vec<_>, Vec<_>) = std::mem::take(items).into_iter().partition(parses::<LibraryDial>);
+    *items = good;
+    bad
+}
+
+/// Put the library dials [`separate_library`] set aside back at the end of the array.
+pub fn restore_library(table: &mut toml::Table, items: &[toml::Value]) {
+    if items.is_empty() {
+        return;
+    }
+    if let Some(arr) = table
+        .entry("dial_library")
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()
+    {
+        arr.extend(items.iter().cloned());
+    }
 }
 
 /// Put `foreign` back into a profile's table, where [`separate`] found each one.
