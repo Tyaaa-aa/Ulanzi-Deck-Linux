@@ -44,6 +44,7 @@ fn library_pins_and_page_small_buttons_round_trip() {
         text.contains("[pinned.dials.0]") || text.contains("[pinned.dials.\"0\"]"),
         "{text}"
     );
+    assert!(text.contains("[pages.small_buttons.right]"), "{text}");
     p.min_app = Some("2.5.0".into());
     assert_eq!(parse_profile(&text).expect("ok"), p);
 }
@@ -274,4 +275,28 @@ name = "Main"
     let out = profile_to_toml(&p).expect("ok");
     let t: toml::Table = toml::from_str(&out).expect("toml");
     assert_eq!(t["dial_library"].as_array().expect("array").len(), 2);
+}
+
+#[test]
+fn an_old_dial_that_clashes_with_a_pin_is_reported() {
+    let mut p = Profile::new_default("Test", Model::D200);
+    p.pinned.dials.insert(
+        1,
+        Dial {
+            name: "Pin".into(),
+            ..Default::default()
+        },
+    );
+    p.dials[1] = Dial {
+        name: "Old".into(),
+        ..Default::default()
+    };
+    p.dials[2] = Dial {
+        name: "Other".into(),
+        ..Default::default()
+    };
+    let warnings = p.normalize();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(p.pinned.dials[&1].name, "Pin");
+    assert_eq!(p.pinned.dials[&2].name, "Other");
 }

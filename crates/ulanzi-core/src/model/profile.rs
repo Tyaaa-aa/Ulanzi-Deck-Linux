@@ -1,3 +1,4 @@
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -472,8 +473,16 @@ impl Profile {
         if !no_dials(&self.dials) {
             let old = std::mem::take(&mut self.dials);
             for (i, d) in old.into_iter().enumerate() {
-                if !d.is_empty() {
-                    self.pinned.dials.entry(i as u8).or_insert(d);
+                if d.is_empty() {
+                    continue;
+                }
+                match self.pinned.dials.entry(i as u8) {
+                    Entry::Vacant(e) => {
+                        e.insert(d);
+                    }
+                    Entry::Occupied(_) => warnings.push(format!(
+                        "dropped old profile-wide dial {i}: dial {i} is already pinned"
+                    )),
                 }
             }
         }
