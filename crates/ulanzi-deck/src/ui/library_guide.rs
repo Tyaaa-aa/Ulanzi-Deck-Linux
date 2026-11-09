@@ -18,7 +18,7 @@ use crate::ui::how_it_works::{BLUE, GREEN, ORANGE, cursor, phase, rounded};
 pub const STEPS: [(&str, &str); 3] = [
     (
         "Drag Dials onto the Deck",
-        "Drag a dial from the library onto a dial on the deck to use it on this page.",
+        "Drag a dial from the library onto the deck to use it on this page, or drag a deck dial down here to save it.",
     ),
     (
         "Swap and Pin",

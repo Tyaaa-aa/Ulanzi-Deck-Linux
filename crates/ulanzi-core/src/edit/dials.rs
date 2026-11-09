@@ -60,7 +60,7 @@ impl Editor {
         });
     }
 
-    /// Edit for This Page Only: a linked dial becomes its own copy of the library dial.
+    /// Make a Copy: a linked dial becomes its own copy of the library dial, named "<name> (copy)".
     pub fn own_copy_dial(&mut self, n: u8) {
         if !self.dial_free(n) {
             return;
@@ -71,7 +71,11 @@ impl Editor {
         }
         self.edit(|p, page| {
             if let Some(spot) = dial_spot(p, page, n) {
-                *spot = info.dial;
+                let name = match info.dial.name.trim() {
+                    "" => format!("Dial {} (copy)", n + 1),
+                    name => format!("{name} (copy)"),
+                };
+                *spot = Dial { name, ..info.dial };
             }
         });
     }
@@ -281,6 +285,45 @@ impl Editor {
         self.edit(|p, page| {
             if let Some(spot) = dial_spot(p, page, n) {
                 *spot = dial;
+            }
+        });
+    }
+
+    /// Copy library dial `id` (from the Library tray); it pastes as a link in this profile.
+    pub fn copy_library_dial(&mut self, id: Uuid) {
+        let Some(lib) = self.profile.library_dial(id) else {
+            return;
+        };
+        self.clipboard = Some(Clip::Dial {
+            dial: Dial {
+                library: Some(id),
+                ..lib.dial.clone()
+            },
+            profile: self.profile.id,
+        });
+    }
+
+    /// Paste over library dial `id`: it takes the copied dial's contents and keeps its id, so its
+    /// links show the pasted dial. A nameless dial keeps the old name.
+    pub fn paste_library_dial(&mut self, id: Uuid) {
+        let Some(Clip::Dial { dial, .. }) = self.clipboard.clone() else {
+            return;
+        };
+        let Some(old) = self.profile.library_dial(id) else {
+            return;
+        };
+        if dial.library == Some(id) {
+            return;
+        }
+        let name = match dial.name.trim() {
+            "" => old.dial.name.clone(),
+            n => n.to_string(),
+        };
+        self.set_library_dial(id, |d| {
+            *d = Dial {
+                library: None,
+                name,
+                ..dial
             }
         });
     }

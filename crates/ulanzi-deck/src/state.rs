@@ -116,6 +116,8 @@ pub struct AppState {
     pub selected_library: RefCell<Option<Uuid>>,
     /// The Library tray's page, kept while the app runs.
     pub tray_page: Cell<usize>,
+    /// The Library tray is open (deck dials can be dragged into it).
+    pub tray_open: Cell<bool>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -171,6 +173,7 @@ impl AppState {
             item_labels: RefCell::default(),
             selected_library: RefCell::new(None),
             tray_page: Cell::new(0),
+            tray_open: Cell::new(false),
             listeners: RefCell::new(Vec::new()),
         })
     }

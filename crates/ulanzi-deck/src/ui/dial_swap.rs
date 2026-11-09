@@ -1,5 +1,7 @@
 //! Dragging a dial left or right to swap it: which spot it lands on and how the others make room.
 //! The row draws its dials shifted by eased offsets; nothing moves in the layout until the drop.
+//! Dragged down while something below takes dials (the Library tray), a dial leaves the row as an
+//! ordinary drag and drop instead.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -211,6 +213,8 @@ struct Drag {
     end: Cell<[f64; 3]>,
     /// The pointer is up: the animation settles the dial, then the swap commits.
     released: Cell<bool>,
+    /// Dragged down out of the row: a drag and drop carries it, not the row.
+    out: Cell<bool>,
 }
 
 fn lerp(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
@@ -226,14 +230,17 @@ pub fn lands<K: PartialEq>(from: u8, to: u8, at_release: Option<&K>, now: &K) ->
 /// Let each of `dials` (the buttons in `row`'s columns) be dragged onto another spot. `place`
 /// names what the dials show (a page); a move is dropped if it changes while the dial settles.
 /// `allowed` says whether a dial may move from one spot to another (else it settles back home);
-/// `commit` makes the move once the dial has settled.
+/// `commit` makes the move once the dial has settled. While `can_leave` says so for it, a dial
+/// dragged downwards leaves the row as a drag and drop carrying [`canvas::deck_dial_payload`].
 pub fn attach<K: PartialEq + 'static>(
     row: &DialRow,
     dials: &[gtk::Button],
     place: impl Fn() -> K + 'static,
     allowed: impl Fn(u8, u8) -> bool + 'static,
     commit: impl Fn(u8, u8) + 'static,
+    can_leave: impl Fn(u8) -> bool + 'static,
 ) {
+    let can_leave = Rc::new(can_leave);
     let drag = Rc::new(Drag::default());
     let place = Rc::new(place);
     let released_on: Rc<RefCell<Option<K>>> = Rc::new(RefCell::new(None));
@@ -317,18 +324,25 @@ pub fn attach<K: PartialEq + 'static>(
                 drag.to.set(n);
                 drag.x.set(0.0);
                 drag.moving.set(false);
+                drag.out.set(false);
                 drag.pitch.set(row.pitch());
             });
         }
         {
             let (drag, row, dial, slide) = (drag.clone(), weak_row.clone(), dial.clone(), slide.clone());
+            let can_leave = can_leave.clone();
             g.connect_drag_update(move |g, dx, dy| {
                 let Some(row) = row.upgrade() else { return };
-                if drag.from.get() != Some(n) || drag.released.get() {
+                if drag.from.get() != Some(n) || drag.released.get() || drag.out.get() {
                     return;
                 }
                 if !drag.moving.get() {
                     if dx.hypot(dy) < START_PX {
+                        return;
+                    }
+                    // Downwards: left unclaimed, so the drag source below takes it.
+                    if dy > dx.abs() && can_leave(n) {
+                        drag.out.set(true);
                         return;
                     }
                     // A drag now, not a click.
@@ -364,6 +378,7 @@ pub fn attach<K: PartialEq + 'static>(
                 }
                 if !drag.moving.get() {
                     drag.from.set(None);
+                    drag.out.set(false);
                     return;
                 }
                 let pitch = drag.pitch.get();
@@ -389,7 +404,36 @@ pub fn attach<K: PartialEq + 'static>(
         }
         g.connect_cancel(move |_, _| finish(true));
         dial.add_controller(g);
+        dial.add_controller(leave_source(n, dial, &drag));
     }
+}
+
+/// The drag and drop a dial leaves the row with; it starts only once the row has let it go.
+fn leave_source(n: u8, dial: &gtk::Button, drag: &Rc<Drag>) -> gtk::DragSource {
+    let source = gtk::DragSource::builder()
+        .actions(gtk::gdk::DragAction::MOVE)
+        .build();
+    {
+        // Asked again on every move until it gives something.
+        let drag = drag.clone();
+        source.connect_prepare(move |_, _, _| {
+            drag.out.get().then(|| {
+                gtk::gdk::ContentProvider::for_value(&crate::ui::canvas::deck_dial_payload(n).to_value())
+            })
+        });
+    }
+    {
+        let dial = dial.clone();
+        source.connect_drag_begin(move |src, _| {
+            let icon = gtk::WidgetPaintable::new(Some(&dial));
+            src.set_icon(Some(&icon), dial.width() / 2, dial.height() / 2);
+        });
+    }
+    {
+        let drag = drag.clone();
+        source.connect_drag_end(move |_, _, _| drag.out.set(false));
+    }
+    source
 }
 
 #[cfg(test)]

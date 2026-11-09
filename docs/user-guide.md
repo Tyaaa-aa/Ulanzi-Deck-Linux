@@ -270,7 +270,7 @@ The library is opt-in, like macros. A dial belongs to its page until you add it 
 - **Add to Library** (in the inspector or the right-click menu) moves the dial into the profile's dial
   library and links it on this page. A linked dial shows a link badge. Editing it changes every page
   that uses it, and the inspector shows how many pages that is.
-- **Edit for This Page Only** turns a linked dial back into this page's own copy.
+- **Make a Copy** turns a linked dial back into this page's own copy, named "<name> (copy)".
 - **Pin to Every Page** shows the dial at the same position on every page, folders included. Each page
   keeps its own dial underneath, and **Unpin** shows it again. The page you unpin on keeps the pinned
   dial if it has none of its own. A pinned dial has a pin badge. When this page has its own dial under
@@ -285,19 +285,24 @@ library dials with their name and where they are used (pinned, a number of pages
 
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.
+- Drag a dial from the deck down into the open tray to add it to the library, as **Add to Library** does.
+- Right-click a library dial for **Copy**, **Paste** and **Delete from Library**. A copied library dial
+  pastes onto the deck as a linked dial. Pasting onto a library dial replaces what it does everywhere it
+  is used.
 - **New Dial**, the last tile, creates an empty library dial.
 - **Delete from Library** in a library dial's inspector removes it from the library. Pages that used it get an empty
   dial, and a pin that used it is removed so each page shows its own dial again. Undo brings it all back.
 - More than four rows are split into pages. Use the arrow buttons or the dots under the grid.
 - An empty dial's inspector has **Open Library**.
-- **?** in the tray replays the guide. **Take the Library Tour** on the **All Set** page of Set Up Deck
+- Hover over **?** in the tray for a short hint; click it to replay the guide. The close button next
+  to it shuts the tray, as the header button does. **Take the Library Tour** on the **All Set** page of Set Up Deck
   starts it too.
 
 ### Moving and copying dials
 
 - Drag a dial onto another one to swap them. A pin travels with its dial, and when one of them is
   pinned every page's own dials swap too. Swapping is one Undo step.
-- Right-click a dial for **Copy**, **Paste**, **Add to Library** or **Edit for This Page Only**,
+- Right-click a dial for **Copy**, **Paste**, **Add to Library** or **Make a Copy**,
   **Pin to Every Page** or **Unpin**, **Rename** and **Remove from This Page**.
 - Ctrl+C, Ctrl+V and Delete work on the selected dial. Pasting in the same profile keeps a link; pasting
   into another profile makes an own copy.

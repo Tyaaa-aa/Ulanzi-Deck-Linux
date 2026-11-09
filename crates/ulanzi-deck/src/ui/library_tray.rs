@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 use ulanzi_core::model::{LibraryDial, Usage};
 use uuid::Uuid;
 
@@ -26,7 +26,8 @@ const GAP: f64 = 16.0;
 const ROW_GAP: i32 = 8;
 const ANIM_MS: u32 = 250;
 
-const HINT: &str = "Drag a dial onto the deck to place it · click one to edit it";
+const HINT: &str = "Drag a dial onto the deck to place it, or a dial from the deck down here to add it. \
+Click one to edit it, right-click to copy, paste or delete it. Click ? for the tour.";
 
 /// How many pages the tray has, and how many rows the shown page needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,8 @@ pub enum Tab {
 }
 
 type OnToggle = Box<dyn Fn(bool)>;
+/// What a library dial's menu item does, given the dial's tile.
+type TileAction = Box<dyn Fn(&State, &gtk::Button)>;
 
 /// A library dial's tile, kept so edits update it in place.
 struct Item {
@@ -123,24 +126,30 @@ impl Tray {
         stage.add_overlay(deck);
         stage.set_measure_overlay(deck, true);
 
-        let hint = gtk::Label::builder()
-            .label(HINT)
-            .css_classes(["tray-hint"])
+        let title = gtk::Label::builder()
+            .label("Library")
+            .css_classes(["tray-title"])
             .hexpand(true)
-            .xalign(1.0)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .xalign(0.0)
             .build();
+        // The hint shows only on hovering ?.
         let help = gtk::Button::builder()
             .label("?")
             .css_classes(["circular", "tray-help"])
-            .tooltip_text("How the Library Works")
+            .tooltip_text(HINT)
             .action_name("win.library-guide")
             .valign(gtk::Align::Center)
             .build();
-        let header = gtk::Box::builder().spacing(10).margin_bottom(6).build();
-        header.append(&hint);
+        let shut = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .css_classes(["circular", "flat", "tray-help"])
+            .tooltip_text("Close Library")
+            .valign(gtk::Align::Center)
+            .build();
+        let header = gtk::Box::builder().spacing(6).margin_bottom(6).build();
+        header.append(&title);
         header.append(&help);
-
+        header.append(&shut);
         let sizer = gtk::Box::builder().hexpand(true).build();
         let pages = gtk::Overlay::builder()
             .child(&sizer)
@@ -218,6 +227,15 @@ impl Tray {
             on_toggle: RefCell::default(),
         });
         *tray.me.borrow_mut() = Rc::downgrade(&tray);
+        {
+            let me = Rc::downgrade(&tray);
+            shut.connect_clicked(move |_| {
+                if let Some(t) = me.upgrade() {
+                    t.close();
+                }
+            });
+        }
+        tray.accept_deck_dials();
         tray.wire();
         tray
     }
@@ -240,6 +258,7 @@ impl Tray {
         if self.open.replace(true) {
             return;
         }
+        self.state.tray_open.set(true);
         if self.stale.get() {
             self.refresh();
         }
@@ -273,6 +292,7 @@ impl Tray {
         if !self.open.replace(false) {
             return;
         }
+        self.state.tray_open.set(false);
         self.dial_row.set_marked(None);
         self.run_grow(0.0);
         self.toggled(false);
@@ -286,6 +306,42 @@ impl Tray {
     /// Smaller dials for narrow windows, as on the deck.
     pub fn set_compact(&self, compact: bool) {
         canvas::set_class(&self.content, "compact", compact);
+    }
+
+    /// A dial dragged down from the deck into the tray is added to the library.
+    fn accept_deck_dials(&self) {
+        // Only the deck's dials leave their row as a move; library tiles are copied.
+        let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
+        {
+            let content = self.content.clone();
+            target.connect_enter(move |_, _, _| {
+                content.add_css_class("drop-target");
+                gdk::DragAction::MOVE
+            });
+        }
+        {
+            let content = self.content.clone();
+            target.connect_leave(move |_| content.remove_css_class("drop-target"));
+        }
+        let me = self.me.borrow().clone();
+        target.connect_drop(move |_, value, _, _| {
+            let Some(t) = me.upgrade() else { return false };
+            t.content.remove_css_class("drop-target");
+            let Some(canvas::Payload::DeckDial(n)) =
+                value.get::<String>().ok().and_then(|s| canvas::parse_payload(&s))
+            else {
+                return false;
+            };
+            let mut added = None;
+            t.state.edit(|e| added = e.add_dial_to_library(n));
+            if added.is_some() {
+                // Shown where it landed: the last page.
+                let items = t.state.editor.borrow().profile().dial_library.len();
+                t.go(items.saturating_sub(1) / PER_PAGE);
+            }
+            added.is_some()
+        });
+        self.frame.add_controller(target);
     }
 
     fn toggled(&self, open: bool) {
@@ -676,6 +732,7 @@ impl Tray {
             });
         }
         button.add_controller(source);
+        self.tile_menu(&button, id);
         let item = Item {
             id,
             disc,
@@ -687,6 +744,47 @@ impl Tray {
         fill(&item, lib, usage);
         self.items.borrow_mut().push(item);
         button
+    }
+
+    /// Right-click a library dial: Copy, Paste (greyed out with nothing copied) and Delete.
+    fn tile_menu(&self, button: &gtk::Button, id: Uuid) {
+        let actions = gio::SimpleActionGroup::new();
+        let add = |name: &str, f: TileAction| {
+            let a = gio::SimpleAction::new(name, None);
+            let (state, button) = (self.state.clone(), button.downgrade());
+            a.connect_activate(move |_, _| {
+                if let Some(b) = button.upgrade() {
+                    f(&state, &b);
+                }
+            });
+            actions.add_action(&a);
+        };
+        add(
+            "copy",
+            Box::new(move |s, _| s.editor.borrow_mut().copy_library_dial(id)),
+        );
+        add(
+            "paste",
+            Box::new(move |s, _| s.edit(|e| e.paste_library_dial(id))),
+        );
+        add(
+            "delete",
+            Box::new(move |s, b| crate::ui::dial_inspector::delete_library_dial(s, id, b)),
+        );
+        button.insert_action_group("tile", Some(&actions));
+        let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        pop.set_has_arrow(true);
+        pop.set_parent(button);
+        let right = gtk::GestureClick::builder().button(3).build();
+        let state = self.state.clone();
+        right.connect_pressed(move |g, _, x, y| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            state.select_library(id);
+            pop.set_menu_model(Some(&tile_menu(state.editor.borrow().has_dial_clip())));
+            pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            pop.popup();
+        });
+        button.add_controller(right);
     }
 
     /// + New Dial: a blank library dial, picked and in view.
@@ -720,6 +818,23 @@ impl Tray {
     }
 }
 
+/// A library dial's right-click menu; Paste is greyed out without a copied dial.
+fn tile_menu(can_paste: bool) -> gio::Menu {
+    let m = gio::Menu::new();
+    let clip = gio::Menu::new();
+    clip.append(Some("Copy"), Some("tile.copy"));
+    // An action nobody installs leaves the item insensitive.
+    clip.append(
+        Some("Paste"),
+        Some(if can_paste { "tile.paste" } else { "tile.no-paste" }),
+    );
+    m.append_section(None, &clip);
+    let gone = gio::Menu::new();
+    gone.append(Some("Delete from Library"), Some("tile.delete"));
+    m.append_section(None, &gone);
+    m
+}
+
 /// Show `lib` and where it is used on its tile.
 fn fill(item: &Item, lib: &LibraryDial, usage: Usage) {
     item.face.show(&lib.dial);
@@ -747,6 +862,23 @@ fn eased(w: &impl IsA<gtk::Widget>, target: &impl IsA<adw::AnimationTarget>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tile_menu_greys_out_paste_without_a_copy() {
+        let action = |m: &gio::Menu, section: i32, i: i32| {
+            let s = m
+                .item_link(section, "section")
+                .expect("section")
+                .downcast::<gio::Menu>()
+                .expect("menu");
+            s.item_attribute_value(i, "action", None)
+                .and_then(|v| v.get::<String>())
+                .expect("action")
+        };
+        assert_eq!(action(&tile_menu(true), 0, 1), "tile.paste");
+        assert_eq!(action(&tile_menu(false), 0, 1), "tile.no-paste");
+        assert_eq!(action(&tile_menu(false), 1, 0), "tile.delete");
+    }
 
     #[test]
     fn layout_fits_rows() {

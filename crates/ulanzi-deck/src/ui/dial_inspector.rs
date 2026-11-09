@@ -8,6 +8,7 @@ use ulanzi_core::edit::{Editor, Slot};
 use ulanzi_core::model::*;
 use uuid::Uuid;
 
+use crate::state::State;
 use crate::ui::action_editor::{self, How};
 use crate::ui::inspector::{
     C, Section, View, Write, padded, page_name, slot_expander, slot_rows, title_block,
@@ -300,11 +301,7 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
 
     let mut rows: Vec<Button> = Vec::new();
     if info.library.is_some() {
-        rows.push((
-            "Edit for This Page Only",
-            false,
-            Box::new(move |e| e.own_copy_dial(d)),
-        ));
+        rows.push(("Make a Copy", false, Box::new(move |e| e.own_copy_dial(d))));
     } else if !info.dial.is_empty() {
         rows.push((
             "Add to Library",
@@ -558,31 +555,8 @@ pub(super) fn library_view(ctx: &C, content: &gtk::Box, id: Uuid) -> View {
     let delete = adw::ButtonRow::builder().title("Delete from Library").build();
     delete.add_css_class("destructive-action");
     {
-        let (state, name) = (state.clone(), shown_name(0, &dial));
-        delete.connect_activated(move |row| {
-            let gone = {
-                let state = state.clone();
-                move || {
-                    state.edit(|e| e.delete_library_dial(id));
-                    state.select(|s| s.clear());
-                }
-            };
-            let Some(body) = delete_body(usage) else {
-                gone();
-                return;
-            };
-            let alert = adw::AlertDialog::builder()
-                .heading(format!("Delete “{name}”?"))
-                .body(body)
-                .default_response("cancel")
-                .close_response("cancel")
-                .build();
-            alert.add_response("cancel", "Cancel");
-            alert.add_response("delete", "Delete");
-            alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-            alert.connect_response(Some("delete"), move |_, _| gone());
-            alert.present(Some(row));
-        });
+        let state = state.clone();
+        delete.connect_activated(move |row| delete_library_dial(&state, id, row));
     }
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -591,6 +565,38 @@ pub(super) fn library_view(ctx: &C, content: &gtk::Box, id: Uuid) -> View {
     list.append(&delete);
     page.append(&list);
     view
+}
+
+/// Delete library dial `id`, asking first (over `parent`) when a page uses it.
+pub(crate) fn delete_library_dial(state: &State, id: Uuid, parent: &impl IsA<gtk::Widget>) {
+    let (name, usage) = {
+        let e = state.editor.borrow();
+        let p = e.profile();
+        let Some(lib) = p.library_dial(id) else { return };
+        (shown_name(0, &lib.dial), p.dial_usage(id))
+    };
+    let gone = {
+        let state = state.clone();
+        move || {
+            state.edit(|e| e.delete_library_dial(id));
+            state.select(|s| s.clear());
+        }
+    };
+    let Some(body) = delete_body(usage) else {
+        gone();
+        return;
+    };
+    let alert = adw::AlertDialog::builder()
+        .heading(format!("Delete “{name}”?"))
+        .body(body)
+        .default_response("cancel")
+        .close_response("cancel")
+        .build();
+    alert.add_response("cancel", "Cancel");
+    alert.add_response("delete", "Delete");
+    alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+    alert.connect_response(Some("delete"), move |_, _| gone());
+    alert.present(Some(parent));
 }
 
 pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {

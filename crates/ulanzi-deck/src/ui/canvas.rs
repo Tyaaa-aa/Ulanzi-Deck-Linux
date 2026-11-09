@@ -68,6 +68,8 @@ pub enum Payload {
     File(std::path::PathBuf),
     /// A dial from the Library tray.
     LibraryDial(uuid::Uuid),
+    /// Dial `n` of the deck, dragged out of its row (into the Library tray).
+    DeckDial(u8),
 }
 
 pub fn action_payload(a: &ulanzi_core::model::Action) -> String {
@@ -78,9 +80,16 @@ pub fn library_dial_payload(id: uuid::Uuid) -> String {
     format!("ulanzi-library-dial:{id}")
 }
 
+pub fn deck_dial_payload(n: u8) -> String {
+    format!("ulanzi-deck-dial:{n}")
+}
+
 pub fn parse_payload(s: &str) -> Option<Payload> {
     if let Some(n) = s.strip_prefix("ulanzi-key:") {
         return n.parse().ok().map(Payload::Key);
+    }
+    if let Some(n) = s.strip_prefix("ulanzi-deck-dial:") {
+        return n.parse().ok().map(Payload::DeckDial);
     }
     if let Some(id) = s.strip_prefix("ulanzi-library-dial:") {
         return id.parse().ok().map(Payload::LibraryDial);
@@ -332,13 +341,18 @@ pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Textu
 }
 
 /// A round badge on a corner of a dial or small button: `link` or `pin`, hidden until shown.
+/// Hovering it says what it means.
 pub(crate) fn slot_badge(kind: &str, h: gtk::Align) -> gtk::Image {
+    let tip = match kind {
+        "link" => "From the Library: editing it changes it everywhere it is used",
+        _ => "Pinned: shows on every page",
+    };
     let img = gtk::Image::builder()
         .pixel_size(10)
         .css_classes(["slot-badge", kind])
         .halign(h)
         .valign(gtk::Align::Start)
-        .can_target(false)
+        .tooltip_text(tip)
         .visible(false)
         .build();
     if let Some(t) = lucide_icon(kind, 10, ulanzi_core::Color::WHITE) {
@@ -1104,7 +1118,7 @@ pub fn build(state: &State) -> Canvas {
                 state.edit(|e| e.swap(from, n));
                 state.select(|s| s.click(Slot::Key(n)));
             }
-            Payload::Key(_) | Payload::LibraryDial(_) => {}
+            Payload::Key(_) | Payload::LibraryDial(_) | Payload::DeckDial(_) => {}
             Payload::Action(a) => {
                 state.edit(|e| e.drop_action(Slot::Key(n), a));
                 state.select(|s| s.click(Slot::Key(n)));
@@ -1208,9 +1222,21 @@ pub fn build(state: &State) -> Canvas {
                 let e = allowed_state.editor.borrow();
                 !e.is_foreign(Slot::Dial(from)) && !e.is_foreign(Slot::Dial(to))
             },
-            move |from, to| {
-                state.edit(|e| e.swap_dials(from, to));
-                state.select(|s| s.click(Slot::Dial(to)));
+            {
+                let state = state.clone();
+                move |from, to| {
+                    state.edit(|e| e.swap_dials(from, to));
+                    state.select(|s| s.click(Slot::Dial(to)));
+                }
+            },
+            // Into the open Library tray: a dial of this page's own, not linked already.
+            move |n| {
+                let e = state.editor.borrow();
+                let info = e.dial_info(n);
+                state.tray_open.get()
+                    && !e.is_foreign(Slot::Dial(n))
+                    && info.library.is_none()
+                    && !info.dial.is_empty()
             },
         );
     }
@@ -1730,7 +1756,7 @@ fn dial_menu(info: &ulanzi_core::model::DialInfo, can_paste: bool) -> gio::Menu 
     let paste = if can_paste { "dial.paste" } else { "dial.no-paste" };
     item(&clip, "Paste", paste, Some("paste"));
     if info.library.is_some() {
-        clip.append(Some("Edit for This Page Only"), Some("dial.own-copy"));
+        clip.append(Some("Make a Copy"), Some("dial.own-copy"));
     } else {
         clip.append(Some("Add to Library"), Some("dial.add-to-library"));
     }
@@ -1782,7 +1808,7 @@ mod tests {
         let m = dial_menu(&linked, true);
         crate::ui::assert_menu_labels(&m);
         let l = labels(&m);
-        assert!(l.contains(&"Edit for This Page Only".into()));
+        assert!(l.contains(&"Make a Copy".into()));
         assert!(l.contains(&"Unpin".into()));
         assert!(!l.contains(&"Add to Library".into()));
         // A pinned spot shows the pin, not this page's own dial.
@@ -1926,6 +1952,7 @@ mod tests {
     #[test]
     fn drag_payloads_roundtrip() {
         assert_eq!(parse_payload("ulanzi-key:7"), Some(Payload::Key(7)));
+        assert_eq!(parse_payload(&deck_dial_payload(2)), Some(Payload::DeckDial(2)));
         let a = ulanzi_core::model::Action::NextPage;
         assert_eq!(parse_payload(&action_payload(&a)), Some(Payload::Action(a)));
         assert_eq!(parse_payload("hello"), None);

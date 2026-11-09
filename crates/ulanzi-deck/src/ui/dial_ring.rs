@@ -29,15 +29,19 @@ pub fn glow_alpha(t: f64) -> f64 {
     1.0 - ease_out(t)
 }
 
+/// Where the arc starts: the top of the dial.
+const TOP: f64 = -PI / 2.0;
+/// How opaque the arc is at its start; it fades to nothing at its moving end.
+const ARC_ALPHA: f64 = 0.55;
+
 /// The direction arc at `t` as (start, end) angles in radians (Cairo's: clockwise from 3 o'clock),
-/// growing over the top of the dial; `None` for a press.
+/// growing from the top of the dial the way it turned; `None` for a press.
 pub fn arc(m: DialMove, t: f64) -> Option<(f64, f64)> {
     let grown = SWEEP * ease_out(t);
     match m {
         DialMove::Press => None,
-        // From upper left towards the right, and back.
-        DialMove::Right => Some((-0.75 * PI, -0.75 * PI + grown)),
-        DialMove::Left => Some((-0.25 * PI, -0.25 * PI - grown)),
+        DialMove::Right => Some((TOP, TOP + grown)),
+        DialMove::Left => Some((TOP, TOP - grown)),
     }
 }
 
@@ -121,38 +125,28 @@ fn draw(cr: &gtk::cairo::Context, cx: f64, cy: f64, rim: f64, m: DialMove, t: f6
         let _ = cr.stroke();
     }
     let Some((start, end)) = arc(m, t) else { return };
-    // Nothing yet: a round cap alone would leave a dot.
+    // Not grown yet.
     if (end - start).abs() < 0.01 {
         return;
     }
     let out = rim + 5.0;
-    cr.set_line_cap(gtk::cairo::LineCap::Round);
     cr.set_line_width(2.5);
-    // Lighter than the ring, and fading more slowly so the grown arc can be seen.
-    cr.set_source_rgba(
-        0.6 + r * 0.4,
-        0.6 + g * 0.4,
-        0.6 + b * 0.4,
-        1.0 - t.clamp(0.0, 1.0),
-    );
-    if end > start {
-        cr.arc(cx, cy, out, start, end);
-    } else {
-        cr.arc_negative(cx, cy, out, start, end);
+    // Lighter than the ring, fading more slowly so the grown arc can be seen, and from full at
+    // its start to nothing at its moving end (Cairo has no gradient along an arc: short pieces).
+    let (r, g, b) = (0.6 + r * 0.4, 0.6 + g * 0.4, 0.6 + b * 0.4);
+    let fade = ARC_ALPHA * (1.0 - t.clamp(0.0, 1.0));
+    const PIECES: usize = 32;
+    for i in 0..PIECES {
+        let (a0, a1) = (i as f64 / PIECES as f64, (i + 1) as f64 / PIECES as f64);
+        let (s0, s1) = (start + (end - start) * a0, start + (end - start) * a1);
+        cr.set_source_rgba(r, g, b, fade * (1.0 - a0));
+        if s1 > s0 {
+            cr.arc(cx, cy, out, s0, s1);
+        } else {
+            cr.arc_negative(cx, cy, out, s0, s1);
+        }
+        let _ = cr.stroke();
     }
-    let _ = cr.stroke();
-    // An arrowhead at the moving end, pointing along the turn.
-    let dir = if end > start { 1.0 } else { -1.0 };
-    let (px, py) = (cx + out * end.cos(), cy + out * end.sin());
-    // The tangent in the direction of travel.
-    let (tx, ty) = (-end.sin() * dir, end.cos() * dir);
-    let (nx, ny) = (end.cos(), end.sin());
-    // The head grows in with the first bit of the sweep.
-    let s = 4.0 * ((end - start).abs() / 0.3).min(1.0);
-    cr.move_to(px - tx * s + nx * s, py - ty * s + ny * s);
-    cr.line_to(px, py);
-    cr.line_to(px - tx * s - nx * s, py - ty * s - ny * s);
-    let _ = cr.stroke();
 }
 
 #[cfg(test)]
@@ -178,6 +172,14 @@ mod tests {
         for m in [DialMove::Right, DialMove::Left] {
             let (s, e) = arc(m, 1.0).expect("arc");
             assert!(((e - s).abs() - PI / 2.0).abs() < 1e-9, "{m:?}");
+        }
+    }
+
+    #[test]
+    fn arcs_start_at_the_top() {
+        for m in [DialMove::Right, DialMove::Left] {
+            let (s, _) = arc(m, 0.5).expect("arc");
+            assert!((s + PI / 2.0).abs() < 1e-9, "{m:?}");
         }
     }
 
