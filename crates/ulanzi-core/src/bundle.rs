@@ -240,7 +240,11 @@ pub fn export_with(
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         includes_settings: include_settings,
-        includes_library: include_library,
+        // Only when there is a library to import, so the import switch shows only then.
+        includes_library: include_library
+            && out
+                .iter()
+                .any(|bp| !bp.profile.dial_library.is_empty() || !bp.profile.foreign_library.is_empty()),
         looks: out
             .iter()
             .map(|bp| (bp.profile.id.to_string(), store.profile_look(bp.profile.id)))

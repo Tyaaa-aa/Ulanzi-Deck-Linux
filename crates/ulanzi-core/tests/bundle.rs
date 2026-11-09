@@ -538,3 +538,17 @@ fn commands_inside_newer_library_dials_are_shown_before_import() {
     assert_eq!(b.profiles[0].profile.foreign_library.len(), 1);
     assert!(ulanzi_core::bundle::commands(&b).contains(&"rm -rf y".to_string()));
 }
+
+#[test]
+fn includes_library_only_when_a_profile_has_one() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let plain = profile_with_icon(&s, "Plain");
+    let b = read(&export(&s, &[plain.id], false, true).expect("export")).expect("read");
+    assert!(!b.manifest.includes_library);
+    let (linked, _) = library_profile(&s);
+    let b = read(&export(&s, &[plain.id, linked.id], false, true).expect("export")).expect("read");
+    assert!(b.manifest.includes_library);
+    let b = read(&export(&s, &[linked.id], false, false).expect("export")).expect("read");
+    assert!(!b.manifest.includes_library);
+}
