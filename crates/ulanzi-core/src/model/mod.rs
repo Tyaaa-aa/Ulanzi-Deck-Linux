@@ -2,6 +2,7 @@
 
 mod action;
 pub mod foreign;
+mod library;
 mod look;
 mod macros;
 mod profile;
@@ -10,6 +11,7 @@ mod settings;
 
 pub use action::*;
 pub use foreign::{ForeignSlot, Slot};
+pub use library::*;
 pub use look::*;
 pub use macros::*;
 pub use profile::*;

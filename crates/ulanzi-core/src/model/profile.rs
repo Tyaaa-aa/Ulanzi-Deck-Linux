@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::foreign::ForeignSlot;
-use super::{Action, Background, KeyLook, MediaTakeover, Rotation, Widget};
+use super::{Action, Background, KeyLook, LibraryDial, MediaTakeover, Pinned, Rotation, Widget};
 use crate::Color;
 
 /// The file format version written. 2 (Ulanzi Deck 2.1): OBS lives in the OBS plugin; older
@@ -34,6 +34,12 @@ pub struct Profile {
     pub r#match: MatchRule,
     #[serde(default)]
     pub small_buttons: SmallButtons,
+    /// Dials kept here and placed on pages by link.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dial_library: Vec<LibraryDial>,
+    /// Dials that are the same on every page.
+    #[serde(default, skip_serializing_if = "Pinned::is_empty")]
+    pub pinned: Pinned,
     /// Before dials were per page they lived here; kept only to read old files (moved onto every
     /// page by [`Profile::normalize`]).
     #[serde(default, skip_serializing_if = "no_dials")]
@@ -65,6 +71,12 @@ pub struct SmallButtons {
     pub right: Option<Action>,
 }
 
+impl SmallButtons {
+    pub fn is_empty(&self) -> bool {
+        self.left.is_none() && self.right.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Dial {
@@ -76,6 +88,12 @@ pub struct Dial {
     pub right: Option<Action>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hold: Option<Action>,
+    /// Shown in the app; library dials always have one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The library dial this one follows; its own actions and name are then ignored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<Uuid>,
 }
 
 /// `Custom` holds actions that can carry plugin params, which makes it larger than the others; one per profile, so boxing buys nothing.
@@ -187,6 +205,9 @@ pub struct Page {
     /// What the three dials do on this page.
     #[serde(default, skip_serializing_if = "no_dials")]
     pub dials: [Dial; 3],
+    /// This page's own small buttons, used where the profile pins none.
+    #[serde(default, skip_serializing_if = "SmallButtons::is_empty")]
+    pub small_buttons: SmallButtons,
 }
 
 impl Page {
@@ -206,6 +227,7 @@ impl Page {
             kind: PageKind::Page,
             keys: BTreeMap::new(),
             dials: Default::default(),
+            small_buttons: SmallButtons::default(),
         }
     }
 }
@@ -328,6 +350,18 @@ impl Profile {
                     add(&mut out, a);
                 }
             }
+            add(&mut out, &page.small_buttons.left);
+            add(&mut out, &page.small_buttons.right);
+        }
+        for d in self
+            .dial_library
+            .iter()
+            .map(|l| &l.dial)
+            .chain(self.pinned.dials.values())
+        {
+            for a in [&d.press, &d.left, &d.right, &d.hold] {
+                add(&mut out, a);
+            }
         }
         add(&mut out, &self.small_buttons.left);
         add(&mut out, &self.small_buttons.right);
@@ -410,6 +444,8 @@ impl Profile {
                 left: Some(Action::PrevPage),
                 right: Some(Action::NextPage),
             },
+            dial_library: Vec::new(),
+            pinned: Pinned::default(),
             dials: Default::default(),
             screen: ScreenConfig::default(),
             pages: vec![Page::new("Main")],

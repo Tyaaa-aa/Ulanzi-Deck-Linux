@@ -254,6 +254,7 @@ fn volume_dial(target: AudioTarget) -> Dial {
         press: Some(volume(target.clone(), VolumeOp::Mute)),
         right: Some(volume(target, VolumeOp::Up)),
         hold: None,
+        ..Default::default()
     }
 }
 
@@ -269,6 +270,7 @@ fn brightness_dial() -> Dial {
             op: BrightnessOp::Up { step: 10 },
         }),
         hold: Some(Action::SleepNow),
+        ..Default::default()
     }
 }
 
@@ -278,6 +280,7 @@ fn track_dial() -> Dial {
         press: Some(media(MediaControl::PlayPause)),
         right: Some(media(MediaControl::Next)),
         hold: None,
+        ..Default::default()
     }
 }
 
@@ -431,18 +434,21 @@ fn video_editing() -> Profile {
                 press: Some(sc("space")),
                 right: Some(sc("right")),
                 hold: Some(sc("home")),
+                ..Default::default()
             },
             Dial {
                 left: Some(sc("up")),
                 press: Some(sc("ctrl+z")),
                 right: Some(sc("down")),
                 hold: None,
+                ..Default::default()
             },
             Dial {
                 left: Some(sc("minus")),
                 press: None,
                 right: Some(sc("equal")),
                 hold: None,
+                ..Default::default()
             },
         ],
         ScreenConfig::FirmwareClock {
