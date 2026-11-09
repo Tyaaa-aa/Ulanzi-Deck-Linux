@@ -251,11 +251,17 @@ impl Tray {
         // The first time, the guide follows once the tray has grown.
         if crate::ui::library_guide::should_show() {
             crate::ui::library_guide::mark_shown();
-            let (state, stage) = (self.state.clone(), self.stage.downgrade());
+            let (state, stage, me) = (
+                self.state.clone(),
+                self.stage.downgrade(),
+                self.me.borrow().clone(),
+            );
             glib::timeout_add_local_once(
                 std::time::Duration::from_millis(ANIM_MS as u64 + 100),
                 move || {
-                    if let Some(stage) = stage.upgrade() {
+                    // Not over a tray that was shut meanwhile.
+                    let still_open = me.upgrade().is_some_and(|t| t.is_open());
+                    if let Some(stage) = stage.upgrade().filter(|_| still_open) {
                         crate::ui::library_guide::open(&state, &stage);
                     }
                 },

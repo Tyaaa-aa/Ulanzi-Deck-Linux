@@ -1,7 +1,7 @@
 //! Dragging a dial left or right to swap it: which spot it lands on and how the others make room.
 //! The row draws its dials shifted by eased offsets; nothing moves in the layout until the drop.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -217,16 +217,26 @@ fn lerp(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
 }
 
-/// Let each of `dials` (the buttons in `row`'s columns) be dragged onto another spot. `allowed`
-/// says whether a dial may move from one spot to another (else it settles back home); `commit`
-/// makes the move once the dial has settled.
-pub fn attach(
+/// Whether a swap from `from` to `to` lands: another spot, and the dials still show what they
+/// showed when the pointer went up (`at_release` is `place` then, `now` is `place` now).
+pub fn lands<K: PartialEq>(from: u8, to: u8, at_release: Option<&K>, now: &K) -> bool {
+    to != from && at_release == Some(now)
+}
+
+/// Let each of `dials` (the buttons in `row`'s columns) be dragged onto another spot. `place`
+/// names what the dials show (a page); a move is dropped if it changes while the dial settles.
+/// `allowed` says whether a dial may move from one spot to another (else it settles back home);
+/// `commit` makes the move once the dial has settled.
+pub fn attach<K: PartialEq + 'static>(
     row: &DialRow,
     dials: &[gtk::Button],
+    place: impl Fn() -> K + 'static,
     allowed: impl Fn(u8, u8) -> bool + 'static,
     commit: impl Fn(u8, u8) + 'static,
 ) {
     let drag = Rc::new(Drag::default());
+    let place = Rc::new(place);
+    let released_on: Rc<RefCell<Option<K>>> = Rc::new(RefCell::new(None));
     let weak_row = row.downgrade();
     let moves = {
         let (drag, row) = (drag.clone(), weak_row.clone());
@@ -266,6 +276,7 @@ pub fn attach(
     let allowed = Rc::new(allowed);
     {
         let (drag, row, dials) = (drag.clone(), weak_row.clone(), dials.clone());
+        let (place, released_on) = (place.clone(), released_on.clone());
         anim.connect_done(move |_| {
             if !drag.released.get() {
                 return;
@@ -276,7 +287,7 @@ pub fn attach(
             drag.released.set(false);
             drag.moving.set(false);
             let to = drag.to.get();
-            if to != from {
+            if lands(from, to, released_on.take().as_ref(), &place()) {
                 commit(from, to);
             }
             // The dials now show their new contents in place, so nothing jumps.
@@ -346,6 +357,7 @@ pub fn attach(
         let finish = {
             let (drag, row, slide, allowed) =
                 (drag.clone(), weak_row.clone(), slide.clone(), allowed.clone());
+            let (place, released_on) = (place.clone(), released_on.clone());
             Rc::new(move |cancelled: bool| {
                 if drag.from.get() != Some(n) || drag.released.get() {
                     return;
@@ -363,6 +375,7 @@ pub fn attach(
                 drag.to.set(to);
                 let mut end = offsets(n, to, pitch);
                 end[n as usize] = (to as f64 - n as f64) * pitch;
+                *released_on.borrow_mut() = Some(place());
                 drag.released.set(true);
                 if let Some(row) = row.upgrade() {
                     row.set_drop(None);
@@ -392,6 +405,15 @@ mod tests {
         assert_eq!(target(2, 9.0 * p, p), 2);
         assert_eq!(target(1, 0.4 * p, p), 1);
         assert_eq!(target(1, 0.0, 0.0), 1);
+    }
+
+    #[test]
+    fn a_swap_lands_only_on_the_page_it_was_dropped_on() {
+        assert!(lands(0, 2, Some(&1usize), &1));
+        assert!(!lands(0, 0, Some(&1usize), &1));
+        // The page changed during the settle.
+        assert!(!lands(0, 2, Some(&1usize), &2));
+        assert!(!lands(0, 2, None, &1usize));
     }
 
     #[test]

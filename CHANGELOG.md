@@ -16,6 +16,7 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Pinned dials and small buttons**: **Pin to Every Page** shows a dial or small button at its position on
   every page, **Unpin** shows the page's own again (the page you unpin on keeps the pinned one if it has
   none). Deleting a library dial removes a pin that used it.
+- A pinned dial or small button's inspector says when the page has its own one hidden under the pin.
 - Drag a dial onto another to swap them; right-click menu, Ctrl+C, Ctrl+V and Delete for dials; dial
   names; link and pin badges.
 - Turning a dial lights its ring and sweeps an arc in the direction of the turn.

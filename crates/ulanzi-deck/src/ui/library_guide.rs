@@ -70,6 +70,16 @@ pub fn mark_shown() {
     }
 }
 
+thread_local! {
+    /// The guide on screen, so a second one never opens over it.
+    static SHOWING: std::cell::RefCell<glib::WeakRef<adw::Dialog>> = Default::default();
+}
+
+/// The guide on screen, if any.
+pub fn showing() -> Option<adw::Dialog> {
+    SHOWING.with(|s| s.borrow().upgrade())
+}
+
 /// Open the guide over `parent` at its first step.
 pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
     open_at(state, parent, 0);
@@ -77,6 +87,9 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
 
 /// Open the guide at step `step` (0-based; screenshots).
 pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
+    if showing().is_some() {
+        return;
+    }
     if !HELD_BACK.load(Ordering::Relaxed) {
         mark_shown();
     }
@@ -85,6 +98,8 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
         .content_width(480)
         .content_height(520)
         .build();
+    SHOWING.with(|s| s.borrow().set(Some(&dialog)));
+    dialog.connect_closed(|_| SHOWING.with(|s| s.borrow().set(None)));
     let carousel = adw::Carousel::builder()
         .allow_long_swipes(false)
         .vexpand(true)
@@ -699,6 +714,32 @@ mod tests {
         for (_, sentence) in STEPS {
             assert!(sentence.ends_with('.'), "{sentence:?}");
         }
+    }
+
+    #[test]
+    fn only_one_guide_opens_at_a_time() {
+        crate::ui::with_gtk(|| {
+            let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default(
+                "Default",
+                ulanzi_core::model::Model::D200X,
+            ));
+            hold_back();
+            let win = adw::Window::new();
+            win.present();
+            assert!(showing().is_none());
+            open(&state, &win);
+            let first = showing().expect("open");
+            open(&state, &win);
+            assert_eq!(showing(), Some(first.clone()));
+            first.force_close();
+            let main = glib::MainContext::default();
+            let start = std::time::Instant::now();
+            while showing().is_some() && start.elapsed() < std::time::Duration::from_secs(3) {
+                main.iteration(false);
+            }
+            assert!(showing().is_none());
+            win.destroy();
+        });
     }
 
     #[test]

@@ -273,8 +273,8 @@ The library is opt-in, like macros. A dial belongs to its page until you add it 
 - **Edit for This Page Only** turns a linked dial back into this page's own copy.
 - **Pin to Every Page** shows the dial at the same position on every page, folders included. Each page
   keeps its own dial underneath, and **Unpin** shows it again. The page you unpin on keeps the pinned
-  dial if it has none of its own. A pinned dial has a pin badge, and a page's
-  own dial that a pin covers is marked as covered in the inspector. A dial can be both linked and pinned.
+  dial if it has none of its own. A pinned dial has a pin badge. When this page has its own dial under
+  the pin, the inspector says so under its buttons; unpin to use it. A dial can be both linked and pinned.
 - **Remove from This Page** clears the dial. Delete does the same on a selected dial, except one that is
   pinned.
 
@@ -308,7 +308,8 @@ The two small buttons next to the dials have one action each. They are drawn wit
 and colour, and the action's name is the tooltip. They belong to a page: each page has its own pair.
 **Pin to Every Page** and **Unpin** work as for dials, and a side without a pin shows the page's own
 button. Small buttons from earlier versions load as pinned, so nothing changes until you unpin one; the
-page you unpin on keeps the button. There is nothing to pin on an empty dial or small button.
+page you unpin on keeps the button. There is nothing to pin on an empty dial or small button. As with
+dials, the inspector says when this page has its own button under a pin.
 
 On its first start, 2.5 backs up your profiles (see [Templates, sharing and backups](#templates-sharing-and-backups)) and pins each dial that is the same on every
 page of a profile. Each page keeps its copy underneath, so unpinning changes nothing you see. This

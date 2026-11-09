@@ -1167,7 +1167,7 @@ pub fn build(state: &State) -> Canvas {
         }
         d.add_controller(motion);
         let state = state.clone();
-        let dial = d.clone();
+        let (dial, row) = (d.clone(), dial_row.downgrade());
         accept_drops(d, move |p, x| match p {
             Payload::Action(a) => {
                 let zone = hit_zone(dial.width() as f64, x);
@@ -1184,6 +1184,10 @@ pub fn build(state: &State) -> Canvas {
             Payload::LibraryDial(id) => {
                 state.edit(|e| e.place_dial(n as u8, id));
                 state.select(|s| s.click(Slot::Dial(n as u8)));
+                // Placed: Open Library's outline has done its job.
+                if let Some(row) = row.upgrade() {
+                    row.set_marked(None);
+                }
             }
             _ => {}
         });
@@ -1191,10 +1195,15 @@ pub fn build(state: &State) -> Canvas {
 
     // Drag a dial onto another: that one slides into its place, then they swap (one undo step).
     {
-        let (allowed_state, state) = (state.clone(), state.clone());
+        let (place_state, allowed_state, state) = (state.clone(), state.clone(), state.clone());
         crate::ui::dial_swap::attach(
             &dial_row,
             &dials,
+            // The profile and page the dials are on: no swap lands on another page.
+            move || {
+                let e = place_state.editor.borrow();
+                (e.profile().id, e.page())
+            },
             move |from, to| {
                 let e = allowed_state.editor.borrow();
                 !e.is_foreign(Slot::Dial(from)) && !e.is_foreign(Slot::Dial(to))
@@ -1267,8 +1276,18 @@ pub fn build(state: &State) -> Canvas {
         right.connect_pressed(move |g, _, x, y| {
             g.set_state(gtk::EventSequenceState::Claimed);
             state.select(|s| s.click(Slot::Small(side)));
-            let pinned = state.editor.borrow().profile().small_pinned(side);
-            pop.set_menu_model(Some(&small_menu(pinned)));
+            let (pinned, has_action) = {
+                let e = state.editor.borrow();
+                (
+                    e.profile().small_pinned(side),
+                    e.profile().small_at(e.page(), side).is_some(),
+                )
+            };
+            let menu = small_menu(pinned, has_action);
+            if menu.n_items() == 0 {
+                return;
+            }
+            pop.set_menu_model(Some(&menu));
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             pop.popup();
         });
@@ -1682,12 +1701,12 @@ fn dial_actions(state: &State, n: u8) -> gio::SimpleActionGroup {
     group
 }
 
-/// The right-click menu of a small button.
-fn small_menu(pinned: bool) -> gio::Menu {
+/// The right-click menu of a small button; empty when nothing is on that side to pin.
+fn small_menu(pinned: bool, has_action: bool) -> gio::Menu {
     let m = gio::Menu::new();
     if pinned {
         m.append(Some("Unpin"), Some("small.unpin"));
-    } else {
+    } else if has_action {
         m.append(Some("Pin to Every Page"), Some("small.pin"));
     }
     m
@@ -1719,7 +1738,7 @@ fn dial_menu(info: &ulanzi_core::model::DialInfo, can_paste: bool) -> gio::Menu 
     let spot = gio::Menu::new();
     if info.pinned {
         spot.append(Some("Unpin"), Some("dial.unpin"));
-    } else {
+    } else if !info.dial.is_empty() || info.library.is_some() {
         spot.append(Some("Pin to Every Page"), Some("dial.pin"));
     }
     spot.append(Some("Rename"), Some("dial.rename"));
@@ -1770,7 +1789,10 @@ mod tests {
         assert!(!l.contains(&"Remove from This Page".into()));
 
         let own = DialInfo {
-            dial: Default::default(),
+            dial: ulanzi_core::model::Dial {
+                press: Some(ulanzi_core::model::Action::NextPage),
+                ..Default::default()
+            },
             pinned: false,
             library: None,
         };
@@ -1787,12 +1809,23 @@ mod tests {
                 "Remove from This Page"
             ]
         );
+
+        // Nothing to pin on an empty dial.
+        let empty = DialInfo {
+            dial: Default::default(),
+            pinned: false,
+            library: None,
+        };
+        assert!(!labels(&dial_menu(&empty, false)).contains(&"Pin to Every Page".into()));
     }
 
     #[test]
     fn dial_menu_shows_the_window_shortcuts() {
         let own = ulanzi_core::model::DialInfo {
-            dial: Default::default(),
+            dial: ulanzi_core::model::Dial {
+                press: Some(ulanzi_core::model::Action::NextPage),
+                ..Default::default()
+            },
             pinned: false,
             library: None,
         };
@@ -1810,9 +1843,11 @@ mod tests {
 
     #[test]
     fn small_menu_pins_or_unpins() {
-        crate::ui::assert_menu_labels(&small_menu(false));
-        assert_eq!(labels(&small_menu(false)), ["Pin to Every Page"]);
-        assert_eq!(labels(&small_menu(true)), ["Unpin"]);
+        crate::ui::assert_menu_labels(&small_menu(false, true));
+        assert_eq!(labels(&small_menu(false, true)), ["Pin to Every Page"]);
+        assert_eq!(labels(&small_menu(true, true)), ["Unpin"]);
+        // Nothing on this side: nothing to pin.
+        assert_eq!(small_menu(false, false).n_items(), 0);
     }
 
     #[test]

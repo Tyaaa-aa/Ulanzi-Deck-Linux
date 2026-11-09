@@ -308,6 +308,12 @@ impl AppState {
             self.notify(Change::Macros);
         }
         self.notify(Change::Profile);
+        // An undo can take away the library dial picked in the tray.
+        let picked = *self.selected_library.borrow();
+        if picked.is_some_and(|id| self.editor.borrow().profile().library_dial(id).is_none()) {
+            *self.selected_library.borrow_mut() = None;
+            self.notify(Change::Selection);
+        }
     }
 
     pub fn undo(&self) {
@@ -419,6 +425,18 @@ mod tests {
         state.select(|s| s.click(Slot::Key(0)));
         assert_eq!(*state.selected_library.borrow(), None);
         assert!(state.selection.borrow().contains(Slot::Key(0)));
+    }
+
+    #[test]
+    fn undo_that_removes_the_picked_library_dial_unpicks_it() {
+        let state = plugins_state();
+        let mut id = Uuid::nil();
+        state.edit(|e| id = e.new_library_dial());
+        state.select_library(id);
+        state.undo();
+        assert_eq!(*state.selected_library.borrow(), None);
+        state.redo();
+        assert_eq!(*state.selected_library.borrow(), None);
     }
 
     fn plugins_state() -> State {

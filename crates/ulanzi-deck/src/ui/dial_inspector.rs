@@ -26,6 +26,8 @@ fn used_on(pages: usize) -> String {
 pub fn subtitle(n: u8, info: &DialInfo, usage: Option<Usage>) -> String {
     let mut s = format!("Dial {}", n + 1);
     match (info.library, usage) {
+        // Only pinned: "Pinned" below says where it is.
+        (Some(_), Some(u)) if u.pages == 0 && u.pinned => s += " · From your library",
         (Some(_), Some(u)) => s += &format!(" · From your library · {}", used_on(u.pages)),
         _ if !info.pinned => s += " · This page only",
         _ => {}
@@ -63,13 +65,23 @@ pub fn usage_line(u: Usage) -> String {
     }
 }
 
-/// What deleting a library dial in use empties; `None` when nothing uses it (no need to ask).
+/// What deleting a library dial in use empties or unpins; `None` when nothing uses it (no need to
+/// ask).
 pub fn delete_body(u: Usage) -> Option<String> {
+    let (and_pinned, and_pin) = if u.pinned {
+        (" and pinned", " and the pin removed")
+    } else {
+        ("", "")
+    };
     match (u.pinned, u.pages) {
         (false, 0) => None,
-        (true, 0) => Some("It's pinned. That dial will be empty.".into()),
-        (_, 1) => Some("It's used on 1 page. That dial will be empty.".into()),
-        (_, n) => Some(format!("It's used on {n} pages. Those dials will be empty.")),
+        (true, 0) => Some("It's pinned. The pin will be removed.".into()),
+        (_, 1) => Some(format!(
+            "It's used on 1 page{and_pinned}. That dial will be empty{and_pin}."
+        )),
+        (_, n) => Some(format!(
+            "It's used on {n} pages{and_pinned}. Those dials will be empty{and_pin}."
+        )),
     }
 }
 
@@ -230,11 +242,13 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
     let state = &ctx.state;
     // Rename from the dial's menu asks for the Name row.
     let focus = state.focus_name.take() == Some(Slot::Dial(d));
-    let (info, usage, library_empty) = {
+    let (info, usage, library_empty, covered) = {
         let e = state.editor.borrow();
         let info = e.dial_info(d);
         let usage = info.library.map(|id| e.profile().dial_usage(id));
-        (info, usage, e.profile().dial_library.is_empty())
+        let own = e.profile().pages.get(e.page()).map(|p| &p.dials[d as usize]);
+        let covered = info.pinned && own.is_some_and(|o| !o.is_empty());
+        (info, usage, e.profile().dial_library.is_empty(), covered)
     };
     // A pin covers the page's dials even when blank: it keeps its Unpin.
     let empty = !info.pinned && info.library.is_none() && info.dial.is_empty();
@@ -311,6 +325,11 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
     }
     if let Some(list) = buttons(ctx, rows) {
         page.append(&list);
+    }
+    if covered {
+        page.append(&note(
+            "This page has its own dial here, hidden by the pin. Unpin to use it.",
+        ));
     }
     if focus {
         focus_entry(&name);
@@ -577,9 +596,13 @@ pub(super) fn library_view(ctx: &C, content: &gtk::Box, id: Uuid) -> View {
 pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
     let mut view = View::default();
     let side = if s == 0 { "Left" } else { "Right" };
-    let (action, pinned) = {
+    let (action, pinned, covered) = {
         let e = ctx.state.editor.borrow();
-        (e.profile().small_at(e.page(), s), e.profile().small_pinned(s))
+        let p = e.profile();
+        let pinned = p.small_pinned(s);
+        let own = p.pages.get(e.page()).map(|pg| &pg.small_buttons);
+        let own = own.and_then(|o| if s == 0 { o.left.as_ref() } else { o.right.as_ref() });
+        (p.small_at(e.page(), s), pinned, pinned && own.is_some())
     };
     let sub = if pinned {
         "Pinned to every page".to_string()
@@ -615,6 +638,11 @@ pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
     if let Some(list) = buttons(ctx, rows) {
         page.append(&list);
     }
+    if covered {
+        page.append(&note(
+            "This page has its own button here, hidden by the pin. Unpin to use it.",
+        ));
+    }
     view
 }
 
@@ -643,7 +671,7 @@ mod tests {
         );
         assert_eq!(
             subtitle(0, &linked(true), used(0, true)),
-            "Dial 1 · From your library · Not placed · Pinned"
+            "Dial 1 · From your library · Pinned"
         );
     }
 
@@ -681,11 +709,19 @@ mod tests {
         assert_eq!(delete_body(u(0, false)), None);
         assert_eq!(
             delete_body(u(0, true)).as_deref(),
-            Some("It's pinned. That dial will be empty.")
+            Some("It's pinned. The pin will be removed.")
+        );
+        assert_eq!(
+            delete_body(u(1, false)).as_deref(),
+            Some("It's used on 1 page. That dial will be empty.")
+        );
+        assert_eq!(
+            delete_body(u(1, true)).as_deref(),
+            Some("It's used on 1 page and pinned. That dial will be empty and the pin removed.")
         );
         assert_eq!(
             delete_body(u(3, true)).as_deref(),
-            Some("It's used on 3 pages. Those dials will be empty.")
+            Some("It's used on 3 pages and pinned. Those dials will be empty and the pin removed.")
         );
     }
 
@@ -781,12 +817,17 @@ mod tests {
     #[test]
     fn a_blank_pin_offers_unpin_not_the_picker() {
         crate::ui::with_gtk(|| {
-            let state = state();
+            // A pin linked to a library dial that is gone (deleting one now removes its pin).
+            let mut p = Profile::new_default("Default", Model::D200X);
+            p.pinned.dials.insert(
+                0,
+                Dial {
+                    library: Some(Uuid::new_v4()),
+                    ..Dial::default()
+                },
+            );
+            let state = crate::state::AppState::new(p);
             state.edit(|e| {
-                let id = e.new_library_dial();
-                e.place_dial(0, id);
-                e.pin_dial(0);
-                e.delete_library_dial(id);
                 e.new_library_dial();
             });
             let panel = crate::ui::inspector::Panel::build(&state);
@@ -794,6 +835,45 @@ mod tests {
             pump_until(|| button_row(&panel, "Unpin").is_some());
             assert!(button_row(&panel, "Unpin").is_some());
             assert!(button_row(&panel, "New Dial").is_none());
+        });
+    }
+
+    fn has_label(panel: &crate::ui::inspector::Panel, text: &str) -> bool {
+        all::<gtk::Label>(&panel.root).iter().any(|l| l.label() == text)
+    }
+
+    #[test]
+    fn a_pin_over_the_pages_own_dial_or_button_says_so() {
+        crate::ui::with_gtk(|| {
+            let dial = "This page has its own dial here, hidden by the pin. Unpin to use it.";
+            let button = "This page has its own button here, hidden by the pin. Unpin to use it.";
+            let mut p = Profile::new_default("Default", Model::D200X);
+            p.pages.push(Page::new("Two"));
+            let own = |a| Dial {
+                press: Some(a),
+                ..Dial::default()
+            };
+            p.pinned.dials.insert(0, own(Action::Back));
+            p.pages[0].dials[0] = own(Action::NextPage);
+            p.pages[0].small_buttons.left = Some(Action::SleepNow);
+            let state = crate::state::AppState::new(p);
+            let panel = crate::ui::inspector::Panel::build(&state);
+            state.select(|s| s.click(Slot::Dial(0)));
+            pump_until(|| has_label(&panel, dial));
+            assert!(has_label(&panel, dial));
+            state.select(|s| s.click(Slot::Small(0)));
+            pump_until(|| has_label(&panel, button));
+            assert!(has_label(&panel, button));
+            // Page two has nothing of its own under the pins.
+            state.set_page(1);
+            state.select(|s| s.click(Slot::Dial(0)));
+            pump_until(|| has_label(&panel, "Page 2 · Two · Pinned to every page"));
+            assert!(has_label(&panel, "Page 2 · Two · Pinned to every page"));
+            assert!(!has_label(&panel, dial));
+            state.select(|s| s.click(Slot::Small(0)));
+            pump_until(|| has_label(&panel, "Left Button"));
+            assert!(has_label(&panel, "Left Button"));
+            assert!(!has_label(&panel, button));
         });
     }
 
