@@ -29,6 +29,9 @@ pub struct Manifest {
     pub created: String,
     #[serde(default)]
     pub includes_settings: bool,
+    /// Whether the profiles' dial libraries are in the file.
+    #[serde(default)]
+    pub includes_library: bool,
     #[serde(default)]
     pub profiles: Vec<ManifestProfile>,
     /// The oldest app that reads all of this file.
@@ -111,6 +114,8 @@ pub struct ImportOptions {
     pub keep_rules: bool,
     /// Also take the bundle's settings (when it has them). The current OBS password is kept.
     pub settings: bool,
+    /// Keep the profiles' dial libraries; without it, linked dials become ordinary dials.
+    pub library: bool,
     /// The connected deck, to warn about profiles made for the other model.
     pub device: Option<Model>,
 }
@@ -168,9 +173,15 @@ fn image_ext(name: &str) -> bool {
         .is_some_and(|(_, e)| IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// Pack `ids` (all profiles when empty), optionally with the settings (OBS password removed).
-pub fn export(store: &Store, ids: &[Uuid], include_settings: bool) -> Result<Vec<u8>, BundleError> {
-    export_with(store, ids, include_settings, &Default::default())
+/// Pack `ids` (all profiles when empty), optionally with the settings (OBS password removed) and
+/// the dial library. Without the library, dials placed from it become ordinary dials.
+pub fn export(
+    store: &Store,
+    ids: &[Uuid],
+    include_settings: bool,
+    include_library: bool,
+) -> Result<Vec<u8>, BundleError> {
+    export_with(store, ids, include_settings, include_library, &Default::default())
 }
 
 /// Like [`export`], also removing the plugin secrets in `declared` (secret keys by plugin id).
@@ -179,6 +190,7 @@ pub fn export_with(
     store: &Store,
     ids: &[Uuid],
     include_settings: bool,
+    include_library: bool,
     declared: &std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
 ) -> Result<Vec<u8>, BundleError> {
     let profiles: Vec<Profile> = if ids.is_empty() {
@@ -189,7 +201,10 @@ pub fn export_with(
             .collect::<Result<_, _>>()?
     };
     let mut out = Vec::with_capacity(profiles.len());
-    for profile in profiles {
+    for mut profile in profiles {
+        if !include_library {
+            profile.drop_library();
+        }
         let mut icons = Vec::new();
         if let Ok(entries) = std::fs::read_dir(store.profile_dir(profile.id).join("icons")) {
             for e in entries.flatten() {
@@ -225,6 +240,7 @@ pub fn export_with(
         app_version: env!("CARGO_PKG_VERSION").into(),
         created: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         includes_settings: include_settings,
+        includes_library: include_library,
         looks: out
             .iter()
             .map(|bp| (bp.profile.id.to_string(), store.profile_look(bp.profile.id)))
@@ -503,6 +519,9 @@ pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<Im
     let mut report = ImportReport::default();
     for bp in &bundle.profiles {
         let mut p = bp.profile.clone();
+        if !opts.library {
+            p.drop_library();
+        }
         if !opts.keep_rules {
             p.r#match = Default::default();
         }

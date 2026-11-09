@@ -82,7 +82,7 @@ fn create(state: &State, t: &Template, done: impl FnOnce(bool) + 'static) {
     runtime::run(
         async move {
             let r = c
-                .import_bundle(&path, ImportChoice::KeepBoth, true, false, true)
+                .import_bundle(&path, ImportChoice::KeepBoth, true, false, true, true)
                 .await;
             let _ = std::fs::remove_file(&path);
             r
@@ -212,7 +212,7 @@ pub fn save_as_template(state: &State, id: Uuid, name: &str) {
     let path = dir.join(file_name(name));
     let (st, name) = (state.clone(), name.to_string());
     runtime::run(
-        async move { c.export_bundle(&path, &[id], false).await },
+        async move { c.export_bundle(&path, &[id], false, true).await },
         move |r| match r {
             Ok(()) => crate::ui::toast(&st, &format!("Saved “{name}” as a template")),
             Err(e) => crate::ui::toast(&st, &format!("Couldn't save the template: {e}")),

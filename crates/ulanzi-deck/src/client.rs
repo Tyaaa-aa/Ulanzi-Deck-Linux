@@ -361,6 +361,7 @@ impl Client {
         conflict: ImportChoice,
         keep_rules: bool,
         settings: bool,
+        library: bool,
         switch_to: bool,
     ) -> Result<ImportDone> {
         let conflict = match conflict {
@@ -378,6 +379,7 @@ impl Client {
                     conflict,
                     keep_rules,
                     settings,
+                    library,
                     switch_to,
                 ),
             )
@@ -395,6 +397,7 @@ impl Client {
         path: &std::path::Path,
         ids: &[Uuid],
         include_settings: bool,
+        include_library: bool,
     ) -> Result<()> {
         let ids: Vec<String> = ids.iter().map(Uuid::to_string).collect();
         Ok(self
@@ -402,7 +405,12 @@ impl Client {
             .proxy
             .call(
                 "ExportBundle",
-                &(path.to_string_lossy().as_ref(), ids, include_settings),
+                &(
+                    path.to_string_lossy().as_ref(),
+                    ids,
+                    include_settings,
+                    include_library,
+                ),
             )
             .await?)
     }

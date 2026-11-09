@@ -160,7 +160,7 @@ fn a_bundle_carries_the_macros_its_profiles_use() {
         macros: vec![used.clone(), nested.clone(), other],
     })
     .expect("macros");
-    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
     let mut names: Vec<&str> = b.macros.macros.iter().map(|m| m.name.as_str()).collect();
     names.sort();
     assert_eq!(names, ["Nested", "Used"]);
@@ -187,9 +187,9 @@ fn old_versions_stay_out_of_shared_files_but_stay_in_backups() {
         })
         .expect("ok");
 
-    let shared = read(&export(&store, &[profile.id], false).expect("ok")).expect("ok");
+    let shared = read(&export(&store, &[profile.id], false, true).expect("ok")).expect("ok");
     assert_eq!(shared.macros.get(m.id).expect("ok").previous, None);
-    let backup = read(&export(&store, &[], false).expect("ok")).expect("ok");
+    let backup = read(&export(&store, &[], false, true).expect("ok")).expect("ok");
     assert!(backup.macros.get(m.id).expect("ok").previous.is_some());
 }
 
@@ -198,6 +198,7 @@ fn keep_both() -> ImportOptions {
         conflict: Conflict::KeepBoth,
         keep_rules: true,
         settings: false,
+        library: true,
         device: None,
     }
 }
@@ -213,7 +214,7 @@ fn import_asks_before_replacing_a_macro_that_differs() {
         macros: vec![m.clone()],
     })
     .expect("macros");
-    let bytes = export(&s, &[p.id], false).expect("export");
+    let bytes = export(&s, &[p.id], false, true).expect("export");
 
     let e = tempfile::tempdir().expect("tmp");
     let there = store(e.path());
@@ -261,7 +262,7 @@ fn commands_inside_macros_are_in_the_import_preview() {
     s.save_profile(&p).expect("save");
     s.save_macros(&MacroLibrary { macros: vec![linked] })
         .expect("macros");
-    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
     let found = commands(&b);
     assert!(found.contains(&"from the library".to_string()), "{found:?}");
     assert!(found.contains(&"from the key".to_string()), "{found:?}");
@@ -342,7 +343,7 @@ fn commands_nested_in_a_macro_are_in_the_preview() {
     let p = with_macro_key(m.id, None);
     s.save_profile(&p).expect("save");
     s.save_macros(&MacroLibrary { macros: vec![m] }).expect("macros");
-    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
     assert!(commands(&b).contains(&"hidden".to_string()));
 }
 
@@ -363,7 +364,7 @@ fn the_preview_says_what_a_macro_presses_and_types() {
     let p = with_macro_key(m.id, None);
     s.save_profile(&p).expect("save");
     s.save_macros(&MacroLibrary { macros: vec![m] }).expect("macros");
-    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
     let found = commands(&b);
     assert!(
         found
@@ -388,7 +389,7 @@ fn a_differing_macro_is_named_before_import() {
         macros: vec![m.clone()],
     })
     .expect("macros");
-    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
     let e = tempfile::tempdir().expect("tmp");
     let there = store(e.path());
     let mut changed = m;
@@ -415,7 +416,7 @@ fn replacing_a_macro_on_import_keeps_the_old_version() {
         macros: vec![m.clone()],
     })
     .expect("macros");
-    let b = read(&export(&s, &[p.id], false).expect("export")).expect("read");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
     let e = tempfile::tempdir().expect("tmp");
     let there = store(e.path());
     let mut old = m.clone();

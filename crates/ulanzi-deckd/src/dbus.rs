@@ -481,12 +481,14 @@ impl DeckService {
 
     /// Import a `.ulanzideck` file. `conflict` is keep_both, replace or skip. Returns the imported
     /// profile ids, warnings, and the snapshot taken first (restore it to undo).
+    #[allow(clippy::too_many_arguments)] // the D-Bus method's arguments
     async fn import_bundle(
         &self,
         path: String,
         conflict: String,
         keep_rules: bool,
         settings: bool,
+        library: bool,
         switch_to: bool,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> Result<(Vec<String>, Vec<String>, String, Vec<String>)> {
@@ -506,6 +508,7 @@ impl DeckService {
                 conflict,
                 keep_rules,
                 settings,
+                library,
                 device,
             },
         )
@@ -537,11 +540,22 @@ impl DeckService {
     }
 
     /// Write profiles (all when `ids` is empty) to a `.ulanzideck` file.
-    async fn export_bundle(&self, path: String, ids: Vec<String>, include_settings: bool) -> Result<()> {
+    async fn export_bundle(
+        &self,
+        path: String,
+        ids: Vec<String>,
+        include_settings: bool,
+        include_library: bool,
+    ) -> Result<()> {
         let ids: Vec<Uuid> = ids.iter().map(|i| Self::id(i)).collect::<Result<_>>()?;
-        let bytes =
-            ulanzi_core::bundle::export_with(&self.store, &ids, include_settings, &self.secret_fields())
-                .map_err(|e| DeckError::Invalid(e.to_string()))?;
+        let bytes = ulanzi_core::bundle::export_with(
+            &self.store,
+            &ids,
+            include_settings,
+            include_library,
+            &self.secret_fields(),
+        )
+        .map_err(|e| DeckError::Invalid(e.to_string()))?;
         ulanzi_core::store::write_atomic(std::path::Path::new(&path), &bytes)
             .map_err(|e| DeckError::Unavailable(format!("{path}: {e}")))
     }

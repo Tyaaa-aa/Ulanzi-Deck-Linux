@@ -89,6 +89,7 @@ pub fn instantiate(t: &Template) -> Result<Bundle, BundleError> {
                     app_version: env!("CARGO_PKG_VERSION").into(),
                     created: String::new(),
                     includes_settings: false,
+                    includes_library: false,
                     min_app: None,
                     looks: Default::default(),
                     profiles: vec![ManifestProfile {

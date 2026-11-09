@@ -270,14 +270,14 @@ async fn bundle_round_trip_over_dbus() {
     let Some(r) = rig().await else { return };
     let c = Client::connect_to(&r.bus.addr).await.expect("connect");
     let file = r._dir.path().join("x.ulanzideck");
-    c.export_bundle(&file, &[r.profile.id], false)
+    c.export_bundle(&file, &[r.profile.id], false, true)
         .await
         .expect("export");
     let preview = c.preview_bundle(&file).await.expect("preview");
     assert_eq!(preview.manifest.profiles.len(), 1);
     assert_eq!(preview.conflicts, vec!["Default".to_string()]);
     let done = c
-        .import_bundle(&file, ImportChoice::KeepBoth, true, false, false)
+        .import_bundle(&file, ImportChoice::KeepBoth, true, false, true, false)
         .await
         .expect("import");
     assert_eq!(done.imported.len(), 1);

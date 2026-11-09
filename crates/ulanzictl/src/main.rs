@@ -83,6 +83,9 @@ enum Cmd {
         /// Include the settings (never the OBS password).
         #[arg(long)]
         settings: bool,
+        /// Leave out the dial library; linked dials are written as ordinary dials.
+        #[arg(long)]
+        no_library: bool,
     },
     /// List backups, newest first.
     Snapshots,
@@ -448,7 +451,10 @@ async fn run(cli: Cli) -> Result<(), String> {
             };
             let (ids, warnings, undo, notes): (Vec<String>, Vec<String>, String, Vec<String>) = proxy()
                 .await?
-                .call("ImportBundle", &(path.as_str(), conflict, true, false, switch))
+                .call(
+                    "ImportBundle",
+                    &(path.as_str(), conflict, true, false, true, switch),
+                )
                 .await
                 .map_err(not_running)?;
             println!("imported {} profile(s)", ids.len());
@@ -461,6 +467,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             file,
             profiles,
             settings,
+            no_library,
         } => {
             let p = proxy().await?;
             let list: Vec<(String, String)> = p.call("ListProfiles", &()).await.map_err(not_running)?;
@@ -474,7 +481,7 @@ async fn run(cli: Cli) -> Result<(), String> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let path = absolute(&file)?;
-            p.call::<_, _, ()>("ExportBundle", &(path.as_str(), ids, settings))
+            p.call::<_, _, ()>("ExportBundle", &(path.as_str(), ids, settings, !no_library))
                 .await
                 .map_err(not_running)?;
             println!("wrote {path}");
@@ -796,7 +803,8 @@ mod tests {
             Cmd::Export {
                 file: "b.ulanzideck".into(),
                 profiles: vec!["Photo Editing".into(), "Default".into()],
-                settings: false
+                settings: false,
+                no_library: false
             }
         );
     }

@@ -132,6 +132,28 @@ impl Profile {
         }
     }
 
+    /// Make every linked dial an own copy of its library dial and empty the library.
+    pub fn drop_library(&mut self) {
+        let library = std::mem::take(&mut self.dial_library);
+        let resolve = |d: &mut Dial| {
+            let Some(id) = d.library else { return };
+            *d = library
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| Dial {
+                    library: None,
+                    ..l.dial.clone()
+                })
+                .unwrap_or_default();
+        };
+        self.pinned.dials.values_mut().for_each(resolve);
+        self.pages
+            .iter_mut()
+            .flat_map(|p| p.dials.iter_mut())
+            .for_each(resolve);
+        self.foreign_library.clear();
+    }
+
     /// Whether anything here needs an app that knows the library: library dials, pins, dial
     /// names or links, or small buttons on pages.
     pub fn uses_library(&self) -> bool {

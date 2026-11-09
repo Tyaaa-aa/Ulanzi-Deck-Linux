@@ -300,3 +300,30 @@ fn an_old_dial_that_clashes_with_a_pin_is_reported() {
     assert_eq!(p.pinned.dials[&1].name, "Pin");
     assert_eq!(p.pinned.dials[&2].name, "Other");
 }
+
+#[test]
+fn dropping_the_library_keeps_what_shows() {
+    let (mut p, id) = base();
+    let link = Dial {
+        library: Some(id),
+        ..Default::default()
+    };
+    p.pages[0].dials[0] = link.clone();
+    p.pinned.dials.insert(2, link);
+    p.pages[0].dials[1] = Dial {
+        library: Some(Uuid::new_v4()),
+        ..Default::default()
+    };
+    p.foreign_library.push(toml::Value::Integer(1));
+    let before = p.clone();
+    p.drop_library();
+    for n in 0..3u8 {
+        assert_eq!(p.dial_at(0, n), before.dial_at(0, n), "dial {n}");
+        assert_eq!(p.dial_info(0, n).library, None);
+    }
+    assert_eq!(p.dial_at(0, 0).name, "Volume");
+    assert!(p.dial_at(0, 1).is_empty());
+    assert!(p.dial_library.is_empty());
+    assert!(p.foreign_library.is_empty());
+    assert!(p.dial_info(0, 2).pinned, "pins stay pins");
+}

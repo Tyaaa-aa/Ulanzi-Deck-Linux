@@ -292,15 +292,21 @@ async fn export_then_import_round_trip() {
     let p = proxy(&r.client).await;
     let file = r._dir.path().join("out.ulanzideck");
     let path = file.to_string_lossy().into_owned();
-    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), Vec::<String>::new(), false))
-        .await
-        .expect("export");
+    p.call::<_, _, ()>(
+        "ExportBundle",
+        &(path.as_str(), Vec::<String>::new(), false, true),
+    )
+    .await
+    .expect("export");
     let (manifest, conflicts): (String, Vec<String>) =
         p.call("PreviewBundle", &(path.as_str(),)).await.expect("preview");
     assert!(manifest.contains("Default"), "{manifest}");
     assert_eq!(conflicts, vec!["Default".to_string()]);
     let (imported, _warnings, _undo, _notes): Imported = p
-        .call("ImportBundle", &(path.as_str(), "keep_both", true, false, false))
+        .call(
+            "ImportBundle",
+            &(path.as_str(), "keep_both", true, false, true, false),
+        )
         .await
         .expect("import");
     assert_eq!(imported.len(), 1);
@@ -314,11 +320,17 @@ async fn import_takes_snapshot_and_undo_restores() {
     let p = proxy(&r.client).await;
     let file = r._dir.path().join("out.ulanzideck");
     let path = file.to_string_lossy().into_owned();
-    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), Vec::<String>::new(), false))
-        .await
-        .expect("export");
+    p.call::<_, _, ()>(
+        "ExportBundle",
+        &(path.as_str(), Vec::<String>::new(), false, true),
+    )
+    .await
+    .expect("export");
     let (imported, _, undo, _): Imported = p
-        .call("ImportBundle", &(path.as_str(), "keep_both", true, false, false))
+        .call(
+            "ImportBundle",
+            &(path.as_str(), "keep_both", true, false, true, false),
+        )
         .await
         .expect("import");
     let snaps: Snapshots = p.call("ListSnapshots", &()).await.expect("list");
@@ -341,12 +353,15 @@ async fn import_replace_reloads_open_profile() {
     let id = r.profile.id.to_string();
     let file = r._dir.path().join("out.ulanzideck");
     let path = file.to_string_lossy().into_owned();
-    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), vec![id.clone()], false))
+    p.call::<_, _, ()>("ExportBundle", &(path.as_str(), vec![id.clone()], false, true))
         .await
         .expect("export");
     let before: u64 = p.call("ProfileRevision", &(id.as_str(),)).await.expect("rev");
     let _: Imported = p
-        .call("ImportBundle", &(path.as_str(), "replace", true, false, false))
+        .call(
+            "ImportBundle",
+            &(path.as_str(), "replace", true, false, true, false),
+        )
         .await
         .expect("import");
     let after: u64 = p.call("ProfileRevision", &(id.as_str(),)).await.expect("rev");
@@ -782,7 +797,7 @@ async fn export_leaves_out_plugin_secrets() {
     let out = r._dir.path().join("x.ulanzideck");
     p.call::<_, _, ()>(
         "ExportBundle",
-        &(out.to_string_lossy().as_ref(), Vec::<String>::new(), true),
+        &(out.to_string_lossy().as_ref(), Vec::<String>::new(), true, true),
     )
     .await
     .expect("export");

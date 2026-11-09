@@ -79,7 +79,7 @@ pub fn list(store: &Store) -> Vec<SnapshotInfo> {
 
 /// Back up everything now; older snapshots beyond [`KEEP`] are removed.
 pub fn take(store: &Store, reason: &str) -> Result<SnapshotInfo, BundleError> {
-    let bytes = bundle::export(store, &[], true)?;
+    let bytes = bundle::export(store, &[], true, true)?;
     let d = dir(store);
     std::fs::create_dir_all(&d)?;
     let stamp = chrono::Utc::now().format(STAMP).to_string();
@@ -124,6 +124,7 @@ pub fn restore(store: &Store, name: &str) -> Result<SnapshotInfo, BundleError> {
             conflict: Conflict::Replace,
             keep_rules: true,
             settings: true,
+            library: true,
             device: None,
         },
     )?;

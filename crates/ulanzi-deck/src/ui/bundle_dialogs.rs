@@ -201,10 +201,17 @@ fn import_dialog(state: &State, parent: &gtk::Widget, path: &Path, preview: crat
     options.add(&rules);
     let settings = adw::SwitchRow::builder()
         .title("Also Use Its Settings")
-        .subtitle("Brightness, labels and other preferences in the file")
+        .subtitle("Brightness, sleep, labels, key effects, plugin options and saved colours")
         .visible(preview.manifest.includes_settings)
         .build();
     options.add(&settings);
+    let library = adw::SwitchRow::builder()
+        .title("Also Import Its Library")
+        .subtitle("Dials saved in this file's library. Without it, dials placed from the library are imported as ordinary dials.")
+        .active(true)
+        .visible(preview.manifest.includes_library)
+        .build();
+    options.add(&library);
     page.add(&options);
 
     let import = gtk::Button::builder()
@@ -236,9 +243,10 @@ fn import_dialog(state: &State, parent: &gtk::Widget, path: &Path, preview: crat
                 _ => ImportChoice::KeepBoth,
             };
             let (keep, set, sw) = (rules.is_active(), settings.is_active(), switch_to.is_active());
+            let lib = library.is_active();
             let (st, dialog, path) = (state.clone(), dialog.clone(), path.clone());
             runtime::run(
-                async move { c.import_bundle(&path, choice, keep, set, sw).await },
+                async move { c.import_bundle(&path, choice, keep, set, lib, sw).await },
                 move |r| {
                     let window = dialog.root();
                     dialog.close();
@@ -316,9 +324,15 @@ pub fn open_export(state: &State, parent: &impl IsA<gtk::Widget>, preselect: Opt
     }
     page.add(&group);
     let more = adw::PreferencesGroup::new();
+    let library = adw::SwitchRow::builder()
+        .title("Include Library")
+        .subtitle("Dials saved in each profile's library. Without it, dials placed from the library are exported as ordinary dials.")
+        .active(true)
+        .build();
+    more.add(&library);
     let settings = adw::SwitchRow::builder()
         .title("Include Settings")
-        .subtitle("Brightness, labels and other preferences. Never your OBS password.")
+        .subtitle("Brightness, sleep, labels, key effects, plugin options and saved colours")
         .build();
     more.add(&settings);
     page.add(&more);
@@ -336,7 +350,7 @@ pub fn open_export(state: &State, parent: &impl IsA<gtk::Widget>, preselect: Opt
     let dialog = adw::Dialog::builder()
         .title("Export Profiles")
         .content_width(420)
-        .content_height(520)
+        .content_height(620)
         .child(&view)
         .build();
     {
@@ -366,6 +380,7 @@ pub fn open_export(state: &State, parent: &impl IsA<gtk::Widget>, preselect: Opt
                 .build();
             let window = b.root().and_downcast::<gtk::Window>();
             let (st, dialog, with_settings) = (state.clone(), dialog.clone(), settings.is_active());
+            let with_library = library.is_active();
             fd.save(window.as_ref(), None::<&gio::Cancellable>, move |r| {
                 let Some(mut path) = r.ok().and_then(|f| f.path()) else {
                     return;
@@ -379,7 +394,7 @@ pub fn open_export(state: &State, parent: &impl IsA<gtk::Widget>, preselect: Opt
                 let (st, dialog) = (st.clone(), dialog.clone());
                 let shown = path.display().to_string();
                 runtime::run(
-                    async move { c.export_bundle(&path, &ids, with_settings).await },
+                    async move { c.export_bundle(&path, &ids, with_settings, with_library).await },
                     move |r| match r {
                         Ok(()) => {
                             dialog.close();

@@ -45,7 +45,7 @@ fn user_templates_are_listed() {
     std::fs::create_dir_all(&dir).expect("dir");
     std::fs::write(
         dir.join("my-layout.ulanzideck"),
-        ulanzi_core::bundle::export(&store, &[p.id], false).expect("export"),
+        ulanzi_core::bundle::export(&store, &[p.id], false, true).expect("export"),
     )
     .expect("write");
     let all = list_in(Some(&dir));

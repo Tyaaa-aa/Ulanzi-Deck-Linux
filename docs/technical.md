@@ -224,7 +224,7 @@ ulanzictl status                 device and service state
 ulanzictl profile list|switch    list or switch profiles
 ulanzictl page next|prev|<n>     change page
 ulanzictl brightness <0-100>
-ulanzictl export <file> [--profile <name>]   ulanzictl import <file> [--skip|--replace]
+ulanzictl export <file> [--profile <name>] [--no-library]   ulanzictl import <file> [--skip|--replace]
 ulanzictl snapshots              ulanzictl restore <name>
 ulanzictl validate [file]        check profile files
 ulanzictl plugin list|store|get <id>   installed plugins, the store, install or update from the store
