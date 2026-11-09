@@ -257,12 +257,55 @@ keys and buttons a macro is holding.
 
 ## Dials and small buttons
 
-Each dial has four actions: **Turn Left**, **Turn Right**, **Press** and **Hold**. Dials are
-configured per page; **Use This Dial on Every Page** copies a dial's configuration to all pages of
-the profile. Volume, OBS input volume, brightness, page navigation and media seeking work well on
-dials.
+Each dial has four actions: **Turn Left**, **Turn Right**, **Press** and **Hold**, and a name shown
+under it on the drawn deck (empty means "Dial 1" to "Dial 3"). Dials are configured per page, and a new
+page starts without dials. Volume, OBS input volume, brightness, page navigation and media seeking work
+well on dials. When a dial turns or is pressed, its ring on the drawn deck lights up, and a turn also
+sweeps an arc in the direction of the turn.
 
-The two small buttons next to the dials have one action each.
+### Dial library
+
+The library is opt-in, like macros. A dial belongs to its page until you add it to the library.
+
+- **Add to Library** (in the inspector or the right-click menu) moves the dial into the profile's dial
+  library and links it on this page. A linked dial shows a link badge. Editing it changes every page
+  that uses it, and the inspector shows how many pages that is.
+- **Edit for This Page Only** turns a linked dial back into this page's own copy.
+- **Pin to Every Page** shows the dial at the same position on every page, folders included. Each page
+  keeps its own dial underneath, and **Unpin** shows it again. A pinned dial has a pin badge, and a page's
+  own dial that a pin covers is marked as covered in the inspector. A dial can be both linked and pinned.
+- **Remove from This Page** clears the dial. Delete does the same on a selected dial, except one that is
+  pinned.
+
+### Library tray
+
+The **Library** button in the header, next to Macros, opens the tray under the deck. It lists the
+library dials with their name and where they are used (pinned, a number of pages, or not placed).
+
+- Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
+  Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.
+- **New Dial**, the last tile, creates an empty library dial.
+- More than four rows are split into pages. Use the arrow buttons or the dots under the grid.
+- An empty dial's inspector has **Open Library**.
+- **?** in the tray replays the guide. **Take the Library Tour** on the **All Set** page of Set Up Deck
+  starts it too.
+
+### Moving and copying dials
+
+- Drag a dial onto another one to swap them. A pin travels with its dial. Swapping is one Undo step.
+- Right-click a dial for **Copy**, **Paste**, **Add to Library** or **Edit for This Page Only**,
+  **Pin to Every Page** or **Unpin**, **Rename** and **Remove from This Page**.
+- Ctrl+C, Ctrl+V and Delete work on the selected dial. Pasting in the same profile keeps a link; pasting
+  into another profile makes an own copy.
+
+### Small buttons
+
+The two small buttons next to the dials have one action each. They are drawn with their action's icon
+and colour, and the action's name is the tooltip. They belong to a page: each page has its own pair.
+**Pin to Every Page** and **Unpin** work as for dials, and a side without a pin shows the page's own
+button. Small buttons from earlier versions load as pinned, so nothing changes until you unpin one.
+
+Profiles that use the library or pins need Ulanzi Deck 2.5 or newer.
 
 ## The wide screen
 
@@ -373,7 +416,9 @@ enter the OBS password once.
 - **Sharing**: right-click a profile and select **Export** to save a `.ulanzideck` file. To import
   one, open it, drag it onto the window, or use **Import** in the main menu. If a profile with the
   same name exists, you can keep both, replace it or skip the import. Passwords and tokens are
-  never exported.
+  never exported. The export dialog has an **Include Library** switch; when it is off, dials placed from the
+  library are written as own copies. Importing a file that carries a library
+  shows **Also Import Its Library**; when it is off, linked dials become own copies.
 - **Backups**: Ulanzi Deck makes a backup once a day and before every import, deletion or restore,
   and keeps the 20 most recent. **Preferences → Backups** lists them; **Restore…** restores one
   after backing up the current configuration.
