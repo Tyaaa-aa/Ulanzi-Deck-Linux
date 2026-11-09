@@ -272,7 +272,8 @@ The library is opt-in, like macros. A dial belongs to its page until you add it 
   that uses it, and the inspector shows how many pages that is.
 - **Edit for This Page Only** turns a linked dial back into this page's own copy.
 - **Pin to Every Page** shows the dial at the same position on every page, folders included. Each page
-  keeps its own dial underneath, and **Unpin** shows it again. A pinned dial has a pin badge, and a page's
+  keeps its own dial underneath, and **Unpin** shows it again. The page you unpin on keeps the pinned
+  dial if it has none of its own. A pinned dial has a pin badge, and a page's
   own dial that a pin covers is marked as covered in the inspector. A dial can be both linked and pinned.
 - **Remove from This Page** clears the dial. Delete does the same on a selected dial, except one that is
   pinned.
@@ -285,6 +286,8 @@ library dials with their name and where they are used (pinned, a number of pages
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.
 - **New Dial**, the last tile, creates an empty library dial.
+- **Delete from Library** in a library dial's inspector removes it from the library. Pages that used it get an empty
+  dial, and a pin that used it is removed so each page shows its own dial again. Undo brings it all back.
 - More than four rows are split into pages. Use the arrow buttons or the dots under the grid.
 - An empty dial's inspector has **Open Library**.
 - **?** in the tray replays the guide. **Take the Library Tour** on the **All Set** page of Set Up Deck
@@ -292,7 +295,8 @@ library dials with their name and where they are used (pinned, a number of pages
 
 ### Moving and copying dials
 
-- Drag a dial onto another one to swap them. A pin travels with its dial. Swapping is one Undo step.
+- Drag a dial onto another one to swap them. A pin travels with its dial, and when one of them is
+  pinned every page's own dials swap too. Swapping is one Undo step.
 - Right-click a dial for **Copy**, **Paste**, **Add to Library** or **Edit for This Page Only**,
   **Pin to Every Page** or **Unpin**, **Rename** and **Remove from This Page**.
 - Ctrl+C, Ctrl+V and Delete work on the selected dial. Pasting in the same profile keeps a link; pasting
@@ -303,7 +307,8 @@ library dials with their name and where they are used (pinned, a number of pages
 The two small buttons next to the dials have one action each. They are drawn with their action's icon
 and colour, and the action's name is the tooltip. They belong to a page: each page has its own pair.
 **Pin to Every Page** and **Unpin** work as for dials, and a side without a pin shows the page's own
-button. Small buttons from earlier versions load as pinned, so nothing changes until you unpin one.
+button. Small buttons from earlier versions load as pinned, so nothing changes until you unpin one; the
+page you unpin on keeps the button. There is nothing to pin on an empty dial or small button.
 
 On its first start, 2.5 backs up your profiles (see [Templates, sharing and backups](#templates-sharing-and-backups)) and pins each dial that is the same on every
 page of a profile. Each page keeps its copy underneath, so unpinning changes nothing you see. This

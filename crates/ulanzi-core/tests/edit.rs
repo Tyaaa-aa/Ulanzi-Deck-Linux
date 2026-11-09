@@ -897,8 +897,10 @@ fn pinning_keeps_the_page_dial_underneath() {
     assert!(info.pinned);
     assert_eq!(info.dial.press, Some(Action::NextPage));
     e.unpin_dial(1);
-    assert!(e.dial_info(1).dial.is_empty());
+    // Page 0 had none of its own, so it keeps what showed.
+    assert_eq!(e.dial_info(1).dial.press, Some(Action::NextPage));
     assert!(!e.dial_info(1).pinned);
+    assert!(e.profile().dial_at(1, 1).is_empty());
     assert_eq!(e.profile().dial_at(2, 1).press, Some(Action::NextPage));
 }
 
@@ -915,6 +917,70 @@ fn unpin_reveals_the_page_dial() {
     assert_eq!(e.dial_info(0).dial.press, Some(Action::NextPage));
     e.set_page(0);
     assert!(e.dial_info(0).dial.is_empty());
+}
+
+#[test]
+fn unpin_keeps_the_dial_on_a_page_without_its_own() {
+    // A pin from the one-time pass or old profile-wide dials, with nothing on the pages.
+    let mut p = Profile::new_default("U", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    p.pages.push(Page::new("Three"));
+    p.pages[2].dials[0] = own(Action::NextPage);
+    p.pinned.dials.insert(0, own(Action::PrevPage));
+    let before = p.clone();
+    let mut e = Editor::new(p);
+    e.set_page(1);
+    e.unpin_dial(0);
+    let info = e.dial_info(0);
+    assert!(!info.pinned);
+    assert_eq!(info.dial.press, Some(Action::PrevPage));
+    assert!(e.profile().dial_at(0, 0).is_empty());
+    assert_eq!(e.profile().dial_at(2, 0).press, Some(Action::NextPage));
+    assert!(e.undo());
+    assert_eq!(e.profile(), &before);
+}
+
+#[test]
+fn unpin_of_a_migrated_small_button_keeps_it_on_this_page() {
+    let mut p = Profile::new_default("S", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    let mut e = Editor::new(p);
+    e.set_page(1);
+    e.unpin_small(1);
+    assert!(!e.profile().small_pinned(1));
+    assert_eq!(e.profile().small_at(1, 1), Some(Action::NextPage));
+    assert_eq!(e.profile().small_at(0, 1), None);
+}
+
+#[test]
+fn pin_does_nothing_on_an_empty_spot() {
+    let mut p = Profile::new_default("E", Model::D200X);
+    p.small_buttons = SmallButtons::default();
+    p.pages.push(Page::new("Two"));
+    let mut e = Editor::new(p);
+    e.pin_dial(0);
+    e.pin_small(0);
+    assert!(e.profile().pinned.is_empty());
+    assert!(!e.profile().small_pinned(0));
+    assert!(!e.can_undo());
+}
+
+#[test]
+fn swap_with_a_pin_swaps_the_page_dials_on_every_page() {
+    let mut p = Profile::new_default("S", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    p.pages[0].dials[0] = own(Action::NextPage);
+    p.pages[1].dials[0] = own(Action::Back);
+    p.pages[1].dials[2] = own(Action::SleepNow);
+    p.pinned.dials.insert(0, own(Action::PrevPage));
+    let mut e = Editor::new(p);
+    e.swap_dials(0, 2);
+    assert_eq!(e.profile().pinned.dials[&2], own(Action::PrevPage));
+    // The other page's own dials moved with it, so what shows there only changed position.
+    assert_eq!(e.profile().dial_at(1, 0).press, Some(Action::SleepNow));
+    assert_eq!(e.profile().pages[1].dials[2], own(Action::Back));
+    assert_eq!(e.profile().pages[0].dials[2], own(Action::NextPage));
+    assert!(e.profile().pages[0].dials[0].is_empty());
 }
 
 #[test]
@@ -936,18 +1002,21 @@ fn dropping_on_a_pin_replaces_it() {
 }
 
 #[test]
-fn deleting_a_library_dial_blanks_its_links_and_undo_restores() {
+fn deleting_a_library_dial_blanks_its_links_removes_its_pin_and_undo_restores() {
     let (mut p, id) = with_library();
     p.pages[0].dials[1] = link(id);
     p.pages[1].dials[1] = link(id);
     p.pinned.dials.insert(2, link(id));
+    p.pages[1].dials[2] = own(Action::NextPage);
     let before = p.clone();
     let mut e = Editor::new(p);
     e.delete_library_dial(id);
     assert!(e.profile().dial_library.is_empty());
     assert_eq!(e.profile().pages[0].dials[1], Dial::default());
     assert_eq!(e.profile().pages[1].dials[1], Dial::default());
-    assert_eq!(e.profile().pinned.dials.get(&2), Some(&Dial::default()));
+    // The pin goes; each page shows its own dial again.
+    assert!(!e.profile().pinned.dials.contains_key(&2));
+    assert_eq!(e.profile().dial_at(1, 2).press, Some(Action::NextPage));
     assert!(e.undo());
     assert_eq!(e.profile(), &before);
 }

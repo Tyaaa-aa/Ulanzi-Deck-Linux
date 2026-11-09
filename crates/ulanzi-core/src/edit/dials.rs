@@ -77,13 +77,28 @@ impl Editor {
     }
 
     /// Swap what shows at `a` and `b`: a pin moves with its dial, the page's own dials swap
-    /// underneath.
+    /// underneath. With a pin at either, every page swaps, so no page shows a different dial.
     pub fn swap_dials(&mut self, a: u8, b: u8) {
         if a == b || !self.dial_free(a) || !self.dial_free(b) {
             return;
         }
         self.edit(|p, page| {
-            p.pages[page].dials.swap(a as usize, b as usize);
+            let pins = &mut p.pinned.dials;
+            if pins.contains_key(&a) || pins.contains_key(&b) {
+                for pg in &mut p.pages {
+                    pg.dials.swap(a as usize, b as usize);
+                }
+                // A dial from a newer version on another page moves with its page's dials.
+                for f in p.foreign.iter_mut().filter(|f| f.page.is_some()) {
+                    if f.slot == Slot::Dial(a) {
+                        f.slot = Slot::Dial(b);
+                    } else if f.slot == Slot::Dial(b) {
+                        f.slot = Slot::Dial(a);
+                    }
+                }
+            } else {
+                p.pages[page].dials.swap(a as usize, b as usize);
+            }
             let pins = &mut p.pinned.dials;
             let (pa, pb) = (pins.remove(&a), pins.remove(&b));
             if let Some(d) = pa {
@@ -95,9 +110,13 @@ impl Editor {
         });
     }
 
-    /// Show dial `n` as it is now on every page. Each page keeps its own dial underneath.
+    /// Show dial `n` as it is now on every page. Each page keeps its own dial underneath. Nothing
+    /// to pin on an empty dial.
     pub fn pin_dial(&mut self, n: u8) {
         if !self.dial_free(n) || self.profile.pinned.dials.contains_key(&n) {
+            return;
+        }
+        if self.profile.pages[self.page].dials[n as usize].is_empty() {
             return;
         }
         self.edit(|p, page| {
@@ -106,13 +125,20 @@ impl Editor {
         });
     }
 
-    /// Remove the pin at `n`; each page shows its own dial again.
+    /// Remove the pin at `n`; each page shows its own dial again. This page keeps the pinned dial
+    /// when it has none of its own, so unpinning never empties the dial you are looking at.
     pub fn unpin_dial(&mut self, n: u8) {
-        if !self.dial_free(n) {
+        if !self.dial_free(n) || !self.profile.pinned.dials.contains_key(&n) {
             return;
         }
-        self.edit(|p, _| {
-            p.pinned.dials.remove(&n);
+        self.edit(|p, page| {
+            let Some(pin) = p.pinned.dials.remove(&n) else {
+                return;
+            };
+            let own = &mut p.pages[page].dials[n as usize];
+            if own.is_empty() {
+                *own = pin;
+            }
         });
     }
 
@@ -133,16 +159,23 @@ impl Editor {
         });
     }
 
-    /// Remove the pin on `side`; each page shows its own small button again.
+    /// Remove the pin on `side`; each page shows its own small button again. This page keeps the
+    /// pinned button when it has none of its own.
     pub fn unpin_small(&mut self, side: u8) {
-        if side > 1 || self.is_foreign(Slot::Small(side)) {
+        if side > 1 || !self.profile.small_pinned(side) || self.is_foreign(Slot::Small(side)) {
             return;
         }
-        self.edit(|p, _| {
-            if side == 0 {
-                p.small_buttons.left = None;
+        self.edit(|p, page| {
+            let (pin, own) = if side == 0 {
+                (p.small_buttons.left.take(), &mut p.pages[page].small_buttons.left)
             } else {
-                p.small_buttons.right = None;
+                (
+                    p.small_buttons.right.take(),
+                    &mut p.pages[page].small_buttons.right,
+                )
+            };
+            if own.is_none() {
+                *own = pin;
             }
         });
     }
@@ -193,12 +226,13 @@ impl Editor {
         self.set_library_dial(id, |d| d.name = name.to_string());
     }
 
-    /// Delete library dial `id`; the dials linked to it, pins included, become blank.
+    /// Delete library dial `id`; the page dials linked to it become blank, and a pin linked to it
+    /// is removed so each page shows its own dial again.
     pub fn delete_library_dial(&mut self, id: Uuid) {
         self.edit(|p, _| {
             p.dial_library.retain(|l| l.id != id);
-            let pages = p.pages.iter_mut().flat_map(|pg| pg.dials.iter_mut());
-            for d in pages.chain(p.pinned.dials.values_mut()) {
+            p.pinned.dials.retain(|_, d| d.library != Some(id));
+            for d in p.pages.iter_mut().flat_map(|pg| pg.dials.iter_mut()) {
                 if d.library == Some(id) {
                     *d = Dial::default();
                 }
