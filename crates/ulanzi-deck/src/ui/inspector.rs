@@ -17,6 +17,7 @@ use ulanzi_core::model::*;
 use crate::state::{Change, State};
 use crate::ui::action_editor::{self, How, OnChange};
 use crate::ui::canvas;
+use crate::ui::dial_inspector;
 use crate::ui::effects_rows::{self, Edit};
 
 pub struct Panel {
@@ -117,18 +118,18 @@ pub fn sections(slots: &[Slot], screen: &ScreenConfig) -> Vec<Section> {
 }
 
 /// Shared by every row of one build of the inspector.
-struct Ctx {
-    state: State,
+pub(super) struct Ctx {
+    pub(super) state: State,
     /// Light refreshes after the inspector's own edits.
     refreshers: RefCell<Vec<Box<dyn Fn()>>>,
     rebuild: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
-type C = Rc<Ctx>;
+pub(super) type C = Rc<Ctx>;
 
 impl Ctx {
     /// Apply an edit made in the inspector.
-    fn commit(self: &Rc<Self>, how: How, f: impl FnOnce(&mut Editor)) {
+    pub(super) fn commit(self: &Rc<Self>, how: How, f: impl FnOnce(&mut Editor)) {
         let state = &self.state;
         state.inspector_edit.set(true);
         match how {
@@ -145,7 +146,7 @@ impl Ctx {
         }
     }
 
-    fn schedule_rebuild(&self) {
+    pub(super) fn schedule_rebuild(&self) {
         if let Some(r) = self.rebuild.borrow().clone() {
             glib::idle_add_local_once(move || r());
         }
@@ -189,7 +190,7 @@ impl Panel {
                 close.downgrade(),
             );
             Rc::new(move || {
-                let has = !state.selection.borrow().is_empty();
+                let has = has_selection(&state);
                 if let Some(stack) = stack.upgrade() {
                     stack.set_visible_child_name(panel_page(has, asked.get()));
                 }
@@ -202,7 +203,7 @@ impl Panel {
         let back_to_key: Rc<dyn Fn() -> bool> = {
             let (state, asked, show_page) = (state.clone(), library_asked.clone(), show_page.clone());
             Rc::new(move || {
-                let has = !state.selection.borrow().is_empty();
+                let has = has_selection(&state);
                 if close_does(has, asked.get()) != CloseDoes::BackToKey {
                     return false;
                 }
@@ -260,7 +261,7 @@ impl Panel {
                 (library_asked.clone(), library.search.clone(), show_page.clone());
             let state = state.clone();
             Rc::new(move || {
-                asked.set(!state.selection.borrow().is_empty());
+                asked.set(has_selection(&state));
                 show_page();
                 search.grab_focus();
             })
@@ -320,6 +321,17 @@ impl Panel {
     }
 }
 
+/// The library dial picked in the Library tray, while it still exists.
+fn picked_library(state: &State) -> Option<uuid::Uuid> {
+    let id = (*state.selected_library.borrow())?;
+    state.editor.borrow().profile().library_dial(id).map(|l| l.id)
+}
+
+/// Something to edit: a slot, or a library dial picked in the tray.
+pub fn has_selection(state: &State) -> bool {
+    !state.selection.borrow().is_empty() || picked_library(state).is_some()
+}
+
 /// Fill the inspector for the current selection; false when nothing is selected.
 fn fill(ctx: &C, content: &gtk::Box) -> bool {
     let slots = ctx.state.selection.borrow().slots();
@@ -333,10 +345,18 @@ fn fill(ctx: &C, content: &gtk::Box) -> bool {
         return true;
     }
     let view = match slots.as_slice() {
-        [] => return false,
+        [] => {
+            // A library dial picked in the Library tray.
+            let Some(id) = picked_library(&ctx.state) else {
+                return false;
+            };
+            let view = dial_inspector::library_view(ctx, content, id);
+            add_sections(content, &[Section::Press], view);
+            return true;
+        }
         [Slot::Key(k)] => key_view(ctx, content, *k),
-        [Slot::Dial(d)] => dial_view(ctx, content, *d),
-        [Slot::Small(s)] => small_view(ctx, content, *s),
+        [Slot::Dial(d)] => dial_inspector::dial_view(ctx, content, *d),
+        [Slot::Small(s)] => dial_inspector::small_view(ctx, content, *s),
         [Slot::Screen] => screen_view(ctx, content, &screen),
         _ if !keys.is_empty() => multi_view(ctx, content, keys),
         _ => {
@@ -354,13 +374,13 @@ fn fill(ctx: &C, content: &gtk::Box) -> bool {
 /// What a view puts below its fixed header: a page per section, and a row under them that
 /// stays in sight.
 #[derive(Default)]
-struct View {
+pub(super) struct View {
     pages: Vec<(Section, gtk::Box)>,
     footer: Option<gtk::Widget>,
 }
 
 impl View {
-    fn page(&mut self, section: Section) -> gtk::Box {
+    pub(super) fn page(&mut self, section: Section) -> gtk::Box {
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(18)
@@ -374,7 +394,7 @@ impl View {
 }
 
 /// Side margins for the fixed rows above and below the sections (the pages have their own).
-fn padded(w: impl IsA<gtk::Widget>) -> impl IsA<gtk::Widget> {
+pub(super) fn padded(w: impl IsA<gtk::Widget>) -> impl IsA<gtk::Widget> {
     w.set_margin_start(12);
     w.set_margin_end(12);
     w
@@ -410,7 +430,7 @@ fn add_sections(content: &gtk::Box, list: &[Section], mut view: View) {
     }
 }
 
-fn title_block(title: &str, subtitle: &str) -> gtk::Box {
+pub(super) fn title_block(title: &str, subtitle: &str) -> gtk::Box {
     let b = gtk::Box::new(gtk::Orientation::Vertical, 2);
     b.append(
         &gtk::Label::builder()
@@ -433,7 +453,7 @@ fn title_block(title: &str, subtitle: &str) -> gtk::Box {
     b
 }
 
-fn page_name(state: &State) -> String {
+pub(super) fn page_name(state: &State) -> String {
     let e = state.editor.borrow();
     let p = e.page();
     format!(
@@ -569,6 +589,7 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
         tap.as_ref(),
         write_tap,
         "Choose what this key does",
+        true,
     ) {
         actions.add(&w);
     }
@@ -1322,15 +1343,17 @@ fn multi_view(ctx: &C, content: &gtk::Box, keys: Vec<u8>) -> View {
 // Action slots
 
 /// Writes a slot's action: (action, how, picked from the list).
-type Write = Rc<dyn Fn(Option<Action>, How, bool)>;
+pub(super) type Write = Rc<dyn Fn(Option<Action>, How, bool)>;
 
-/// The action card (chip, title, summary, Change / Remove) followed by the parameter rows.
-fn slot_rows(
+/// The action card (chip, title, summary, Change, and Remove when `removable`) followed by the
+/// parameter rows.
+pub(super) fn slot_rows(
     ctx: &C,
     path: &str,
     action: Option<&Action>,
     write: Write,
     empty_hint: &str,
+    removable: bool,
 ) -> Vec<gtk::Widget> {
     let state = &ctx.state;
     let title = match action {
@@ -1362,7 +1385,7 @@ fn slot_rows(
         )
     };
     card.add_suffix(&picker);
-    if action.is_some() {
+    if action.is_some() && removable {
         let remove = gtk::Button::builder()
             .icon_name("edit-clear-symbolic")
             .tooltip_text("Remove action")
@@ -1399,7 +1422,7 @@ fn card_subtitle(state: &State, a: &Action) -> String {
 }
 
 /// A collapsible slot (dial zones, screen tap/hold): title, summary, picker; parameters inside.
-fn slot_expander(
+pub(super) fn slot_expander(
     ctx: &C,
     path: &str,
     title: &str,
@@ -1463,70 +1486,6 @@ fn slot_expander(
 
 // ---------------------------------------------------------------------------------------------
 // Dials, small buttons, wide screen
-
-fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
-    let mut view = View::default();
-    content.append(&padded(title_block(
-        &format!("Dial {}", d + 1),
-        &format!("{} · turn it, press it, or hold it down", page_name(&ctx.state)),
-    )));
-    let dial = ctx.state.editor.borrow().dial_info(d).dial;
-    type Pick = fn(&mut Dial) -> &mut Option<Action>;
-    // The path names are the old expander titles, which the undo merging keys on.
-    let zones: [(&str, Option<&Action>, Pick); 4] = [
-        ("Turn Left", dial.left.as_ref(), |d| &mut d.left),
-        ("Turn Right", dial.right.as_ref(), |d| &mut d.right),
-        ("Press", dial.press.as_ref(), |d| &mut d.press),
-        ("Hold", dial.hold.as_ref(), |d| &mut d.hold),
-    ];
-    // One list: each zone opens to its settings.
-    let group = adw::PreferencesGroup::new();
-    for (title, action, pick) in zones {
-        let write: Write = {
-            let ctx = ctx.clone();
-            Rc::new(move |a, how, _| ctx.commit(how, |e| e.set_dial(d, |dial| *pick(dial) = a)))
-        };
-        group.add(&slot_expander(
-            ctx,
-            &format!("dial{d}/{title}"),
-            title,
-            action,
-            write,
-        ));
-    }
-    view.page(Section::Press).append(&group);
-    view
-}
-
-fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
-    let mut view = View::default();
-    let side = if s == 0 { "Left" } else { "Right" };
-    content.append(&padded(title_block(
-        &format!("{side} Button"),
-        "The small button beside the dials",
-    )));
-    let action = {
-        let e = ctx.state.editor.borrow();
-        let b = &e.profile().small_buttons;
-        if s == 0 { b.left.clone() } else { b.right.clone() }
-    };
-    let group = adw::PreferencesGroup::builder().title("Action").build();
-    let write: Write = {
-        let ctx = ctx.clone();
-        Rc::new(move |a, how, _| ctx.commit(how, |e| e.set_small_button(s, a)))
-    };
-    for w in slot_rows(
-        ctx,
-        &format!("small{s}"),
-        action.as_ref(),
-        write,
-        "Choose what this button does",
-    ) {
-        group.add(&w);
-    }
-    view.page(Section::Press).append(&group);
-    view
-}
 
 /// The screen's display choices, in combo order.
 const SCREEN_MODES: [&str; 7] = [

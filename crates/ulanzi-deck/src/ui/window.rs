@@ -366,6 +366,24 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
             }
         });
         window.add_action(&a);
+        // Open Library from an empty dial's editor: the tray opens with that dial outlined.
+        let place = gio::SimpleAction::new("library-place", Some(glib::VariantTy::BYTE));
+        let (tray, st) = (canvas.tray.clone(), state.clone());
+        place.connect_activate(move |_, v| {
+            let Some(n) = v.and_then(|v| v.get::<u8>()) else {
+                return;
+            };
+            tray.open(crate::ui::library_tray::Tab::Dials);
+            tray.mark_drop_spot(Some(n));
+            crate::ui::toast(
+                &st,
+                &format!(
+                    "Drag a dial onto Dial {}, or right-click a dial to copy and paste it.",
+                    n + 1
+                ),
+            );
+        });
+        window.add_action(&place);
         // The tray's ? button: the first-time guide hooks in here.
         window.add_action(&gio::SimpleAction::new("library-guide", None));
     }
@@ -584,7 +602,7 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
         });
         let update = {
             let (s, deselect) = (state.clone(), deselect.clone());
-            move || deselect.set_enabled(!s.selection.borrow().is_empty())
+            move || deselect.set_enabled(crate::ui::inspector::has_selection(&s))
         };
         update();
         state.on(move |c| {

@@ -175,6 +175,24 @@ impl Editor {
         id
     }
 
+    /// Change library dial `id` itself (picked in the Library tray).
+    pub fn set_library_dial(&mut self, id: Uuid, f: impl FnOnce(&mut Dial)) {
+        self.edit(|p, _| {
+            if let Some(l) = p.dial_library.iter_mut().find(|l| l.id == id) {
+                f(&mut l.dial);
+            }
+        });
+    }
+
+    /// Name library dial `id`; it keeps a name, so an empty one is ignored.
+    pub fn rename_library_dial(&mut self, id: Uuid, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        self.set_library_dial(id, |d| d.name = name.to_string());
+    }
+
     /// Delete library dial `id`; the dials linked to it, pins included, become blank.
     pub fn delete_library_dial(&mut self, id: Uuid) {
         self.edit(|p, _| {

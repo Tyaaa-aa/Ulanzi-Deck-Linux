@@ -303,7 +303,24 @@ fn main() -> glib::ExitCode {
             if let Some(p) = shot.page {
                 state2.set_page(p.saturating_sub(1));
             }
-            if let Some(sel) = &shot.select {
+            // `library:<n>`: the nth library dial (1-based), as if clicked in the tray.
+            let library = shot
+                .select
+                .as_deref()
+                .and_then(|s| s.strip_prefix("library:"))
+                .and_then(|n| n.parse::<usize>().ok());
+            if let Some(n) = library {
+                let id = state2
+                    .editor
+                    .borrow()
+                    .profile()
+                    .dial_library
+                    .get(n.saturating_sub(1))
+                    .map(|l| l.id);
+                if let Some(id) = id {
+                    state2.select_library(id);
+                }
+            } else if let Some(sel) = &shot.select {
                 state2.select(|s| match sel.split_once(':') {
                     Some(("key", n)) => n
                         .split(',')

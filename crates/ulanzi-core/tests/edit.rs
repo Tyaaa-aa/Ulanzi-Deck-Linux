@@ -1010,6 +1010,26 @@ fn rename_trims_and_follows_the_link() {
 }
 
 #[test]
+fn a_library_dial_is_edited_and_named_by_its_id() {
+    let (p, id) = with_library();
+    let mut e = Editor::new(p);
+    e.set_library_dial(id, press(Action::NextPage));
+    e.rename_library_dial(id, "  Lights  ");
+    // It keeps a name; an unknown id changes nothing.
+    e.rename_library_dial(id, "  ");
+    e.set_library_dial(uuid::Uuid::new_v4(), press(Action::Back));
+    let dial = &e.profile().library_dial(id).expect("kept").dial;
+    assert_eq!(
+        (dial.press.clone(), dial.name.as_str()),
+        (Some(Action::NextPage), "Lights")
+    );
+    assert!(e.undo());
+    assert!(e.undo());
+    assert!(!e.undo());
+    assert_eq!(e.profile().library_dial(id).expect("kept").dial.name, "Volume");
+}
+
+#[test]
 fn drop_action_on_a_linked_dial_edits_the_library_dial() {
     let (mut p, id) = with_library();
     p.pages[0].dials[0] = link(id);

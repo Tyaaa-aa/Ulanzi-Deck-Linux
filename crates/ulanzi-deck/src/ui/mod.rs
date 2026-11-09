@@ -7,6 +7,7 @@ pub mod bundle_dialogs;
 pub mod canvas;
 pub mod capture;
 pub mod color_popover;
+pub mod dial_inspector;
 pub mod dial_ring;
 pub mod dial_swap;
 pub mod effects_rows;
