@@ -248,6 +248,19 @@ impl Tray {
         self.frame.set_visible(true);
         self.run_grow(1.0);
         self.toggled(true);
+        // The first time, the guide follows once the tray has grown.
+        if crate::ui::library_guide::should_show() {
+            crate::ui::library_guide::mark_shown();
+            let (state, stage) = (self.state.clone(), self.stage.downgrade());
+            glib::timeout_add_local_once(
+                std::time::Duration::from_millis(ANIM_MS as u64 + 100),
+                move || {
+                    if let Some(stage) = stage.upgrade() {
+                        crate::ui::library_guide::open(&state, &stage);
+                    }
+                },
+            );
+        }
     }
 
     pub fn close(&self) {

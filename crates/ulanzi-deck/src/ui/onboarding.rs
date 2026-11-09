@@ -134,12 +134,16 @@ fn uinput_ok() -> bool {
         .is_ok()
 }
 
-fn marker() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
+/// The state directory the first-run markers live under (`ulanzi-deck` inside it).
+pub(crate) fn state_home() -> Option<PathBuf> {
+    std::env::var_os("XDG_STATE_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(base.join("ulanzi-deck").join("onboarded"))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))
+}
+
+fn marker() -> Option<PathBuf> {
+    Some(state_home()?.join("ulanzi-deck").join("onboarded"))
 }
 
 /// True until the user has finished or dismissed onboarding once.
@@ -349,6 +353,17 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, start: Option<&str>) 
             .build(),
     );
     done.append(&crate::ui::how_it_works::build());
+    let tour = gtk::Button::builder()
+        .label("Take the Library Tour")
+        .halign(gtk::Align::Center)
+        .css_classes(["pill"])
+        .build();
+    {
+        // Opens over this dialog.
+        let state = state.clone();
+        tour.connect_clicked(move |b| crate::ui::library_guide::open(&state, b));
+    }
+    done.append(&tour);
     done.append(
         &gtk::Label::builder()
             .label("Changes are saved and sent to the deck as you go. Press Ctrl+Z to undo anything.")

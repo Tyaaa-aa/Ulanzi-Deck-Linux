@@ -384,8 +384,15 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
             );
         });
         window.add_action(&place);
-        // The tray's ? button: the first-time guide hooks in here.
-        window.add_action(&gio::SimpleAction::new("library-guide", None));
+        // The tray's ? button replays the first-time guide.
+        let guide = gio::SimpleAction::new("library-guide", None);
+        let (st, win) = (state.clone(), window.downgrade());
+        guide.connect_activate(move |_, _| {
+            if let Some(w) = win.upgrade() {
+                crate::ui::library_guide::open(&st, &w);
+            }
+        });
+        window.add_action(&guide);
     }
     // Ctrl+1 to Ctrl+9: the profiles, in the sidebar's order.
     for n in 1..=9usize {

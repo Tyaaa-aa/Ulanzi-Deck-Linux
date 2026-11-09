@@ -23,7 +23,7 @@ const CARD_H: f64 = 34.0;
 
 pub(crate) const BLUE: (f64, f64, f64) = (0.208, 0.518, 0.894);
 pub(crate) const GREEN: (f64, f64, f64) = (0.2, 0.82, 0.478);
-const ORANGE: (f64, f64, f64) = (1.0, 0.47, 0.0);
+pub(crate) const ORANGE: (f64, f64, f64) = (1.0, 0.47, 0.0);
 
 /// Where each step of the story starts, in seconds.
 const T_GRAB: f64 = 0.4;
@@ -105,7 +105,7 @@ fn note(cr: &cairo::Context, x: f64, y: f64, k: f64) {
     cr.restore().ok();
 }
 
-fn cursor(cr: &cairo::Context, x: f64, y: f64, fg: (f64, f64, f64)) {
+pub(crate) fn cursor(cr: &cairo::Context, x: f64, y: f64, fg: (f64, f64, f64)) {
     cr.move_to(x, y);
     cr.line_to(x, y + 16.0);
     cr.line_to(x + 4.5, y + 12.0);

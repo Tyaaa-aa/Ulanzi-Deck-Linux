@@ -127,6 +127,19 @@
   min-height: 9px;
 }
 
+/* Library guide: the dots and Skip ease between steps */
+.guide-dots .page-dot {
+  transition: min-width 200ms ease-out, min-height 200ms ease-out, background-color 200ms ease-out;
+}
+
+.guide-skip {
+  transition: opacity 200ms ease-out;
+}
+
+.guide-skip.gone {
+  opacity: 0;
+}
+
 .hint {
   color: alpha(@window_fg_color, 0.6);
   font-size: smaller;
