@@ -117,7 +117,7 @@ fn drop_action_on_dial_and_small_and_screen() {
     e.drop_action(Slot::Small(1), Action::Back);
     assert_eq!(e.profile().small_buttons.right, Some(Action::Back));
     e.set_dial(1, |d| d.left = Some(Action::PrevPage));
-    assert_eq!(e.dials()[1].left, Some(Action::PrevPage));
+    assert_eq!(e.dial_info(1).dial.left, Some(Action::PrevPage));
     e.drop_action(Slot::Screen, Action::SleepNow);
     assert!(matches!(
         e.profile().screen,
@@ -372,17 +372,13 @@ fn rename_profile_trims_and_ignores_empty() {
 fn dials_belong_to_the_page() {
     let mut e = editor_with_keys();
     e.set_dial(0, |d| d.press = Some(Action::NextPage));
-    // A new page starts with the dials of the page it was added from.
     let two = e.add_page("Two");
     e.set_page(two);
-    assert_eq!(e.dials()[0].press, Some(Action::NextPage));
     e.set_dial(0, |d| d.press = Some(Action::PrevPage));
     e.set_page(0);
-    assert_eq!(e.dials()[0].press, Some(Action::NextPage));
-    // Copy one dial to every page.
-    e.dial_to_all_pages(0);
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::NextPage));
     e.set_page(two);
-    assert_eq!(e.dials()[0].press, Some(Action::NextPage));
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::PrevPage));
 }
 
 #[test]
@@ -493,7 +489,7 @@ fn nothing_else_writes_over_a_foreign_slot() {
     assert!(e.profile().pages[0].keys.contains_key(&2));
     e.set_dial(1, |d| d.press = Some(Action::NextPage));
     e.drop_action(Slot::Dial(1), Action::NextPage);
-    assert_eq!(e.dials()[1], Dial::default());
+    assert_eq!(e.dial_info(1).dial, Dial::default());
 }
 
 #[test]
@@ -764,4 +760,309 @@ fn a_state_keeps_its_own_effect_when_another_changes() {
     let states = &e.key(1).expect("key").look.states;
     assert_eq!(states[0].look.effect.map(|f| f.kind), Some(EffectKind::Chase));
     assert_eq!(states[1].look.effect.map(|f| f.kind), Some(EffectKind::Glow));
+}
+
+fn press(a: Action) -> impl FnOnce(&mut Dial) {
+    move |d| d.press = Some(a)
+}
+
+/// Two pages, page 0 current.
+fn two_pages() -> Editor {
+    let mut e = editor_with_keys();
+    e.add_page("Two");
+    e.set_page(0);
+    e
+}
+
+#[test]
+fn a_library_dial_linked_on_two_pages_changes_both() {
+    let mut e = two_pages();
+    e.set_dial(1, press(Action::NextPage));
+    let id = e.add_dial_to_library(1).expect("added");
+    assert_eq!(e.dial_info(1).library, Some(id));
+    assert_eq!(
+        e.profile().library_dial(id).expect("in library").dial.name,
+        "Dial 2"
+    );
+    assert_eq!(
+        e.profile().pages[0].dials[1],
+        Dial {
+            library: Some(id),
+            ..Dial::default()
+        }
+    );
+    e.set_page(1);
+    e.place_dial(1, id);
+    e.set_dial(1, press(Action::PrevPage));
+    assert_eq!(e.profile().dial_at(0, 1).press, Some(Action::PrevPage));
+    assert_eq!(e.profile().dial_at(1, 1).press, Some(Action::PrevPage));
+    assert_eq!(e.profile().dial_usage(id).pages, 2);
+}
+
+#[test]
+fn edit_for_this_page_only_stops_the_link() {
+    let mut e = two_pages();
+    e.set_dial(0, |d| {
+        d.press = Some(Action::NextPage);
+        d.name = "Volume".into();
+    });
+    let id = e.add_dial_to_library(0).expect("added");
+    e.set_page(1);
+    e.place_dial(0, id);
+    e.own_copy_dial(0);
+    let info = e.dial_info(0);
+    assert_eq!(info.library, None);
+    assert_eq!(info.dial.name, "Volume");
+    assert_eq!(info.dial.press, Some(Action::NextPage));
+    e.set_dial(0, press(Action::PrevPage));
+    assert_eq!(e.profile().dial_at(0, 0).press, Some(Action::NextPage));
+    assert!(e.undo());
+    assert!(e.undo());
+    assert_eq!(e.dial_info(0).library, Some(id));
+}
+
+fn own(a: Action) -> Dial {
+    Dial {
+        press: Some(a),
+        ..Dial::default()
+    }
+}
+
+fn link(id: uuid::Uuid) -> Dial {
+    Dial {
+        library: Some(id),
+        ..Dial::default()
+    }
+}
+
+/// A profile with two pages and a library dial "Volume" (press = Back).
+fn with_library() -> (Profile, uuid::Uuid) {
+    let mut p = Profile::new_default("L", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    let id = uuid::Uuid::new_v4();
+    p.dial_library.push(LibraryDial {
+        id,
+        dial: Dial {
+            name: "Volume".into(),
+            ..own(Action::Back)
+        },
+    });
+    (p, id)
+}
+
+#[test]
+fn swap_moves_a_pin_with_its_dial() {
+    let mut p = Profile::new_default("S", Model::D200X);
+    p.pages[0].dials[0] = own(Action::NextPage);
+    p.pages[0].dials[2] = own(Action::PrevPage);
+    p.pinned.dials.insert(0, own(Action::Back));
+    let before = p.clone();
+    let mut e = Editor::new(p);
+    e.swap_dials(0, 2);
+    let info = e.dial_info(2);
+    assert!(info.pinned);
+    assert_eq!(info.dial.press, Some(Action::Back));
+    assert!(!e.profile().pinned.dials.contains_key(&0));
+    let info = e.dial_info(0);
+    assert!(!info.pinned);
+    assert_eq!(info.dial.press, Some(Action::PrevPage));
+    assert_eq!(e.profile().pages[0].dials[2], own(Action::NextPage));
+    assert!(e.undo());
+    assert_eq!(e.profile(), &before);
+}
+
+#[test]
+fn swap_without_pins_swaps_the_page_dials() {
+    let mut e = editor_with_keys();
+    e.set_dial(0, press(Action::NextPage));
+    e.swap_dials(0, 1);
+    assert_eq!(e.dial_info(1).dial.press, Some(Action::NextPage));
+    assert!(e.dial_info(0).dial.is_empty());
+    assert!(e.undo());
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::NextPage));
+}
+
+#[test]
+fn pinning_keeps_the_page_dial_underneath() {
+    let mut e = editor_with_keys();
+    let two = e.add_page("Two");
+    e.set_page(two);
+    assert_eq!(e.add_page("Three"), 2);
+    e.set_page(2);
+    e.set_dial(1, press(Action::NextPage));
+    e.pin_dial(1);
+    assert_eq!(e.profile().pages[2].dials[1], own(Action::NextPage));
+    e.set_page(0);
+    let info = e.dial_info(1);
+    assert!(info.pinned);
+    assert_eq!(info.dial.press, Some(Action::NextPage));
+    e.unpin_dial(1);
+    assert!(e.dial_info(1).dial.is_empty());
+    assert!(!e.dial_info(1).pinned);
+    assert_eq!(e.profile().dial_at(2, 1).press, Some(Action::NextPage));
+}
+
+#[test]
+fn unpin_reveals_the_page_dial() {
+    let mut p = Profile::new_default("U", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    p.pages[1].dials[0] = own(Action::NextPage);
+    p.pinned.dials.insert(0, own(Action::PrevPage));
+    let mut e = Editor::new(p);
+    e.set_page(1);
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::PrevPage));
+    e.unpin_dial(0);
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::NextPage));
+    e.set_page(0);
+    assert!(e.dial_info(0).dial.is_empty());
+}
+
+#[test]
+fn dropping_on_a_pin_replaces_it() {
+    let (mut p, id) = with_library();
+    p.pages[0].dials[0] = own(Action::NextPage);
+    p.pages[1].dials[0] = own(Action::PrevPage);
+    p.pinned.dials.insert(0, own(Action::SleepNow));
+    let pages = p.pages.clone();
+    let mut e = Editor::new(p);
+    e.place_dial(0, id);
+    let info = e.dial_info(0);
+    assert!(info.pinned);
+    assert_eq!(info.library, Some(id));
+    assert_eq!(info.dial.press, Some(Action::Back));
+    assert_eq!(e.profile().pages, pages);
+    assert!(e.undo());
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::SleepNow));
+}
+
+#[test]
+fn deleting_a_library_dial_blanks_its_links_and_undo_restores() {
+    let (mut p, id) = with_library();
+    p.pages[0].dials[1] = link(id);
+    p.pages[1].dials[1] = link(id);
+    p.pinned.dials.insert(2, link(id));
+    let before = p.clone();
+    let mut e = Editor::new(p);
+    e.delete_library_dial(id);
+    assert!(e.profile().dial_library.is_empty());
+    assert_eq!(e.profile().pages[0].dials[1], Dial::default());
+    assert_eq!(e.profile().pages[1].dials[1], Dial::default());
+    assert_eq!(e.profile().pinned.dials.get(&2), Some(&Dial::default()));
+    assert!(e.undo());
+    assert_eq!(e.profile(), &before);
+}
+
+#[test]
+fn copy_paste_keeps_a_link_in_the_same_profile() {
+    let (mut p, id) = with_library();
+    p.pages[0].dials[0] = link(id);
+    let mut e = Editor::new(p);
+    assert!(!e.has_dial_clip());
+    e.copy_dial(0);
+    assert!(e.has_dial_clip());
+    e.set_page(1);
+    e.paste_dial(2);
+    assert_eq!(e.dial_info(2).library, Some(id));
+    assert_eq!(e.profile().pages[1].dials[2], link(id));
+    assert_eq!(e.profile().dial_usage(id).pages, 2);
+}
+
+#[test]
+fn paste_into_another_profile_makes_an_own_copy() {
+    let (mut p, id) = with_library();
+    p.pages[0].dials[0] = link(id);
+    let mut e = Editor::new(p);
+    e.copy_dial(0);
+    e.replace_profile(Profile::new_default("Other", Model::D200X));
+    e.paste_dial(1);
+    let d = &e.profile().pages[0].dials[1];
+    assert_eq!(d.library, None);
+    assert_eq!(d.name, "Volume");
+    assert_eq!(d.press, Some(Action::Back));
+}
+
+#[test]
+fn a_new_page_starts_without_dials() {
+    let mut e = editor_with_keys();
+    e.set_dial(0, press(Action::NextPage));
+    e.set_dial(2, press(Action::Back));
+    e.pin_dial(2);
+    let at = e.add_page("Two");
+    assert!(e.profile().pages[at].dials.iter().all(Dial::is_empty));
+    e.set_page(at);
+    assert!(e.dial_info(0).dial.is_empty());
+    assert_eq!(e.dial_info(2).dial.press, Some(Action::Back));
+}
+
+#[test]
+fn rename_trims_and_follows_the_link() {
+    let (mut p, id) = with_library();
+    p.pages[0].dials[0] = link(id);
+    let mut e = Editor::new(p);
+    e.rename_dial(0, "  Lights  ");
+    assert_eq!(e.profile().library_dial(id).expect("kept").dial.name, "Lights");
+    assert_eq!(e.profile().pages[0].dials[0], link(id));
+    e.rename_dial(1, " Scroll ");
+    assert_eq!(e.profile().pages[0].dials[1].name, "Scroll");
+    assert!(e.undo());
+    assert!(e.undo());
+    assert_eq!(e.dial_info(0).dial.name, "Volume");
+}
+
+#[test]
+fn drop_action_on_a_linked_dial_edits_the_library_dial() {
+    let (mut p, id) = with_library();
+    p.pages[0].dials[0] = link(id);
+    let mut e = Editor::new(p);
+    e.drop_action(Slot::Dial(0), Action::NextPage);
+    assert_eq!(
+        e.profile().library_dial(id).expect("kept").dial.press,
+        Some(Action::NextPage)
+    );
+    assert_eq!(e.profile().pages[0].dials[0], link(id));
+    e.set_slot_action(Slot::Dial(0), Action::PrevPage);
+    assert_eq!(
+        e.profile().library_dial(id).expect("kept").dial.press,
+        Some(Action::PrevPage)
+    );
+}
+
+#[test]
+fn new_and_remove_dials() {
+    let mut e = editor_with_keys();
+    let id = e.new_library_dial();
+    assert_eq!(e.profile().library_dial(id).expect("made").dial.name, "New Dial");
+    e.set_dial(0, press(Action::NextPage));
+    e.pin_dial(0);
+    e.set_dial(1, press(Action::Back));
+    e.remove_dial(1);
+    assert!(e.dial_info(1).dial.is_empty());
+    // A pin is left alone; only the page's own dial goes.
+    e.remove_dial(0);
+    assert!(e.dial_info(0).pinned);
+    assert_eq!(e.dial_info(0).dial.press, Some(Action::NextPage));
+    assert!(e.profile().pages[0].dials[0].is_empty());
+}
+
+#[test]
+fn dial_operations_leave_a_foreign_dial_alone() {
+    let (mut p, id) = with_library();
+    let f = with_foreign();
+    p.foreign = f.foreign.clone();
+    for f in &mut p.foreign {
+        f.page = Some(p.pages[0].id);
+    }
+    p.pages[0].dials[0] = own(Action::NextPage);
+    let before = p.clone();
+    let mut e = Editor::new(p);
+    assert_eq!(e.add_dial_to_library(1), None);
+    e.place_dial(1, id);
+    e.pin_dial(1);
+    e.rename_dial(1, "X");
+    e.remove_dial(1);
+    e.swap_dials(0, 1);
+    e.copy_dial(0);
+    e.paste_dial(1);
+    assert_eq!(e.profile(), &before);
+    assert!(!e.can_undo());
 }

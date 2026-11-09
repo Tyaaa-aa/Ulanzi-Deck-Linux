@@ -1470,7 +1470,7 @@ fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         &format!("Dial {}", d + 1),
         &format!("{} · turn it, press it, or hold it down", page_name(&ctx.state)),
     )));
-    let dial = ctx.state.editor.borrow().dials()[d as usize].clone();
+    let dial = ctx.state.editor.borrow().dial_info(d).dial;
     type Pick = fn(&mut Dial) -> &mut Option<Action>;
     // The path names are the old expander titles, which the undo merging keys on.
     let zones: [(&str, Option<&Action>, Pick); 4] = [
@@ -1495,29 +1495,6 @@ fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         ));
     }
     view.page(Section::Press).append(&group);
-
-    let all = adw::PreferencesGroup::builder()
-        .description(
-            "Each page has its own dials. New pages start with the dials of the page you add them from.",
-        )
-        .build();
-    let copy = adw::ButtonRow::builder()
-        .title("Use This Dial on Every Page")
-        .start_icon_name("edit-copy-symbolic")
-        .build();
-    {
-        let ctx = ctx.clone();
-        copy.connect_activated(move |_| {
-            ctx.commit(How::Set, |e| e.dial_to_all_pages(d));
-            crate::ui::toast(
-                &ctx.state,
-                &format!("Dial {} is now the same on every page", d + 1),
-            );
-        });
-    }
-    all.add(&copy);
-    // The same for every zone, so it stays under the sections.
-    view.footer = Some(all.upcast());
     view
 }
 

@@ -1184,9 +1184,9 @@ pub fn build(state: &State) -> Canvas {
                 }
                 // Dials of this page.
                 for (n, (face, button)) in faces.iter().zip(dials.iter()).enumerate() {
-                    let d = &e.dials()[n];
-                    face.show(d);
-                    button.set_tooltip_markup(Some(&dial_tooltip(&state.plugins.borrow(), n, d)));
+                    let d = e.dial_info(n as u8).dial;
+                    face.show(&d);
+                    button.set_tooltip_markup(Some(&dial_tooltip(&state.plugins.borrow(), n, &d)));
                 }
                 drop(e);
                 screen

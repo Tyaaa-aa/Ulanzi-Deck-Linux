@@ -1,6 +1,7 @@
 //! Editing a profile: selection, bulk edits, clipboard and undo. No GUI code, so it is tested
 //! directly; the GTK app is a thin layer over [`Editor`].
 
+mod dials;
 mod selection;
 
 pub use selection::{Selection, Slot};
@@ -12,6 +13,7 @@ use crate::model::*;
 /// Number of undo steps kept.
 pub const HISTORY_LIMIT: usize = 200;
 const KEYS: u8 = 13;
+const DIALS: u8 = 3;
 
 /// Small buttons and the wide screen belong to the profile, everything else to a page.
 fn global(slot: Slot) -> bool {
@@ -22,12 +24,38 @@ fn global(slot: Slot) -> bool {
 fn macro_slot(p: &mut Profile, page: usize, slot: Slot) -> Option<&mut Action> {
     let a = match slot {
         Slot::Key(i) => p.pages.get_mut(page)?.keys.get_mut(&i)?.tap.as_mut(),
-        Slot::Dial(i) => p.pages.get_mut(page)?.dials.get_mut(i as usize)?.press.as_mut(),
+        Slot::Dial(i) => dial_mut(p, page, i)?.press.as_mut(),
         Slot::Small(0) => p.small_buttons.left.as_mut(),
         Slot::Small(_) => p.small_buttons.right.as_mut(),
         Slot::Screen => None,
     };
     a.filter(|a| matches!(a, Action::Macro { .. }))
+}
+
+/// Where dial `n` is set up on `page`: the pin if there is one, else the page's own. A link is
+/// not followed.
+fn dial_spot(p: &mut Profile, page: usize, n: u8) -> Option<&mut Dial> {
+    if n >= DIALS {
+        return None;
+    }
+    match p.pinned.dials.get_mut(&n) {
+        Some(pin) => Some(pin),
+        None => p.pages.get_mut(page)?.dials.get_mut(n as usize),
+    }
+}
+
+/// The dial that edits of dial `n` change: [`dial_spot`], with a link followed to the library
+/// dial. `None` for a link to nothing.
+fn dial_mut(p: &mut Profile, page: usize, n: u8) -> Option<&mut Dial> {
+    let link = dial_spot(p, page, n)?.library;
+    match link {
+        Some(id) => p
+            .dial_library
+            .iter_mut()
+            .find(|l| l.id == id)
+            .map(|l| &mut l.dial),
+        None => dial_spot(p, page, n),
+    }
 }
 
 /// Store `m`, keeping the version it replaces one level back.
@@ -113,11 +141,18 @@ pub fn shared<T: PartialEq + Clone>(mut values: impl Iterator<Item = T>) -> Mixe
     }
 }
 
+/// One clip at a time, so the size of the dial variant costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Clip {
     /// Keys relative to the first copied index.
     Keys(Vec<(u8, Key)>),
     Style(KeyLook),
+    /// A dial as it shows, with its link kept, and the profile it came from.
+    Dial {
+        dial: Dial,
+        profile: uuid::Uuid,
+    },
 }
 
 /// One undo step: the profile, and the library when the step changed it.
@@ -295,7 +330,7 @@ impl Editor {
                 }
             }
             Slot::Dial(d) => {
-                if let Some(dial) = p.pages[page].dials.get_mut(d as usize) {
+                if let Some(dial) = dial_mut(p, page, d) {
                     dial.press = Some(action);
                 }
             }
@@ -457,7 +492,7 @@ impl Editor {
             Slot::Small(0) => p.small_buttons.left = Some(action),
             Slot::Small(_) => p.small_buttons.right = Some(action),
             Slot::Dial(d) => {
-                if let Some(dial) = p.pages[page].dials.get_mut(d as usize) {
+                if let Some(dial) = dial_mut(p, page, d) {
                     dial.press = Some(action);
                 }
             }
@@ -487,29 +522,14 @@ impl Editor {
         });
     }
 
-    /// The dials of the current page.
-    pub fn dials(&self) -> &[Dial; 3] {
-        &self.profile.pages[self.page].dials
-    }
-
-    /// Give every page the current page's setup of `dial`.
-    pub fn dial_to_all_pages(&mut self, dial: u8) {
-        self.edit(|p, page| {
-            let Some(d) = p.pages[page].dials.get(dial as usize).cloned() else {
-                return;
-            };
-            for pg in &mut p.pages {
-                pg.dials[dial as usize] = d.clone();
-            }
-        });
-    }
-
+    /// Change dial `dial` as it shows: the pin, else the page's own; a linked dial changes the
+    /// library dial.
     pub fn set_dial(&mut self, dial: u8, f: impl FnOnce(&mut Dial)) {
         if self.is_foreign(Slot::Dial(dial)) {
             return;
         }
         self.edit(|p, page| {
-            if let Some(d) = p.pages[page].dials.get_mut(dial as usize) {
+            if let Some(d) = dial_mut(p, page, dial) {
                 f(d);
             }
         });
@@ -679,7 +699,6 @@ impl Editor {
     pub fn add_keys(&mut self, groups: Vec<Vec<Key>>, page_name: &str, new_page: bool) -> usize {
         let mut first = None;
         let start = self.page;
-        let dials = self.profile.pages[self.page].dials.clone();
         self.edit(|p, page| {
             let mut at = page;
             let mut added = 0;
@@ -690,9 +709,7 @@ impl Editor {
                 } else {
                     format!("{page_name} {added}")
                 };
-                let mut new = Page::new(&name);
-                new.dials = dials.clone();
-                p.pages.insert(at + 1, new);
+                p.pages.insert(at + 1, Page::new(&name));
                 at + 1
             };
             if new_page {
@@ -725,16 +742,11 @@ impl Editor {
             .count()
     }
 
-    /// Add a page after the current one; returns its index.
+    /// Add a page after the current one; returns its index. It starts without dials (pins still
+    /// show on it).
     pub fn add_page(&mut self, name: &str) -> usize {
         let at = (self.page + 1).min(self.profile.pages.len());
-        // A new page starts with the dials of the page it was added from.
-        let dials = self.profile.pages[self.page].dials.clone();
-        self.edit(|p, _| {
-            let mut page = Page::new(name);
-            page.dials = dials;
-            p.pages.insert(at, page)
-        });
+        self.edit(|p, _| p.pages.insert(at, Page::new(name)));
         at
     }
 
