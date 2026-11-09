@@ -118,6 +118,12 @@ async fn main() -> ExitCode {
     {
         tracing::warn!("daily backup failed: {e}");
     }
+    // 2.5 pins dials that are the same on every page, once, after a backup.
+    match ulanzi_core::upgrade::pin_shared_dials_once(&store) {
+        Ok(ids) if !ids.is_empty() => tracing::info!("pinned shared dials in {} profiles", ids.len()),
+        Ok(_) => {}
+        Err(e) => tracing::warn!("cannot pin shared dials, will try again next start: {e}"),
+    }
     let settings = store.load_settings().unwrap_or_else(|e| {
         tracing::error!("settings unreadable, using defaults and leaving the file alone: {e}");
         store.protect_settings();

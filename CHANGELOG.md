@@ -24,8 +24,9 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ### Changed
 
-- Dials that were the same on every page, and old profile-wide dials, load as pinned dials. New pages
-  start without dials.
+- Old profile-wide dials load as pinned dials. Once, on the first start of 2.5 and after a backup, a dial
+  that is the same on every page of a profile is pinned, and each page keeps its copy underneath; profiles
+  imported from files made before 2.5 get the same. New pages start without dials.
 - Small buttons now belong to each page. Existing small buttons load as pinned.
 - Profiles that use the library or pins need Ulanzi Deck 2.5 or newer.
 

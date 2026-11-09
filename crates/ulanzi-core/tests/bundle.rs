@@ -483,3 +483,40 @@ fn an_old_bundle_imports() {
     let r = import(&other, &b, &opts(Conflict::KeepBoth)).expect("import");
     assert_eq!(r.imported, vec![p.id]);
 }
+
+/// A two-page profile whose first dial is the same on both pages, in a bundle from `version`.
+fn shared_dial_bundle(s: &Store, version: &str) -> (ulanzi_core::bundle::Bundle, Uuid) {
+    let mut p = Profile::new_default("Shared", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    for pg in &mut p.pages {
+        pg.dials[0].press = Some(Action::NextPage);
+    }
+    s.save_profile(&p).expect("save");
+    let mut b = read(&export(s, &[p.id], false, true).expect("export")).expect("read");
+    b.manifest.app_version = version.into();
+    (b, p.id)
+}
+
+#[test]
+fn a_bundle_from_before_2_5_pins_a_dial_on_every_page() {
+    let d = tempfile::tempdir().expect("tmp");
+    let (b, id) = shared_dial_bundle(&store(d.path()), "2.4.0");
+    let to = store(&d.path().join("to"));
+    import(&to, &b, &opts(Conflict::KeepBoth)).expect("import");
+    let got = to.load_profile(id).expect("load");
+    assert_eq!(got.pinned.dials[&0].press, Some(Action::NextPage));
+    assert!(
+        got.pages
+            .iter()
+            .all(|pg| pg.dials[0].press == Some(Action::NextPage))
+    );
+}
+
+#[test]
+fn a_bundle_from_2_5_keeps_its_dials_as_they_are() {
+    let d = tempfile::tempdir().expect("tmp");
+    let (b, id) = shared_dial_bundle(&store(d.path()), "2.5.0");
+    let to = store(&d.path().join("to"));
+    import(&to, &b, &opts(Conflict::KeepBoth)).expect("import");
+    assert!(to.load_profile(id).expect("load").pinned.is_empty());
+}

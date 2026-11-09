@@ -4,6 +4,37 @@
 //! settings become `[plugins.obs.settings]`. Done on the TOML before it is read, so nothing older
 //! reaches the app.
 
+/// In the state directory once the pass below has run.
+pub const PINNED_MARKER: &str = "dials-pinned-2.5";
+
+/// Once per install (Ulanzi Deck 2.5): pin each dial that is the same on every page of a stored
+/// profile, after a backup. Returns the profiles changed; nothing is done when the marker is there.
+pub fn pin_shared_dials_once(
+    store: &crate::store::Store,
+) -> Result<Vec<uuid::Uuid>, crate::bundle::BundleError> {
+    let marker = store.state_dir().join(PINNED_MARKER);
+    if marker.exists() {
+        return Ok(Vec::new());
+    }
+    let changed: Vec<crate::model::Profile> = store
+        .list_profiles()
+        .into_iter()
+        .filter_map(|l| match l {
+            crate::store::ProfileLoad::Ok(mut p) => p.pin_shared_dials().then_some(*p),
+            _ => None,
+        })
+        .collect();
+    if !changed.is_empty() {
+        crate::snapshot::take(store, "before-pinning-dials")?;
+        for p in &changed {
+            store.save_profile(p)?;
+        }
+    }
+    std::fs::create_dir_all(store.state_dir())?;
+    crate::store::write_atomic(&marker, b"")?;
+    Ok(changed.iter().map(|p| p.id).collect())
+}
+
 /// Upgrade a version-1 profile or settings table to version 2 in place.
 pub fn v1_to_v2(table: &mut toml::Table) {
     obs_actions(table);

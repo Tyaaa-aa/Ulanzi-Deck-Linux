@@ -117,7 +117,8 @@ pub fn restore(store: &Store, name: &str) -> Result<SnapshotInfo, BundleError> {
             store.delete_profile(p.id)?;
         }
     }
-    bundle::import(
+    // Exactly as it was: no upgrades on the way back.
+    bundle::import_with(
         store,
         &snap,
         &ImportOptions {
@@ -127,6 +128,7 @@ pub fn restore(store: &Store, name: &str) -> Result<SnapshotInfo, BundleError> {
             library: true,
             device: None,
         },
+        false,
     )?;
     // Left alone when it can't be read: the backup has nothing of it either.
     if store.load_macros().is_ok() {

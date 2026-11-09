@@ -491,25 +491,6 @@ impl Profile {
             self.pinned.dials.remove(&i);
             warnings.push(format!("removed pinned dial {i} (dials are 0-2)"));
         }
-        // A dial that is the same on every page is a pinned one. Only for profiles that have none
-        // yet, so a dial the user unpins is not pinned again.
-        if self.pinned.is_empty() && self.pages.len() >= 2 {
-            for i in 0..3usize {
-                let first = &self.pages[0].dials[i];
-                let same = !first.is_empty() && self.pages.iter().all(|p| &p.dials[i] == first);
-                let blocked = self
-                    .foreign
-                    .iter()
-                    .any(|f| f.slot == Slot::Dial(i as u8) && f.page.is_some());
-                if same && !blocked {
-                    let d = std::mem::take(&mut self.pages[0].dials[i]);
-                    for p in &mut self.pages[1..] {
-                        p.dials[i] = Dial::default();
-                    }
-                    self.pinned.dials.insert(i as u8, d);
-                }
-            }
-        }
         for page in &mut self.pages {
             let bad: Vec<u8> = page.keys.keys().copied().filter(|i| *i >= KEY_COUNT).collect();
             for i in bad {
@@ -518,6 +499,32 @@ impl Profile {
             }
         }
         warnings
+    }
+}
+
+impl Profile {
+    /// Pin each dial that is the same on every page; the pages keep their copies underneath.
+    /// Run once for setups from before pinning (see [`crate::upgrade::pin_shared_dials_once`]),
+    /// never on save, so a dial placed on every page stays as it is. Profiles that already use
+    /// the library or pins are left alone. Returns whether anything was pinned.
+    pub fn pin_shared_dials(&mut self) -> bool {
+        if self.pages.len() < 2 || self.uses_library() {
+            return false;
+        }
+        let mut pinned = false;
+        for i in 0..3u8 {
+            let first = &self.pages[0].dials[i as usize];
+            let same = !first.is_empty() && self.pages.iter().all(|p| &p.dials[i as usize] == first);
+            let blocked = self
+                .foreign
+                .iter()
+                .any(|f| f.slot == Slot::Dial(i) && f.page.is_some());
+            if same && !blocked {
+                self.pinned.dials.insert(i, first.clone());
+                pinned = true;
+            }
+        }
+        pinned
     }
 }
 

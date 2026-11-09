@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use ulanzi_core::migrate::migrate_legacy;
 use ulanzi_core::model::*;
 use ulanzi_core::store::{ProfileLoad, Store};
+use ulanzi_core::upgrade::{PINNED_MARKER, pin_shared_dials_once};
 use ulanzi_core::{Color, CoreError};
 use uuid::Uuid;
 
@@ -352,33 +353,47 @@ fn a_dial_the_same_on_every_page_becomes_pinned() {
     p.pages[0].dials[0] = press(Action::NextPage);
     p.pages[1].dials[0] = press(Action::PrevPage);
     p.pages[2].dials[0] = press(Action::NextPage);
-    p.normalize();
+    assert!(p.pin_shared_dials());
     assert_eq!(p.pinned.dials.len(), 1);
     assert_eq!(p.pinned.dials[&1], press(Action::NextPage));
-    assert!(p.pages.iter().all(|pg| pg.dials[1].is_empty()));
     assert!(p.pages.iter().all(|pg| !pg.dials[0].is_empty()));
+}
+
+#[test]
+fn the_one_time_pass_pins_and_keeps_page_copies() {
+    let mut p = pages(2);
+    for pg in &mut p.pages {
+        pg.dials[2] = press(Action::Back);
+    }
+    assert!(p.pin_shared_dials());
+    assert_eq!(p.pinned.dials[&2], press(Action::Back));
+    // The copies stay under the pin, so unpinning can never wipe the dial.
+    assert!(p.pages.iter().all(|pg| pg.dials[2] == press(Action::Back)));
 }
 
 #[test]
 fn a_single_page_keeps_its_dials() {
     let mut p = pages(1);
     p.pages[0].dials[1] = press(Action::NextPage);
+    assert!(!p.pin_shared_dials());
     p.normalize();
     assert!(p.pinned.is_empty());
     assert_eq!(p.pages[0].dials[1], press(Action::NextPage));
 }
 
 #[test]
-fn migration_runs_once() {
+fn normalize_no_longer_pins_a_dial_on_every_page() {
     let mut p = pages(3);
     for pg in &mut p.pages {
         pg.dials[1] = press(Action::NextPage);
     }
+    let before = p.clone();
     p.normalize();
-    let once = p.clone();
-    p.normalize();
-    assert_eq!(p, once);
+    assert_eq!(p, before);
+}
 
+#[test]
+fn a_profile_using_the_library_is_left_alone() {
     // A profile with a pin is left alone, even if another dial is the same everywhere.
     let mut q = pages(3);
     q.pinned.dials.insert(0, press(Action::PrevPage));
@@ -386,14 +401,14 @@ fn migration_runs_once() {
         pg.dials[2] = press(Action::NextPage);
     }
     let before = q.clone();
-    q.normalize();
+    assert!(!q.pin_shared_dials());
     assert_eq!(q, before);
 }
 
 #[test]
 fn a_page_with_a_foreign_dial_blocks_pinning_that_dial() {
     let mut p = pages(3);
-    for pg in &mut p.pages[..2] {
+    for pg in &mut p.pages {
         pg.dials[2] = press(Action::NextPage);
     }
     p.foreign.push(ForeignSlot {
@@ -401,7 +416,61 @@ fn a_page_with_a_foreign_dial_blocks_pinning_that_dial() {
         slot: Slot::Dial(2),
         raw: toml::Value::Table(toml::Table::new()),
     });
-    p.normalize();
+    // Same where it can be read, but the third page's dial is from a newer version.
+    assert!(!p.pin_shared_dials());
     assert!(p.pinned.is_empty());
-    assert_eq!(p.pages[0].dials[2], press(Action::NextPage));
+}
+
+fn shared_dial_store(dir: &Path) -> (Store, Uuid) {
+    let store = Store::at(dir.join("config"), dir.join("state"), dir.join("cache"));
+    let mut p = pages(2);
+    for pg in &mut p.pages {
+        pg.dials[0] = press(Action::NextPage);
+    }
+    store.save_profile(&p).expect("save");
+    (store, p.id)
+}
+
+#[test]
+fn the_one_time_pass_runs_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (store, id) = shared_dial_store(dir.path());
+    let changed = pin_shared_dials_once(&store).expect("pass");
+    assert_eq!(changed, vec![id]);
+    let p = store.load_profile(id).expect("load");
+    assert_eq!(p.pinned.dials[&0], press(Action::NextPage));
+    assert!(p.pages.iter().all(|pg| pg.dials[0] == press(Action::NextPage)));
+    assert!(store.state_dir().join(PINNED_MARKER).exists());
+    // A backup was taken first.
+    let snaps = ulanzi_core::snapshot::list(&store);
+    assert_eq!(snaps.len(), 1);
+    assert!(snaps[0].reason.contains("pin"));
+
+    // The user unpins it; a second start leaves it unpinned.
+    let mut p = store.load_profile(id).expect("load");
+    p.pinned.dials.clear();
+    store.save_profile(&p).expect("save");
+    assert!(pin_shared_dials_once(&store).expect("pass").is_empty());
+    assert!(store.load_profile(id).expect("load").pinned.is_empty());
+    assert_eq!(ulanzi_core::snapshot::list(&store).len(), 1);
+}
+
+#[test]
+fn the_one_time_pass_with_nothing_to_pin_takes_no_backup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::at(dir.path().join("c"), dir.path().join("s"), dir.path().join("k"));
+    store.save_profile(&pages(2)).expect("save");
+    assert!(pin_shared_dials_once(&store).expect("pass").is_empty());
+    assert!(ulanzi_core::snapshot::list(&store).is_empty());
+    assert!(store.state_dir().join(PINNED_MARKER).exists());
+}
+
+#[test]
+fn restoring_the_backup_from_before_pinning_brings_back_the_unpinned_dials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (store, id) = shared_dial_store(dir.path());
+    pin_shared_dials_once(&store).expect("pass");
+    let backup = ulanzi_core::snapshot::list(&store)[0].name.clone();
+    ulanzi_core::snapshot::restore(&store, &backup).expect("restore");
+    assert!(store.load_profile(id).expect("load").pinned.is_empty());
 }

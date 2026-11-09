@@ -305,6 +305,11 @@ and colour, and the action's name is the tooltip. They belong to a page: each pa
 **Pin to Every Page** and **Unpin** work as for dials, and a side without a pin shows the page's own
 button. Small buttons from earlier versions load as pinned, so nothing changes until you unpin one.
 
+On its first start, 2.5 backs up your profiles (see [Templates, sharing and backups](#templates-sharing-and-backups)) and pins each dial that is the same on every
+page of a profile. Each page keeps its copy underneath, so unpinning changes nothing you see. This
+happens once; placing a dial on every page later leaves it unpinned. Profiles imported from files made
+before 2.5 are pinned the same way.
+
 Profiles that use the library or pins need Ulanzi Deck 2.5 or newer.
 
 ## The wide screen

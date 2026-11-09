@@ -327,3 +327,18 @@ fn dropping_the_library_keeps_what_shows() {
     assert!(p.foreign_library.is_empty());
     assert!(p.dial_info(0, 2).pinned, "pins stay pins");
 }
+
+#[test]
+fn a_linked_dial_on_every_page_is_not_pinned_on_save() {
+    let (mut p, id) = base();
+    p.pages.push(Page::new("Two"));
+    for pg in &mut p.pages {
+        pg.dials[0] = Dial {
+            library: Some(id),
+            ..Default::default()
+        };
+    }
+    let back = parse_profile(&profile_to_toml(&p).expect("toml")).expect("parse");
+    assert!(back.pinned.is_empty());
+    assert!(back.pages.iter().all(|pg| pg.dials[0].library == Some(id)));
+}

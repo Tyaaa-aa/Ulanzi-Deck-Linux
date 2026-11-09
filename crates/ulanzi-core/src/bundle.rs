@@ -514,11 +514,27 @@ fn write_profile(store: &Store, p: &Profile, icons: &[(String, Vec<u8>)]) -> Res
 
 /// Import a checked bundle.
 pub fn import(store: &Store, bundle: &Bundle, opts: &ImportOptions) -> Result<ImportReport, BundleError> {
+    import_with(store, bundle, opts, true)
+}
+
+/// [`import`]; `upgrade` false takes the profiles exactly as they are (restoring a backup).
+pub(crate) fn import_with(
+    store: &Store,
+    bundle: &Bundle,
+    opts: &ImportOptions,
+    upgrade: bool,
+) -> Result<ImportReport, BundleError> {
     let existing = all_profiles(store);
     let mut names: Vec<String> = existing.iter().map(|p| p.name.clone()).collect();
     let mut report = ImportReport::default();
+    // Files from before 2.5 get the one-time pinning their profiles missed.
+    let before_pinning =
+        upgrade && crate::update::parse_version(&bundle.manifest.app_version).is_some_and(|v| v < (2, 5, 0));
     for bp in &bundle.profiles {
         let mut p = bp.profile.clone();
+        if before_pinning {
+            p.pin_shared_dials();
+        }
         if !opts.library {
             p.drop_library();
         }
