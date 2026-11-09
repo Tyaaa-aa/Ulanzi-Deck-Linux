@@ -6,7 +6,6 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use ulanzi_core::edit::Slot;
 use ulanzi_core::model::Model;
 
 use crate::runtime;
@@ -533,7 +532,7 @@ fn connect_page(state: &State, nav: &adw::NavigationView) -> adw::NavigationPage
         state.on(move |c| match c {
             Change::Status => update(),
             // A turned dial answers the question.
-            Change::Pressed(Slot::Dial(_)) if !dial_seen.get() => {
+            Change::DialMoved(..) if !dial_seen.get() => {
                 dial_seen.set(true);
                 if st.model() != Model::D200X {
                     st.edit(|e| e.set_model(Model::D200X));

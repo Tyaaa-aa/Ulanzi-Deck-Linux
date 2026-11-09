@@ -801,8 +801,18 @@ fn follow_events(state: &State, c: &Client) {
                 ClientEvent::Input { control, kind }
                     if kind == "press" || kind == "left" || kind == "right" =>
                 {
-                    if let Some(slot) = slot_of(&control) {
-                        state.notify(Change::Pressed(slot));
+                    use crate::ui::dial_ring::DialMove;
+                    match slot_of(&control) {
+                        Some(Slot::Dial(n)) => state.notify(Change::DialMoved(
+                            n,
+                            match kind.as_str() {
+                                "left" => DialMove::Left,
+                                "right" => DialMove::Right,
+                                _ => DialMove::Press,
+                            },
+                        )),
+                        Some(slot) => state.notify(Change::Pressed(slot)),
+                        None => {}
                     }
                 }
                 ClientEvent::Page { profile, page } if profile == state.profile_id() => {

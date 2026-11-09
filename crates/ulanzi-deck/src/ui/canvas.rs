@@ -232,30 +232,155 @@ impl DialFace {
     }
 }
 
-type IconKey = (String, i32);
+type IconKey = (String, i32, [u8; 4]);
 
 thread_local! {
     static ACTION_ICONS: RefCell<HashMap<IconKey, Option<gdk::Texture>>> = RefCell::new(HashMap::new());
 }
 
-/// An action's icon in its category colour, for small places like the dials.
-pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Texture> {
-    let spec = ulanzi_core::catalog::spec_for(a)?;
+/// A bundled Lucide icon in `color`, `px` px (drawn at twice that for sharp screens), cached.
+fn lucide_icon(name: &str, px: i32, color: ulanzi_core::Color) -> Option<gdk::Texture> {
     ACTION_ICONS.with(|m| {
         m.borrow_mut()
-            .entry((spec.icon.to_string(), px))
+            .entry((name.to_string(), px, color.0))
             .or_insert_with(|| {
                 ulanzi_core::render::IconLibrary::bundled()
-                    .icon_png(
-                        ulanzi_core::model::IconSet::Lucide,
-                        spec.icon,
-                        (px * 2) as u32,
-                        spec.category.color(),
-                    )
+                    .icon_png(ulanzi_core::model::IconSet::Lucide, name, (px * 2) as u32, color)
                     .and_then(|png| texture(&png))
             })
             .clone()
     })
+}
+
+/// An action's icon in its category colour, for small places like the dials.
+pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Texture> {
+    let spec = ulanzi_core::catalog::spec_for(a)?;
+    lucide_icon(spec.icon, px, spec.category.color())
+}
+
+/// A round badge on a corner of a dial or small button: `link` or `pin`, hidden until shown.
+fn slot_badge(kind: &str, h: gtk::Align) -> gtk::Image {
+    let img = gtk::Image::builder()
+        .pixel_size(10)
+        .css_classes(["slot-badge", kind])
+        .halign(h)
+        .valign(gtk::Align::Start)
+        .can_target(false)
+        .visible(false)
+        .build();
+    if let Some(t) = lucide_icon(kind, 10, ulanzi_core::Color::WHITE) {
+        img.set_paintable(Some(&t));
+    }
+    img
+}
+
+/// The caption under a dial or small button.
+fn caption() -> gtk::Label {
+    gtk::Label::builder()
+        .css_classes(["deck-caption"])
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .max_width_chars(13)
+        .build()
+}
+
+/// `w` with room around it (`top`, `side`, `bottom` px) for corner badges, laid in an overlay.
+fn with_room(w: &impl IsA<gtk::Widget>, top: i32, side: i32, bottom: i32) -> gtk::Overlay {
+    w.set_margin_top(top);
+    w.set_margin_start(side);
+    w.set_margin_end(side);
+    w.set_margin_bottom(bottom);
+    gtk::Overlay::builder()
+        .child(w)
+        .halign(gtk::Align::Center)
+        .build()
+}
+
+/// A dial with its name under it, link and pin badges on its rim and the turn light.
+struct DialSpot {
+    column: gtk::Box,
+    ring: crate::ui::dial_ring::Ring,
+    link: gtk::Image,
+    pin: gtk::Image,
+    name: gtk::Label,
+}
+
+fn dial_spot(button: &gtk::Button) -> DialSpot {
+    let room = with_room(button, 12, 10, 2);
+    let ring = crate::ui::dial_ring::Ring::new(button);
+    room.add_overlay(&ring.area);
+    let link = slot_badge("link", gtk::Align::Start);
+    let pin = slot_badge("pin", gtk::Align::End);
+    for b in [&link, &pin] {
+        b.set_margin_top(3);
+        b.set_margin_start(3);
+        b.set_margin_end(3);
+        room.add_overlay(b);
+    }
+    let name = caption();
+    let column = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .valign(gtk::Align::Center)
+        .build();
+    column.append(&room);
+    column.append(&name);
+    DialSpot {
+        column,
+        ring,
+        link,
+        pin,
+        name,
+    }
+}
+
+/// A small button: its action's icon, the action's name under it and a pin badge.
+struct SmallSpot {
+    column: gtk::Box,
+    button: gtk::Button,
+    icon: gtk::Image,
+    caption: gtk::Label,
+    pin: gtk::Image,
+}
+
+fn small_spot() -> SmallSpot {
+    let icon = gtk::Image::builder().pixel_size(16).build();
+    let button = gtk::Button::builder()
+        .child(&icon)
+        .css_classes(["deck-small"])
+        .build();
+    let room = with_room(&button, 7, 7, 2);
+    let pin = slot_badge("pin", gtk::Align::End);
+    room.add_overlay(&pin);
+    let caption = caption();
+    let column = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .valign(gtk::Align::Center)
+        .build();
+    column.append(&room);
+    column.append(&caption);
+    SmallSpot {
+        column,
+        button,
+        icon,
+        caption,
+        pin,
+    }
+}
+
+/// The short name shown under a small button: the catalog title, or a plugin action's own.
+fn action_caption(plugins: &crate::plugins::Plugins, a: &ulanzi_core::model::Action) -> String {
+    match (a, ulanzi_core::catalog::spec_for(a)) {
+        (ulanzi_core::model::Action::Plugin { .. }, _) | (_, None) => plugins.describe(a),
+        (_, Some(spec)) => spec.title.to_string(),
+    }
+}
+
+/// A dial's name: its own, else "Dial N".
+fn dial_name(n: usize, d: &ulanzi_core::model::Dial) -> String {
+    if d.name.trim().is_empty() {
+        format!("Dial {}", n + 1)
+    } else {
+        d.name.clone()
+    }
 }
 
 /// "Turn left: …" lines for a dial's tooltip.
@@ -268,8 +393,8 @@ fn dial_tooltip(plugins: &crate::plugins::Plugins, n: usize, d: &ulanzi_core::mo
         format!("{what}: {}", glib::markup_escape_text(&text))
     };
     format!(
-        "<b>Dial {}</b>\n{}\n{}\n{}\n{}",
-        n + 1,
+        "<b>{}</b>\n{}\n{}\n{}\n{}",
+        glib::markup_escape_text(&dial_name(n, d)),
         line("Turn left", &d.left),
         line("Press", &d.press),
         line("Turn right", &d.right),
@@ -764,20 +889,8 @@ pub fn build(state: &State) -> Canvas {
         }
     }
 
-    let small: Rc<[gtk::Button; 2]> = Rc::new([
-        gtk::Button::builder()
-            .icon_name("go-previous-symbolic")
-            .css_classes(["deck-small"])
-            .tooltip_text("Left small button")
-            .valign(gtk::Align::Center)
-            .build(),
-        gtk::Button::builder()
-            .icon_name("go-next-symbolic")
-            .css_classes(["deck-small"])
-            .tooltip_text("Right small button")
-            .valign(gtk::Align::Center)
-            .build(),
-    ]);
+    let smalls: Rc<Vec<SmallSpot>> = Rc::new((0..2).map(|_| small_spot()).collect());
+    let small: Rc<Vec<gtk::Button>> = Rc::new(smalls.iter().map(|s| s.button.clone()).collect());
     // Each dial draws its three drop zones (turn left, press, turn right) while an action is dragged.
     let zones: Rc<Vec<Rc<std::cell::Cell<Option<DialZone>>>>> =
         Rc::new((0..3).map(|_| Rc::new(std::cell::Cell::new(None))).collect());
@@ -809,18 +922,18 @@ pub fn build(state: &State) -> Canvas {
             })
             .collect(),
     );
-    let bottom = gtk::Box::builder().spacing(GAP).margin_top(26).build();
-    bottom.append(&small[0]);
-    bottom.append(&small[1]);
+    // Names, badges and the turn light around each dial.
+    let spots: Rc<Vec<DialSpot>> = Rc::new(dials.iter().map(dial_spot).collect());
+    // The badge room above the dials and small buttons stands in for part of this margin.
+    let bottom = gtk::Box::builder().spacing(GAP - 4).margin_top(14).build();
+    for s in smalls.iter() {
+        bottom.append(&s.column);
+    }
     let spacer = gtk::Box::builder().hexpand(true).build();
     bottom.append(&spacer);
-    for d in dials.iter() {
-        bottom.append(d);
-    }
-    let dial_box = gtk::Box::builder().spacing(36).build();
-    for d in dials.iter() {
-        bottom.remove(d);
-        dial_box.append(d);
+    let dial_box = gtk::Box::builder().spacing(16).build();
+    for s in spots.iter() {
+        dial_box.append(&s.column);
     }
     bottom.append(&dial_box);
 
@@ -1065,6 +1178,7 @@ pub fn build(state: &State) -> Canvas {
             dots.clone(),
             faces.clone(),
         );
+        let (spots, smalls) = (spots.clone(), smalls.clone());
         move |c: Change| match c {
             Change::Profile
             | Change::Page
@@ -1182,11 +1296,36 @@ pub fn build(state: &State) -> Canvas {
                         }
                     }
                 }
-                // Dials of this page.
+                // Dials of this page, pins included.
                 for (n, (face, button)) in faces.iter().zip(dials.iter()).enumerate() {
-                    let d = e.dial_info(n as u8).dial;
-                    face.show(&d);
-                    button.set_tooltip_markup(Some(&dial_tooltip(&state.plugins.borrow(), n, &d)));
+                    let info = e.dial_info(n as u8);
+                    face.show(&info.dial);
+                    button.set_tooltip_markup(Some(&dial_tooltip(&state.plugins.borrow(), n, &info.dial)));
+                    let spot = &spots[n];
+                    spot.name.set_label(&dial_name(n, &info.dial));
+                    spot.link.set_visible(info.library.is_some());
+                    spot.pin.set_visible(info.pinned);
+                }
+                // Small buttons: the pinned ones, else this page's.
+                for (side, s) in smalls.iter().enumerate() {
+                    let side_u = side as u8;
+                    let action = e.profile().small_at(e.page(), side_u);
+                    let plugins = state.plugins.borrow();
+                    s.icon
+                        .set_paintable(action.as_ref().and_then(|a| action_icon(a, 16)).as_ref());
+                    s.caption.set_label(
+                        &action
+                            .as_ref()
+                            .map(|a| action_caption(&plugins, a))
+                            .unwrap_or_default(),
+                    );
+                    s.button.set_tooltip_text(Some(
+                        &action
+                            .as_ref()
+                            .map(|a| plugins.describe(a))
+                            .unwrap_or_else(|| "Empty small button: drop an action here".into()),
+                    ));
+                    s.pin.set_visible(e.profile().small_pinned(side_u));
                 }
                 drop(e);
                 screen
@@ -1252,12 +1391,18 @@ pub fn build(state: &State) -> Canvas {
                         flash(b);
                     }
                 }
+                // Dials send DialMoved; a press here lights the ring all the same.
                 Slot::Dial(i) => {
-                    if let Some(d) = dials.get(i as usize) {
-                        flash(d);
+                    if let Some(s) = spots.get(i as usize) {
+                        s.ring.play(crate::ui::dial_ring::DialMove::Press);
                     }
                 }
             },
+            Change::DialMoved(i, m) => {
+                if let Some(s) = spots.get(i as usize) {
+                    s.ring.play(m);
+                }
+            }
             _ => {}
         }
     };

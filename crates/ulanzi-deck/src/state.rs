@@ -27,8 +27,10 @@ pub enum Change {
     Update,
     /// The macro library.
     Macros,
-    /// A physical control was pressed.
+    /// A physical key, small button or the screen was pressed.
     Pressed(Slot),
+    /// A physical dial was turned or pressed.
+    DialMoved(u8, crate::ui::dial_ring::DialMove),
     /// A live preview of an appearance change on the selected keys started or ended.
     Preview,
     /// Dragging an action from the library started or ended.
