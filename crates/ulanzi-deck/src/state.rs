@@ -408,6 +408,19 @@ pub fn status_text(s: &Status) -> (String, String) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_library_dial_and_a_slot_are_never_picked_together() {
+        let state = plugins_state();
+        state.select(|s| s.click(Slot::Dial(1)));
+        let id = Uuid::new_v4();
+        state.select_library(id);
+        assert!(state.selection.borrow().is_empty());
+        assert_eq!(*state.selected_library.borrow(), Some(id));
+        state.select(|s| s.click(Slot::Key(0)));
+        assert_eq!(*state.selected_library.borrow(), None);
+        assert!(state.selection.borrow().contains(Slot::Key(0)));
+    }
+
     fn plugins_state() -> State {
         AppState::new(Profile::new_default("Default", ulanzi_core::model::Model::D200X))
     }

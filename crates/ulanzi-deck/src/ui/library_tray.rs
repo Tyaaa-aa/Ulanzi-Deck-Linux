@@ -54,6 +54,16 @@ pub enum Tab {
 
 type OnToggle = Box<dyn Fn(bool)>;
 
+/// A library dial's tile, kept so edits update it in place.
+struct Item {
+    id: Uuid,
+    disc: gtk::Box,
+    face: canvas::DialFace,
+    name: gtk::Label,
+    usage: gtk::Label,
+    pin: gtk::Image,
+}
+
 pub struct Tray {
     state: State,
     me: RefCell<Weak<Tray>>,
@@ -73,9 +83,12 @@ pub struct Tray {
     pages: gtk::Overlay,
     sizer: gtk::Box,
     grids: RefCell<Vec<gtk::Grid>>,
-    /// Each library dial's face, to mark the picked one.
-    faces: RefCell<Vec<(Uuid, gtk::Box)>>,
+    items: RefCell<Vec<Item>>,
+    /// The library as the tiles show it, so unrelated edits change nothing.
+    drawn: RefCell<Vec<(LibraryDial, Usage)>>,
+    /// Sits under the page in the same area, so it eases in and out with the height.
     pager: gtk::Box,
+    with_pager: Cell<bool>,
     dots: gtk::Box,
     prev: gtk::Button,
     next: gtk::Button,
@@ -149,7 +162,6 @@ impl Tray {
             .spacing(12)
             .halign(gtk::Align::Center)
             .margin_top(12)
-            .visible(false)
             .build();
         pager.append(&prev);
         pager.append(&dots);
@@ -161,7 +173,7 @@ impl Tray {
             .build();
         content.append(&header);
         content.append(&pages);
-        content.append(&pager);
+        pages.add_overlay(&pager);
         // Never scrolled: the frame only clips the tray while it grows and shrinks.
         let frame = gtk::ScrolledWindow::builder()
             .child(&content)
@@ -186,8 +198,10 @@ impl Tray {
             pages,
             sizer,
             grids: RefCell::default(),
-            faces: RefCell::default(),
+            items: RefCell::default(),
+            drawn: RefCell::default(),
             pager,
+            with_pager: Cell::new(false),
             dots,
             prev,
             next,
@@ -227,8 +241,10 @@ impl Tray {
             return;
         }
         if self.stale.get() {
-            self.rebuild();
+            self.refresh();
         }
+        // Sized afresh: the dials may have changed size while it was shut.
+        self.go(self.state.tray_page.get());
         self.frame.set_visible(true);
         self.run_grow(1.0);
         self.toggled(true);
@@ -320,7 +336,7 @@ impl Tray {
             match c {
                 Change::Profile | Change::Plugins => {
                     if t.open.get() {
-                        t.rebuild();
+                        t.refresh();
                     } else {
                         t.stale.set(true);
                     }
@@ -340,6 +356,24 @@ impl Tray {
             glib::idle_add_local_once(move || {
                 if let Some(s) = stage.upgrade() {
                     s.queue_allocate();
+                }
+            });
+        }
+        // The page's height changed under it (smaller dials when compact): ease to the new one.
+        let sliding = self
+            .slide
+            .borrow()
+            .as_ref()
+            .is_some_and(|a| a.state() == adw::AnimationState::Playing);
+        if child == &self.deck
+            && self.open.get()
+            && !sliding
+            && (self.page_height(self.state.tray_page.get()) - self.height.get()).abs() > 0.5
+        {
+            let me = self.me.borrow().clone();
+            glib::idle_add_local_once(move || {
+                if let Some(t) = me.upgrade() {
+                    t.go(t.state.tray_page.get());
                 }
             });
         }
@@ -380,12 +414,28 @@ impl Tray {
 
     /// Page `i` sits `i - offset` page widths from the left.
     fn place_page(&self, pages: &gtk::Overlay, child: &gtk::Widget) -> Option<gdk::Rectangle> {
+        let w = pages.width();
+        if child == &self.pager {
+            // At the bottom of the area but never over the pages drawn there, so coming and
+            // going it is only uncovered or clipped as the height eases.
+            let q = child.measure(gtk::Orientation::Vertical, w).1;
+            let grid = |i: f64| {
+                self.grids
+                    .borrow()
+                    .get(i as usize)
+                    .map_or(0.0, |g| g.measure(gtk::Orientation::Vertical, w).1 as f64)
+            };
+            let o = self.offset.get().max(0.0);
+            let (a, b) = (grid(o.floor()), grid(o.ceil()));
+            let drawn = a + (b - a) * o.fract();
+            let y = (pages.height() - q).max(drawn.round() as i32);
+            return Some(gdk::Rectangle::new(0, y, w, q));
+        }
         let i = self
             .grids
             .borrow()
             .iter()
             .position(|g| g.upcast_ref::<gtk::Widget>() == child)?;
-        let w = pages.width();
         let nat = child.measure(gtk::Orientation::Vertical, w).1;
         let x = (i as f64 - self.offset.get()) * w as f64;
         Some(gdk::Rectangle::new(x.round() as i32, 0, w, nat))
@@ -413,14 +463,8 @@ impl Tray {
         let l = layout(items, page);
         let page = page.min(l.pages - 1);
         self.state.tray_page.set(page);
-        // The page's own height, so a short last page shrinks the tray.
-        let height = self.grids.borrow().get(page).map_or(0.0, |g| {
-            let w = self.pages.width();
-            g.measure(gtk::Orientation::Vertical, if w > 0 { w } else { -1 })
-                .1 as f64
-        });
-        let to = (page as f64, height);
         self.show_pager(l.pages, page);
+        let to = (page as f64, self.page_height(page));
         let slide = self.slide.borrow();
         match slide.as_ref() {
             Some(a) if self.shown.get() > 0.0 && self.height.get() > 0.0 => {
@@ -433,8 +477,24 @@ impl Tray {
         }
     }
 
+    /// Page `page`'s own height (so a short last page shrinks the tray), and the pager's when
+    /// there are pages.
+    fn page_height(&self, page: usize) -> f64 {
+        let w = self.pages.width();
+        let height = self.grids.borrow().get(page).map_or(0.0, |g| {
+            g.measure(gtk::Orientation::Vertical, if w > 0 { w } else { -1 })
+                .1 as f64
+        });
+        let pager = match self.with_pager.get() {
+            true => self.pager.measure(gtk::Orientation::Vertical, -1).1 as f64,
+            false => 0.0,
+        };
+        height + pager
+    }
+
     fn show_pager(&self, pages: usize, page: usize) {
-        self.pager.set_visible(pages > 1);
+        self.with_pager.set(pages > 1);
+        self.pager.set_sensitive(pages > 1);
         self.prev.set_sensitive(page > 0);
         self.next.set_sensitive(page + 1 < pages);
         while let Some(c) = self.dots.first_child() {
@@ -462,19 +522,42 @@ impl Tray {
         }
     }
 
-    /// Lay out the library's dials again.
-    fn rebuild(&self) {
+    /// Show the library as it is now: nothing when unchanged, the tiles in place when the same
+    /// dials are there, else laid out again.
+    fn refresh(&self) {
         self.stale.set(false);
+        let now: Vec<(LibraryDial, Usage)> = {
+            let e = self.state.editor.borrow();
+            let p = e.profile();
+            p.dial_library
+                .iter()
+                .map(|d| (d.clone(), p.dial_usage(d.id)))
+                .collect()
+        };
+        if *self.drawn.borrow() == now && !self.grids.borrow().is_empty() {
+            return;
+        }
+        let same = {
+            let items = self.items.borrow();
+            items.len() == now.len() && items.iter().zip(&now).all(|(i, (l, _))| i.id == l.id)
+        };
+        if same && !self.grids.borrow().is_empty() {
+            for (item, (lib, usage)) in self.items.borrow().iter().zip(&now) {
+                fill(item, lib, *usage);
+            }
+        } else {
+            self.rebuild(&now);
+        }
+        *self.drawn.borrow_mut() = now;
+    }
+
+    /// Lay out the library's dials again.
+    fn rebuild(&self, now: &[(LibraryDial, Usage)]) {
         for g in self.grids.take() {
             self.pages.remove_overlay(&g);
         }
-        self.faces.borrow_mut().clear();
-        let (library, usage): (Vec<LibraryDial>, Vec<Usage>) = {
-            let e = self.state.editor.borrow();
-            let p = e.profile();
-            let usage = p.dial_library.iter().map(|d| p.dial_usage(d.id)).collect();
-            (p.dial_library.clone(), usage)
-        };
+        self.items.borrow_mut().clear();
+        let (library, usage): (Vec<LibraryDial>, Vec<Usage>) = now.iter().cloned().unzip();
         let pages = layout(library.len(), 0).pages;
         for p in 0..pages {
             let grid = gtk::Grid::builder()
@@ -519,7 +602,8 @@ impl Tray {
         disc
     }
 
-    fn item(&self, room: &gtk::Overlay, name: &str, usage: Option<&Usage>) -> gtk::Button {
+    /// A tile: `room` (the disc), a name and a usage line under it.
+    fn item(&self, room: &gtk::Overlay, name: &str) -> (gtk::Button, gtk::Label, gtk::Label) {
         let column = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .spacing(1)
@@ -532,36 +616,27 @@ impl Tray {
             .max_width_chars(12)
             .build();
         column.append(&name);
-        if let Some(u) = usage {
-            let usage = gtk::Label::builder()
-                .label(u.text())
-                .css_classes(["tray-usage"])
-                .ellipsize(gtk::pango::EllipsizeMode::End)
-                .build();
-            canvas::set_class(&usage, "pinned", u.pinned);
-            column.append(&usage);
-        }
-        gtk::Button::builder()
+        let usage = gtk::Label::builder()
+            .css_classes(["tray-usage"])
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        column.append(&usage);
+        let button = gtk::Button::builder()
             .child(&column)
             .css_classes(["flat", "tray-item"])
             .hexpand(true)
-            .build()
+            .build();
+        (button, name, usage)
     }
 
     fn dial_item(&self, lib: &LibraryDial, usage: Usage) -> gtk::Button {
         let zones = gtk::DrawingArea::new();
         let face = canvas::dial_face(&zones);
-        face.show(&lib.dial);
         let disc = self.disc(&face.overlay);
         let room = canvas::with_room(&disc, 6, 4, 2);
         let pin = canvas::slot_badge("pin", gtk::Align::End);
-        pin.set_visible(usage.pinned);
         room.add_overlay(&pin);
-        let name = match lib.dial.name.trim() {
-            "" => "Dial",
-            n => n,
-        };
-        let button = self.item(&room, name, Some(&usage));
+        let (button, name, usage_label) = self.item(&room, "");
         let id = lib.id;
         {
             let state = self.state.clone();
@@ -582,7 +657,16 @@ impl Tray {
             });
         }
         button.add_controller(source);
-        self.faces.borrow_mut().push((id, disc));
+        let item = Item {
+            id,
+            disc,
+            face,
+            name,
+            usage: usage_label,
+            pin,
+        };
+        fill(&item, lib, usage);
+        self.items.borrow_mut().push(item);
         button
     }
 
@@ -594,7 +678,7 @@ impl Tray {
             .build();
         let disc = self.disc(&plus);
         disc.add_css_class("new");
-        let button = self.item(&canvas::with_room(&disc, 6, 4, 2), "New Dial", None);
+        let (button, _, _) = self.item(&canvas::with_room(&disc, 6, 4, 2), "New Dial");
         let me = self.me.borrow().clone();
         button.connect_clicked(move |_| {
             let Some(t) = me.upgrade() else { return };
@@ -611,10 +695,22 @@ impl Tray {
     /// Ring the picked library dial.
     fn show_picked(&self) {
         let picked = *self.state.selected_library.borrow();
-        for (id, disc) in self.faces.borrow().iter() {
-            canvas::set_class(disc, "selected", picked == Some(*id));
+        for item in self.items.borrow().iter() {
+            canvas::set_class(&item.disc, "selected", picked == Some(item.id));
         }
     }
+}
+
+/// Show `lib` and where it is used on its tile.
+fn fill(item: &Item, lib: &LibraryDial, usage: Usage) {
+    item.face.show(&lib.dial);
+    item.name.set_label(match lib.dial.name.trim() {
+        "" => "Dial",
+        n => n,
+    });
+    item.usage.set_label(&usage.text());
+    canvas::set_class(&item.usage, "pinned", usage.pinned);
+    item.pin.set_visible(usage.pinned);
 }
 
 /// A 0 to 1 animation on `w`'s frame clock, eased out.
