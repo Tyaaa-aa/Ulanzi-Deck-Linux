@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-09
+
 ### Added
 
 - **Switch Output** per output: an image, colour and label the key shows while that output plays, its
@@ -280,6 +282,7 @@ A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python)
   diagnostics.
 - Packages: Arch, .deb, .rpm, AppImage and a tarball with an installer.
 
+[2.4.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.1.1...v2.2.0

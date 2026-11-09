@@ -56,8 +56,8 @@ Select a key to open its editor. The editor has four sections:
   icon and colours.
 - **Label**: the text on the key, and its position (top, middle, bottom or hidden). Labels can
   include live values such as `{cpu}`, `{ram}`, `{time}`, `{media_title}`, `{output_name}` and
-  `{timer}`; insert them with the **{ }** button. For plugin actions, **Label Shows** displays a value reported by
-  the plugin instead, such as an OBS scene name or a room temperature.
+  `{timer}`; insert them with the **{ }** button. For plugin actions, **Label Shows** displays a
+  value reported by the plugin instead, such as an OBS scene name or a room temperature.
 - **When Held**: a second action that runs when the key is held for half a second. The hold time
   is set in Preferences.
 - **Look**: image, background colour, icon colour and icon size. **Choose…** opens the image picker

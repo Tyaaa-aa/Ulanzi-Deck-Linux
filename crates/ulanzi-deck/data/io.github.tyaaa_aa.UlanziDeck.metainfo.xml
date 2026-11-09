@@ -49,6 +49,12 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.4.0" date="2026-11-09">
+      <description>
+        <p>Switch Output keys can show a different image, colour and label for each output and set its
+        volumes. The deck now connects while Steam is running.</p>
+      </description>
+    </release>
     <release version="2.3.1" date="2026-11-02">
       <description>
         <p>First-run polish: Discover opens with a loading placeholder and shows plugins sooner, the setup
