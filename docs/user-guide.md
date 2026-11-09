@@ -479,7 +479,9 @@ keep running the old version. The window then shows "Ulanzi Deck was updated. Re
 
 A profile or `.ulanzideck` file from a newer version opens with everything this version understands.
 A key it doesn't understand is kept unchanged and shows a **⚠**. Select it to see which version it
-needs. **Clear Key** removes it; otherwise it works again once the app is updated.
+needs. **Clear Key** removes it; otherwise it works again once the app is updated. Dials, pinned dials,
+library dials, small buttons and the wide screen are kept the same way, and pressing one on the deck
+says which version it needs. A pinned dial from a newer version covers that dial on every page.
 
 A profile too new to read at all is listed in the sidebar as "Needs a newer version". Its file isn't
 changed.

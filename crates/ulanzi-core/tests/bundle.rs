@@ -520,3 +520,21 @@ fn a_bundle_from_2_5_keeps_its_dials_as_they_are() {
     import(&to, &b, &opts(Conflict::KeepBoth)).expect("import");
     assert!(to.load_profile(id).expect("load").pinned.is_empty());
 }
+
+#[test]
+fn commands_inside_newer_library_dials_are_shown_before_import() {
+    let d = tempfile::tempdir().expect("tmp");
+    let s = store(d.path());
+    let mut p = Profile::new_default("Newer Library", Model::D200X);
+    p.min_app = Some("2.6.0".into());
+    p.foreign_library.push(toml::Value::Table(
+        toml::from_str(
+            "id = \"6f1b1c0e-0000-4000-8000-0000000000a2\"\n[dial]\npress = { type = \"future\", cmd = \"rm -rf y\" }",
+        )
+        .expect("raw"),
+    ));
+    s.save_profile(&p).expect("save");
+    let b = read(&export(&s, &[p.id], false, true).expect("export")).expect("read");
+    assert_eq!(b.profiles[0].profile.foreign_library.len(), 1);
+    assert!(ulanzi_core::bundle::commands(&b).contains(&"rm -rf y".to_string()));
+}

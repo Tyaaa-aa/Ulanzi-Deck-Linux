@@ -342,3 +342,71 @@ fn a_linked_dial_on_every_page_is_not_pinned_on_save() {
     assert!(back.pinned.is_empty());
     assert!(back.pages.iter().all(|pg| pg.dials[0].library == Some(id)));
 }
+
+const NEWER_PIN_AND_SMALL: &str = r#"
+version = 2
+id = "6f1b1c0e-0000-4000-8000-000000000001"
+name = "Test"
+model = "D200"
+
+[small_buttons]
+right = { type = "next_page" }
+
+[pinned.dials.1]
+name = "Future"
+press = { type = "teleport", to = "moon" }
+
+[pinned.dials.2]
+press = { type = "back" }
+
+[[pages]]
+id = "6f1b1c0e-0000-4000-8000-000000000002"
+name = "Main"
+
+[pages.keys.0]
+tap = { type = "next_page" }
+
+[pages.small_buttons]
+left = { type = "teleport", to = "mars" }
+
+[[pages]]
+id = "6f1b1c0e-0000-4000-8000-000000000003"
+name = "Two"
+"#;
+
+#[test]
+fn a_newer_pinned_dial_and_page_small_button_load_and_save_back() {
+    use ulanzi_core::edit::Editor;
+    let p = parse_profile(NEWER_PIN_AND_SMALL).expect("loads");
+    let page = p.pages[0].id;
+    // The rest works.
+    assert_eq!(p.pages[0].keys[&0].tap, Some(Action::NextPage));
+    assert_eq!(p.pinned.dials[&2].press, Some(Action::Back));
+    assert_eq!(p.small_at(0, 1), Some(Action::NextPage));
+    assert_eq!(p.foreign.len(), 2);
+    assert!(p.foreign_at(None, Slot::Dial(1)).is_some());
+    assert!(p.foreign_at(Some(page), Slot::Small(0)).is_some());
+    // The pin covers every page; the page's own button only that page.
+    let mut e = Editor::new(p.clone());
+    assert!(e.is_foreign(Slot::Dial(1)));
+    assert!(e.is_foreign(Slot::Small(0)));
+    assert!(!e.is_foreign(Slot::Dial(2)));
+    e.set_page(1);
+    assert!(e.is_foreign(Slot::Dial(1)));
+    assert!(!e.is_foreign(Slot::Small(0)));
+    e.set_page(0);
+    e.set_dial(1, |d| d.press = Some(Action::Back));
+    e.set_small_button(0, Some(Action::Back));
+    assert_eq!(e.profile(), &p);
+    // Saving writes both back unchanged.
+    let out: toml::Table = toml::from_str(&profile_to_toml(&p).expect("toml")).expect("table");
+    let src: toml::Table = toml::from_str(NEWER_PIN_AND_SMALL).expect("table");
+    assert_eq!(out["pinned"]["dials"]["1"], src["pinned"]["dials"]["1"]);
+    assert_eq!(out["pinned"]["dials"]["2"], src["pinned"]["dials"]["2"]);
+    assert_eq!(
+        out["pages"][0]["small_buttons"]["left"],
+        src["pages"][0]["small_buttons"]["left"]
+    );
+    let again = parse_profile(&profile_to_toml(&p).expect("toml")).expect("loads");
+    assert_eq!(again.foreign, p.foreign);
+}

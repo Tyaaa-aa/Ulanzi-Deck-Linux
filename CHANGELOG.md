@@ -30,6 +30,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   imported from files made before 2.5 get the same. New pages start without dials.
 - Small buttons now belong to each page. Existing small buttons load as pinned.
 - Profiles that use the library or pins need Ulanzi Deck 2.5 or newer.
+- A pinned dial or a page's small button from a newer version is kept as written, like a key, instead
+  of refusing the profile. The import preview also lists commands in library dials from a newer version.
 
 ### Removed
 

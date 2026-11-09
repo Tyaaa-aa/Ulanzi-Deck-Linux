@@ -15,11 +15,6 @@ pub const HISTORY_LIMIT: usize = 200;
 const KEYS: u8 = 13;
 const DIALS: u8 = 3;
 
-/// The wide screen and foreign small buttons belong to the profile, everything else to a page.
-fn global(slot: Slot) -> bool {
-    matches!(slot, Slot::Small(_) | Slot::Screen)
-}
-
 /// The action in `slot` that can hold a macro: what a press runs.
 fn macro_slot(p: &mut Profile, page: usize, slot: Slot) -> Option<&mut Action> {
     let a = match slot {
@@ -85,12 +80,7 @@ fn put_macro(library: &mut MacroLibrary, mut m: Macro) {
 
 /// Whether `slot` holds something from a newer version, which edits must leave alone.
 fn taken(p: &Profile, page: usize, slot: Slot) -> bool {
-    let id = if global(slot) {
-        None
-    } else {
-        Some(p.pages[page].id)
-    };
-    p.foreign_at(id, slot).is_some()
+    p.foreign_shown(page, slot).is_some()
 }
 
 /// One appearance property, applied to every selected key.
@@ -464,14 +454,10 @@ impl Editor {
 
     /// Remove what a newer version left in `slot` (one undo step).
     pub fn clear_foreign(&mut self, slot: Slot) {
-        self.edit(|p, page| {
-            let id = if global(slot) {
-                None
-            } else {
-                Some(p.pages[page].id)
-            };
-            p.foreign.retain(|f| !(f.page == id && f.slot == slot));
-        });
+        let Some(gone) = self.profile.foreign_shown(self.page, slot).cloned() else {
+            return;
+        };
+        self.edit(|p, _| p.foreign.retain(|f| *f != gone));
     }
 
     /// Set one appearance field on every key in `keys` (one undo step).

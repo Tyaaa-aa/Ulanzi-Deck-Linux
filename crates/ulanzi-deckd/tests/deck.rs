@@ -1360,3 +1360,39 @@ async fn a_dangling_link_does_nothing() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(r.runner.ran().is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_foreign_pin_and_page_small_button_report_what_they_need() {
+    let mut p = profile();
+    p.min_app = Some("2.6.0".into());
+    let raw = toml::Value::Table(toml::from_str("kind = \"new\"").expect("raw"));
+    p.foreign.push(ForeignSlot {
+        page: None,
+        slot: Slot::Dial(0),
+        raw: raw.clone(),
+    });
+    p.small_buttons.right = None;
+    p.foreign.push(ForeignSlot {
+        page: Some(p.pages[0].id),
+        slot: Slot::Small(1),
+        raw,
+    });
+    let mut r = rig_of(p, Settings::default(), Vec::new()).await;
+    while r.events.try_recv().is_ok() {}
+    r.click(17).await;
+    r.click(16).await;
+    let failed: Vec<String> = std::iter::from_fn(|| r.events.try_recv().ok())
+        .filter_map(|e| match e {
+            DeckEvent::ActionFailed { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        failed,
+        vec![
+            "This dial needs Ulanzi Deck 2.6 or newer".to_string(),
+            "This button needs Ulanzi Deck 2.6 or newer".to_string()
+        ]
+    );
+    assert!(r.runner.ran().is_empty());
+}

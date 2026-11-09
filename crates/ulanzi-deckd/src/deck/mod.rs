@@ -1150,15 +1150,14 @@ impl Deck {
     /// The sentence for a control holding something from a newer version.
     fn foreign_problem(&self, c: Control) -> Option<String> {
         let p = self.profile();
-        let page = p.pages.get(self.nav.page).map(|pg| pg.id);
-        let (at, slot, what) = match c {
-            Control::Key(i) => (page, Slot::Key(i), "key"),
-            Control::Dial(i) => (page, Slot::Dial(i), "dial"),
-            Control::Small(i) => (None, Slot::Small(i), "button"),
-            Control::Screen => (None, Slot::Screen, "screen"),
+        let (slot, what) = match c {
+            Control::Key(i) => (Slot::Key(i), "key"),
+            Control::Dial(i) => (Slot::Dial(i), "dial"),
+            Control::Small(i) => (Slot::Small(i), "button"),
+            Control::Screen => (Slot::Screen, "screen"),
             Control::Unknown(_) => return None,
         };
-        p.foreign_at(at, slot)
+        p.foreign_shown(self.nav.page, slot)
             .map(|_| ulanzi_core::model::foreign::needs_sentence(what, p.min_app.as_deref()))
     }
 

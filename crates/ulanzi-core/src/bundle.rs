@@ -677,6 +677,9 @@ pub fn commands(b: &Bundle) -> Vec<String> {
         for f in &bp.profile.foreign {
             foreign_commands(&f.raw, &mut out);
         }
+        for v in &bp.profile.foreign_library {
+            foreign_commands(v, &mut out);
+        }
         for a in bp.profile.actions() {
             action_command(a, &mut out);
             if let Action::Macro { own: Some(m), .. } = a {

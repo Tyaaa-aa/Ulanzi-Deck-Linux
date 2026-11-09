@@ -12,7 +12,7 @@ pub use crate::edit::Slot;
 /// A slot from a newer version, kept as written. Not serialized by serde: see `store`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForeignSlot {
-    /// `None` for the small buttons and the wide screen.
+    /// `None` for what belongs to the profile: pinned small buttons and dials, the wide screen.
     pub page: Option<Uuid>,
     pub slot: Slot,
     pub raw: toml::Value,
@@ -22,6 +22,24 @@ impl Profile {
     /// The foreign part at `slot` of `page`, if there is one.
     pub fn foreign_at(&self, page: Option<Uuid>, slot: Slot) -> Option<&ForeignSlot> {
         self.foreign.iter().find(|f| f.page == page && f.slot == slot)
+    }
+
+    /// The foreign part that `slot` shows on page `page`: a pinned dial covers every page, a
+    /// page's own small button counts where that side has no pin.
+    pub fn foreign_shown(&self, page: usize, slot: Slot) -> Option<&ForeignSlot> {
+        let id = self.pages.get(page).map(|p| p.id);
+        match slot {
+            Slot::Key(_) => self.foreign_at(id, slot),
+            Slot::Dial(_) => self.foreign_at(None, slot).or_else(|| self.foreign_at(id, slot)),
+            Slot::Small(side) => self.foreign_at(None, slot).or_else(|| {
+                if self.small_pinned(side) {
+                    None
+                } else {
+                    self.foreign_at(id, slot)
+                }
+            }),
+            Slot::Screen => self.foreign_at(None, slot),
+        }
     }
 }
 
@@ -60,6 +78,29 @@ pub fn separate(table: &mut toml::Table) -> Vec<ForeignSlot> {
             }
         }
     }
+    if let Some(pins) = table
+        .get_mut("pinned")
+        .and_then(|v| v.as_table_mut())
+        .and_then(|t| t.get_mut("dials"))
+        .and_then(|v| v.as_table_mut())
+    {
+        let bad: Vec<String> = pins
+            .iter()
+            .filter(|(_, v)| !parses::<Dial>(v))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in bad {
+            if let Ok(i) = k.parse::<u8>()
+                && let Some(raw) = pins.remove(&k)
+            {
+                out.push(ForeignSlot {
+                    page: None,
+                    slot: Slot::Dial(i),
+                    raw,
+                });
+            }
+        }
+    }
     if table.get("screen").is_some_and(|v| !parses::<ScreenConfig>(v))
         && let Some(raw) = table.remove("screen")
     {
@@ -87,6 +128,19 @@ pub fn separate(table: &mut toml::Table) -> Vec<ForeignSlot> {
                     out.push(ForeignSlot {
                         page: id,
                         slot: Slot::Key(i),
+                        raw,
+                    });
+                }
+            }
+        }
+        if let Some(small) = page.get_mut("small_buttons").and_then(|v| v.as_table_mut()) {
+            for (i, side) in SMALL.iter().enumerate() {
+                if small.get(*side).is_some_and(|v| !parses::<Action>(v))
+                    && let Some(raw) = small.remove(*side)
+                {
+                    out.push(ForeignSlot {
+                        page: id,
+                        slot: Slot::Small(i as u8),
                         raw,
                     });
                 }
@@ -136,47 +190,67 @@ pub fn restore_library(table: &mut toml::Table, items: &[toml::Value]) {
 pub fn restore(table: &mut toml::Table, foreign: &[ForeignSlot]) {
     let new_table = || toml::Value::Table(toml::Table::new());
     for f in foreign {
+        let Some(id) = f.page else {
+            match f.slot {
+                Slot::Small(i) => {
+                    if let Some(small) = table
+                        .entry("small_buttons")
+                        .or_insert_with(new_table)
+                        .as_table_mut()
+                    {
+                        small.insert(SMALL[(i as usize).min(1)].into(), f.raw.clone());
+                    }
+                }
+                Slot::Screen => {
+                    table.insert("screen".into(), f.raw.clone());
+                }
+                Slot::Dial(i) => {
+                    let pins = table
+                        .entry("pinned")
+                        .or_insert_with(new_table)
+                        .as_table_mut()
+                        .and_then(|t| t.entry("dials").or_insert_with(new_table).as_table_mut());
+                    if let Some(pins) = pins {
+                        pins.insert(i.to_string(), f.raw.clone());
+                    }
+                }
+                Slot::Key(_) => {}
+            }
+            continue;
+        };
+        let id = id.to_string();
+        let page = table
+            .get_mut("pages")
+            .and_then(|v| v.as_array_mut())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_table_mut())
+            .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
+        let Some(page) = page else { continue };
         match f.slot {
+            Slot::Key(i) => {
+                if let Some(keys) = page.entry("keys").or_insert_with(new_table).as_table_mut() {
+                    keys.insert(i.to_string(), f.raw.clone());
+                }
+            }
+            Slot::Dial(i) => {
+                let dials = page
+                    .entry("dials")
+                    .or_insert_with(|| toml::Value::Array(vec![new_table(); 3]));
+                if let Some(d) = dials.as_array_mut().and_then(|d| d.get_mut(i as usize)) {
+                    *d = f.raw.clone();
+                }
+            }
             Slot::Small(i) => {
-                let Some(small) = table
+                if let Some(small) = page
                     .entry("small_buttons")
                     .or_insert_with(new_table)
                     .as_table_mut()
-                else {
-                    continue;
-                };
-                small.insert(SMALL[(i as usize).min(1)].into(), f.raw.clone());
-            }
-            Slot::Screen => {
-                table.insert("screen".into(), f.raw.clone());
-            }
-            Slot::Key(_) | Slot::Dial(_) => {
-                let id = f.page.map(|id| id.to_string());
-                let page = table
-                    .get_mut("pages")
-                    .and_then(|v| v.as_array_mut())
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|p| p.as_table_mut())
-                    .find(|p| p.get("id").and_then(|v| v.as_str()) == id.as_deref());
-                let Some(page) = page else { continue };
-                match f.slot {
-                    Slot::Key(i) => {
-                        if let Some(keys) = page.entry("keys").or_insert_with(new_table).as_table_mut() {
-                            keys.insert(i.to_string(), f.raw.clone());
-                        }
-                    }
-                    Slot::Dial(i) => {
-                        let dials = page
-                            .entry("dials")
-                            .or_insert_with(|| toml::Value::Array(vec![new_table(); 3]));
-                        if let Some(d) = dials.as_array_mut().and_then(|d| d.get_mut(i as usize)) {
-                            *d = f.raw.clone();
-                        }
-                    }
-                    _ => {}
+                {
+                    small.insert(SMALL[(i as usize).min(1)].into(), f.raw.clone());
                 }
             }
+            Slot::Screen => {}
         }
     }
 }
