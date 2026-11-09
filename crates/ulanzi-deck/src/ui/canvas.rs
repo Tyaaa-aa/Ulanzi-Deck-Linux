@@ -238,24 +238,88 @@ thread_local! {
     static ACTION_ICONS: RefCell<HashMap<IconKey, Option<gdk::Texture>>> = RefCell::new(HashMap::new());
 }
 
-/// A bundled Lucide icon in `color`, `px` px (drawn at twice that for sharp screens), cached.
-fn lucide_icon(name: &str, px: i32, color: ulanzi_core::Color) -> Option<gdk::Texture> {
+/// An icon drawn by `draw` (a PNG `px * 2` square), cached under `key` and its size and colour.
+fn cached_icon(
+    key: String,
+    px: i32,
+    color: ulanzi_core::Color,
+    draw: impl FnOnce() -> Option<Vec<u8>>,
+) -> Option<gdk::Texture> {
     ACTION_ICONS.with(|m| {
         m.borrow_mut()
-            .entry((name.to_string(), px, color.0))
-            .or_insert_with(|| {
-                ulanzi_core::render::IconLibrary::bundled()
-                    .icon_png(ulanzi_core::model::IconSet::Lucide, name, (px * 2) as u32, color)
-                    .and_then(|png| texture(&png))
-            })
+            .entry((key, px, color.0))
+            .or_insert_with(|| draw().and_then(|png| texture(&png)))
             .clone()
     })
 }
 
-/// An action's icon in its category colour, for small places like the dials.
+/// A bundled Lucide icon in `color`, `px` px (drawn at twice that for sharp screens), cached.
+fn lucide_icon(name: &str, px: i32, color: ulanzi_core::Color) -> Option<gdk::Texture> {
+    cached_icon(name.to_string(), px, color, || {
+        ulanzi_core::render::IconLibrary::bundled().icon_png(
+            ulanzi_core::model::IconSet::Lucide,
+            name,
+            (px * 2) as u32,
+            color,
+        )
+    })
+}
+
+/// The colour of the stand-in icon for actions with none of their own.
+const NEUTRAL: ulanzi_core::Color = ulanzi_core::Color([0xc0, 0xbf, 0xbc, 0xff]);
+
+/// Where an action's small icon comes from.
+#[derive(Debug, Clone, PartialEq)]
+enum IconChoice {
+    /// A bundled icon in a colour (built-in actions).
+    Lucide(&'static str, ulanzi_core::Color),
+    /// A plugin's own icon file, tinted with its colour when it is an SVG.
+    PluginFile {
+        plugin: String,
+        icon: String,
+        tint: ulanzi_core::Color,
+    },
+    /// The plugin piece, for actions with no icon.
+    Generic,
+}
+
+/// The icon for `a`; `plugin_look` is the look a plugin action gets on a key (see
+/// `catalog::default_look`), which names its icon file when the plugin has one.
+fn icon_choice(a: &ulanzi_core::model::Action, plugin_look: Option<&KeyLook>) -> IconChoice {
+    use ulanzi_core::model::{Action, ImageSource};
+    match (a, plugin_look) {
+        (Action::Plugin { .. }, Some(look)) => match &look.source {
+            ImageSource::Plugin { plugin, icon } => IconChoice::PluginFile {
+                plugin: plugin.clone(),
+                icon: icon.clone(),
+                tint: look.foreground,
+            },
+            _ => IconChoice::Generic,
+        },
+        (Action::Plugin { .. }, None) => IconChoice::Generic,
+        _ => ulanzi_core::catalog::spec_for(a).map_or(IconChoice::Generic, |s| {
+            IconChoice::Lucide(s.icon, s.category.color())
+        }),
+    }
+}
+
+/// An action's icon in its category colour, for small places like the dials. Plugin actions show
+/// their plugin's icon, else a neutral puzzle piece.
 pub fn action_icon(a: &ulanzi_core::model::Action, px: i32) -> Option<gdk::Texture> {
-    let spec = ulanzi_core::catalog::spec_for(a)?;
-    lucide_icon(spec.icon, px, spec.category.color())
+    let look =
+        matches!(a, ulanzi_core::model::Action::Plugin { .. }).then(|| ulanzi_core::catalog::default_look(a));
+    let generic = || lucide_icon("puzzle", px, NEUTRAL);
+    match icon_choice(a, look.as_ref()) {
+        IconChoice::Lucide(name, color) => lucide_icon(name, px, color),
+        IconChoice::PluginFile { plugin, icon, tint } => {
+            let svg = icon.to_ascii_lowercase().ends_with(".svg");
+            cached_icon(format!("plugin:{plugin}:{icon}"), px, tint, || {
+                ulanzi_core::render::plugin_icon_png(&plugin, &icon, (px * 2) as u32, svg.then_some(tint))
+            })
+            .or_else(generic)
+        }
+        IconChoice::Generic => generic(),
+    }
 }
 
 /// A round badge on a corner of a dial or small button: `link` or `pin`, hidden until shown.
@@ -1502,6 +1566,38 @@ mod tests {
     #[test]
     fn key_menu_labels_have_no_ellipsis() {
         crate::ui::assert_menu_labels(&key_menu());
+    }
+
+    #[test]
+    fn plugin_actions_get_their_own_icon_or_the_puzzle() {
+        use ulanzi_core::model::{Action, ImageSource};
+        let a = Action::Plugin {
+            plugin: "obs".into(),
+            action: "record".into(),
+            params: Default::default(),
+        };
+        let with_icon = KeyLook {
+            source: ImageSource::Plugin {
+                plugin: "obs".into(),
+                icon: "assets/rec.svg".into(),
+            },
+            foreground: ulanzi_core::Color::WHITE,
+            ..KeyLook::default()
+        };
+        assert_eq!(
+            icon_choice(&a, Some(&with_icon)),
+            IconChoice::PluginFile {
+                plugin: "obs".into(),
+                icon: "assets/rec.svg".into(),
+                tint: ulanzi_core::Color::WHITE,
+            }
+        );
+        assert_eq!(icon_choice(&a, Some(&KeyLook::default())), IconChoice::Generic);
+        assert_eq!(icon_choice(&a, None), IconChoice::Generic);
+        assert!(matches!(
+            icon_choice(&Action::NextPage, None),
+            IconChoice::Lucide(..)
+        ));
     }
 
     #[test]

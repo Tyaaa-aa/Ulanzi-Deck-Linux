@@ -121,6 +121,10 @@ fn draw(cr: &gtk::cairo::Context, cx: f64, cy: f64, rim: f64, m: DialMove, t: f6
         let _ = cr.stroke();
     }
     let Some((start, end)) = arc(m, t) else { return };
+    // Nothing yet: a round cap alone would leave a dot.
+    if (end - start).abs() < 0.01 {
+        return;
+    }
     let out = rim + 5.0;
     cr.set_line_cap(gtk::cairo::LineCap::Round);
     cr.set_line_width(2.5);
