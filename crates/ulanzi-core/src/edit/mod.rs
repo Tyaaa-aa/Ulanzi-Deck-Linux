@@ -15,7 +15,7 @@ pub const HISTORY_LIMIT: usize = 200;
 const KEYS: u8 = 13;
 const DIALS: u8 = 3;
 
-/// Small buttons and the wide screen belong to the profile, everything else to a page.
+/// The wide screen and foreign small buttons belong to the profile, everything else to a page.
 fn global(slot: Slot) -> bool {
     matches!(slot, Slot::Small(_) | Slot::Screen)
 }
@@ -25,11 +25,20 @@ fn macro_slot(p: &mut Profile, page: usize, slot: Slot) -> Option<&mut Action> {
     let a = match slot {
         Slot::Key(i) => p.pages.get_mut(page)?.keys.get_mut(&i)?.tap.as_mut(),
         Slot::Dial(i) => dial_mut(p, page, i)?.press.as_mut(),
-        Slot::Small(0) => p.small_buttons.left.as_mut(),
-        Slot::Small(_) => p.small_buttons.right.as_mut(),
+        Slot::Small(side) => small_mut(p, page, side).as_mut(),
         Slot::Screen => None,
     };
     a.filter(|a| matches!(a, Action::Macro { .. }))
+}
+
+/// Where small button `side` is set on `page`: the pin if that side is pinned, else the page's own.
+fn small_mut(p: &mut Profile, page: usize, side: u8) -> &mut Option<Action> {
+    let pinned = p.small_pinned(side);
+    let set = match p.pages.get_mut(page) {
+        Some(pg) if !pinned => &mut pg.small_buttons,
+        _ => &mut p.small_buttons,
+    };
+    if side == 0 { &mut set.left } else { &mut set.right }
 }
 
 /// Where dial `n` is set up on `page`: the pin if there is one, else the page's own. A link is
@@ -334,8 +343,7 @@ impl Editor {
                     dial.press = Some(action);
                 }
             }
-            Slot::Small(0) => p.small_buttons.left = Some(action),
-            Slot::Small(_) => p.small_buttons.right = Some(action),
+            Slot::Small(side) => *small_mut(p, page, side) = Some(action),
             Slot::Screen => {}
         });
     }
@@ -489,8 +497,7 @@ impl Editor {
                 key.tap = Some(action);
             }
             Slot::Key(_) => {}
-            Slot::Small(0) => p.small_buttons.left = Some(action),
-            Slot::Small(_) => p.small_buttons.right = Some(action),
+            Slot::Small(side) => *small_mut(p, page, side) = Some(action),
             Slot::Dial(d) => {
                 if let Some(dial) = dial_mut(p, page, d) {
                     dial.press = Some(action);
@@ -539,13 +546,7 @@ impl Editor {
         if self.is_foreign(Slot::Small(which)) {
             return;
         }
-        self.edit(|p, _| {
-            if which == 0 {
-                p.small_buttons.left = action;
-            } else {
-                p.small_buttons.right = action;
-            }
-        });
+        self.edit(|p, page| *small_mut(p, page, which) = action);
     }
 
     /// Rename the profile (surrounding spaces dropped; an empty name is ignored).

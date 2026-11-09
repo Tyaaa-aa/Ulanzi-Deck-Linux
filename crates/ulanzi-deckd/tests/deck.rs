@@ -1287,3 +1287,76 @@ async fn a_stalled_write_does_not_hold_up_a_keys_action() {
     r.mock.stalled.store(false, Ordering::SeqCst);
     assert_eq!(ran, vec![cmd("only-tap")]);
 }
+
+fn pinned_profile() -> Profile {
+    let mut p = profile();
+    p.pinned.dials.insert(
+        0,
+        Dial {
+            press: Some(cmd("pinned-dial")),
+            ..Dial::default()
+        },
+    );
+    p.small_buttons.right = Some(cmd("pinned-small"));
+    p
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pinned_dial_and_small_button_work_on_a_page_without_their_own() {
+    let mut r = rig_of(pinned_profile(), Settings::default(), Vec::new()).await;
+    r.tx.send(DeckMsg::SetPage(1)).await.expect("send");
+    settle().await;
+    r.pages_seen();
+    r.click(17).await;
+    r.click(16).await;
+    assert_eq!(r.runner.ran(), vec![cmd("pinned-dial"), cmd("pinned-small")]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pins_act_on_folder_pages() {
+    let mut r = rig_of(pinned_profile(), Settings::default(), Vec::new()).await;
+    r.click(0).await;
+    r.pages_seen();
+    r.click(17).await;
+    r.click(16).await;
+    assert_eq!(r.runner.ran(), vec![cmd("pinned-dial"), cmd("pinned-small")]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_linked_dial_turns_with_its_library_actions() {
+    let mut p = profile();
+    let id = uuid::Uuid::new_v4();
+    p.dial_library.push(LibraryDial {
+        id,
+        dial: Dial {
+            right: Some(cmd("library-right")),
+            ..Dial::default()
+        },
+    });
+    p.pages[1].dials[0] = Dial {
+        library: Some(id),
+        ..Dial::default()
+    };
+    let r = rig_of(p, Settings::default(), Vec::new()).await;
+    r.tx.send(DeckMsg::SetPage(1)).await.expect("send");
+    settle().await;
+    r.mock.inject.send(Ok(report(17, 2, 3))).await.expect("inject");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(r.runner.ran(), vec![cmd("library-right")]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_dangling_link_does_nothing() {
+    let mut p = profile();
+    p.pages[1].dials[0] = Dial {
+        library: Some(uuid::Uuid::new_v4()),
+        right: Some(cmd("stale")),
+        ..Dial::default()
+    };
+    let r = rig_of(p, Settings::default(), Vec::new()).await;
+    r.tx.send(DeckMsg::SetPage(1)).await.expect("send");
+    settle().await;
+    r.mock.inject.send(Ok(report(17, 2, 3))).await.expect("inject");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(r.runner.ran().is_empty());
+}

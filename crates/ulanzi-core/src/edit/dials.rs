@@ -116,6 +116,37 @@ impl Editor {
         });
     }
 
+    /// Show the small button on `side` as it is now on every page. Each page keeps its own.
+    pub fn pin_small(&mut self, side: u8) {
+        if side > 1 || self.profile.small_pinned(side) || self.is_foreign(Slot::Small(side)) {
+            return;
+        }
+        let Some(action) = self.profile.small_at(self.page, side) else {
+            return;
+        };
+        self.edit(|p, _| {
+            if side == 0 {
+                p.small_buttons.left = Some(action);
+            } else {
+                p.small_buttons.right = Some(action);
+            }
+        });
+    }
+
+    /// Remove the pin on `side`; each page shows its own small button again.
+    pub fn unpin_small(&mut self, side: u8) {
+        if side > 1 || self.is_foreign(Slot::Small(side)) {
+            return;
+        }
+        self.edit(|p, _| {
+            if side == 0 {
+                p.small_buttons.left = None;
+            } else {
+                p.small_buttons.right = None;
+            }
+        });
+    }
+
     /// Name dial `n` (a linked dial names the library dial, which keeps a name).
     pub fn rename_dial(&mut self, n: u8, name: &str) {
         let name = name.trim();

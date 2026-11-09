@@ -1066,3 +1066,32 @@ fn dial_operations_leave_a_foreign_dial_alone() {
     assert_eq!(e.profile(), &before);
     assert!(!e.can_undo());
 }
+
+#[test]
+fn small_buttons_edit_the_pin_or_the_page() {
+    let mut p = Profile::new_default("S", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    let mut e = Editor::new(p);
+    // Both sides are pinned in a new profile: the edit changes the pin.
+    e.set_small_button(0, Some(Action::Back));
+    assert_eq!(e.profile().small_buttons.left, Some(Action::Back));
+    assert!(e.profile().pages[0].small_buttons.left.is_none());
+    // Unpinned, the edit changes this page only.
+    e.unpin_small(0);
+    assert!(!e.profile().small_pinned(0));
+    assert!(e.profile().small_pinned(1));
+    e.set_small_button(0, Some(Action::SleepNow));
+    assert_eq!(e.profile().pages[0].small_buttons.left, Some(Action::SleepNow));
+    assert!(e.profile().pages[1].small_buttons.left.is_none());
+    assert_eq!(e.profile().small_at(1, 0), None);
+    // Pinning copies what shows to every page.
+    e.pin_small(0);
+    assert_eq!(e.profile().small_buttons.left, Some(Action::SleepNow));
+    assert_eq!(e.profile().small_at(1, 0), Some(Action::SleepNow));
+    // The slot ops follow the same rule.
+    e.unpin_small(1);
+    e.drop_action(Slot::Small(1), Action::Back);
+    assert_eq!(e.profile().pages[0].small_buttons.right, Some(Action::Back));
+    e.set_slot_action(Slot::Small(0), Action::NextPage);
+    assert_eq!(e.profile().small_buttons.left, Some(Action::NextPage));
+}
