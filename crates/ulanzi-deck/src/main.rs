@@ -24,7 +24,7 @@ struct Shot {
     size: (i32, i32),
     dark: Option<bool>,
     select: Option<String>,
-    /// `library`, `picker:<tab>`, `plugins`, `discover`, `integrations:<plugin id>`, `action-picker`, ….
+    /// `library`, `dial-menu:<n>`, `picker:<tab>`, `plugins`, `discover`, `integrations:<plugin id>`, `action-picker`, ….
     open: Option<String>,
     /// 1-based page to show.
     page: Option<usize>,
@@ -318,6 +318,22 @@ fn main() -> glib::ExitCode {
             match shot.open.as_deref() {
                 Some("library") => {
                     WidgetExt::activate_action(&window, "win.library", None).ok();
+                }
+                Some(o) if o.starts_with("dial-menu") => {
+                    // The right-click menu of dial N (1-based, default 1).
+                    let n: usize = o.split_once(':').and_then(|(_, n)| n.parse().ok()).unwrap_or(1);
+                    let window = window.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(300), move || {
+                        let seen = std::cell::Cell::new(0);
+                        if let Some(d) = find_widget(window.upcast_ref(), &|w| {
+                            w.has_css_class("deck-dial") && {
+                                seen.set(seen.get() + 1);
+                                seen.get() == n
+                            }
+                        }) {
+                            WidgetExt::activate_action(&d, "dial.menu", None).ok();
+                        }
+                    });
                 }
                 Some(o) if o.starts_with("onboarding") => {
                     ui::onboarding::open(&state2, &window, o.split_once(':').map(|(_, t)| t))

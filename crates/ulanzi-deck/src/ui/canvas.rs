@@ -995,11 +995,9 @@ pub fn build(state: &State) -> Canvas {
     }
     let spacer = gtk::Box::builder().hexpand(true).build();
     bottom.append(&spacer);
-    let dial_box = gtk::Box::builder().spacing(16).build();
-    for s in spots.iter() {
-        dial_box.append(&s.column);
-    }
-    bottom.append(&dial_box);
+    let columns: Vec<gtk::Box> = spots.iter().map(|s| s.column.clone()).collect();
+    let dial_row = crate::ui::dial_swap::DialRow::new(&columns, 16);
+    bottom.append(&dial_row);
 
     let body = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1167,6 +1165,92 @@ pub fn build(state: &State) -> Canvas {
                 state.select(|s| s.click(Slot::Dial(n as u8)));
             }
         });
+    }
+
+    // Drag a dial onto another spot: the others slide aside, then they swap (one undo step).
+    {
+        let (allowed_state, state) = (state.clone(), state.clone());
+        crate::ui::dial_swap::attach(
+            &dial_row,
+            &dials,
+            move |from, to| {
+                let e = allowed_state.editor.borrow();
+                spots_between(from, to).all(|i| !e.is_foreign(Slot::Dial(i)))
+            },
+            move |from, to| {
+                state.edit(|e| move_dial(e, from, to));
+                state.select(|s| s.click(Slot::Dial(to)));
+            },
+        );
+    }
+
+    // Right-click a dial or a small button: its menu as it works on this page.
+    for (n, d) in dials.iter().enumerate() {
+        let n = n as u8;
+        let actions = dial_actions(state, n);
+        let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        pop.set_has_arrow(true);
+        pop.set_parent(d);
+        let show: Rc<dyn Fn(Option<gdk::Rectangle>)> = {
+            let (state, pop) = (state.clone(), pop.clone());
+            Rc::new(move |at| {
+                state.select(|s| s.click(Slot::Dial(n)));
+                let (info, can_paste) = {
+                    let e = state.editor.borrow();
+                    (e.dial_info(n), e.has_dial_clip())
+                };
+                pop.set_menu_model(Some(&dial_menu(&info, can_paste)));
+                pop.set_pointing_to(at.as_ref());
+                pop.popup();
+            })
+        };
+        // `dial.menu` opens it without a pointer (screenshot mode uses it).
+        let menu = gio::SimpleAction::new("menu", None);
+        {
+            let show = show.clone();
+            menu.connect_activate(move |_, _| show(None));
+        }
+        actions.add_action(&menu);
+        d.insert_action_group("dial", Some(&actions));
+        let right = gtk::GestureClick::builder().button(3).build();
+        right.connect_pressed(move |g, _, x, y| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            show(Some(gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        });
+        d.add_controller(right);
+    }
+    for (side, b) in small.iter().enumerate() {
+        let side = side as u8;
+        let actions = gio::SimpleActionGroup::new();
+        for (name, pin) in [("pin", true), ("unpin", false)] {
+            let a = gio::SimpleAction::new(name, None);
+            let state = state.clone();
+            a.connect_activate(move |_, _| {
+                state.edit(|e| {
+                    if pin {
+                        e.pin_small(side)
+                    } else {
+                        e.unpin_small(side)
+                    }
+                });
+            });
+            actions.add_action(&a);
+        }
+        b.insert_action_group("small", Some(&actions));
+        let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
+        pop.set_has_arrow(true);
+        pop.set_parent(b);
+        let right = gtk::GestureClick::builder().button(3).build();
+        let state = state.clone();
+        right.connect_pressed(move |g, _, x, y| {
+            g.set_state(gtk::EventSequenceState::Claimed);
+            state.select(|s| s.click(Slot::Small(side)));
+            let pinned = state.editor.borrow().profile().small_pinned(side);
+            pop.set_menu_model(Some(&small_menu(pinned)));
+            pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            pop.popup();
+        });
+        b.add_controller(right);
     }
 
     // Right-click a key: copy, paste and clear, with their shortcuts shown.
@@ -1531,9 +1615,160 @@ fn key_menu() -> gio::Menu {
     m
 }
 
+/// The spots from `from` to `to`, both included.
+fn spots_between(from: u8, to: u8) -> std::ops::RangeInclusive<u8> {
+    from.min(to)..=from.max(to)
+}
+
+/// Move dial `from` to `to`, the ones between moving one spot back toward `from`, as one undo
+/// step (a single swap for neighbours).
+fn move_dial(e: &mut ulanzi_core::edit::Editor, from: u8, to: u8) {
+    let mut at = from;
+    while at != to {
+        let next = if to > at { at + 1 } else { at - 1 };
+        if at != from {
+            e.merge_next();
+        }
+        e.swap_dials(at, next);
+        at = next;
+    }
+}
+
+/// What the dial menu does to dial `n` (`dial.copy`, `dial.paste`, ...).
+fn dial_actions(state: &State, n: u8) -> gio::SimpleActionGroup {
+    let group = gio::SimpleActionGroup::new();
+    let add = |name: &str, f: fn(&State, u8)| {
+        let a = gio::SimpleAction::new(name, None);
+        let state = state.clone();
+        a.connect_activate(move |_, _| f(&state, n));
+        group.add_action(&a);
+    };
+    add("copy", |s, n| s.editor.borrow_mut().copy_dial(n));
+    add("paste", |s, n| s.edit(|e| e.paste_dial(n)));
+    add("add-to-library", |s, n| {
+        s.edit(|e| {
+            e.add_dial_to_library(n);
+        })
+    });
+    add("own-copy", |s, n| s.edit(|e| e.own_copy_dial(n)));
+    add("pin", |s, n| s.edit(|e| e.pin_dial(n)));
+    add("unpin", |s, n| s.edit(|e| e.unpin_dial(n)));
+    add("remove", |s, n| s.edit(|e| e.remove_dial(n)));
+    add("rename", |s, n| {
+        // The inspector takes this and focuses the dial's Name row.
+        s.focus_name.set(Some(Slot::Dial(n)));
+        s.select(|sel| sel.click(Slot::Dial(n)));
+    });
+    group
+}
+
+/// The right-click menu of a small button.
+fn small_menu(pinned: bool) -> gio::Menu {
+    let m = gio::Menu::new();
+    if pinned {
+        m.append(Some("Unpin"), Some("small.unpin"));
+    } else {
+        m.append(Some("Pin to Every Page"), Some("small.pin"));
+    }
+    m
+}
+
+/// The right-click menu of a dial as it works on this page; Paste is greyed out without a copied
+/// dial.
+fn dial_menu(info: &ulanzi_core::model::DialInfo, can_paste: bool) -> gio::Menu {
+    let m = gio::Menu::new();
+    let clip = gio::Menu::new();
+    clip.append(Some("Copy"), Some("dial.copy"));
+    // An action nobody installs leaves the item insensitive.
+    clip.append(
+        Some("Paste"),
+        Some(if can_paste { "dial.paste" } else { "dial.no-paste" }),
+    );
+    if info.library.is_some() {
+        clip.append(Some("Edit for This Page Only"), Some("dial.own-copy"));
+    } else {
+        clip.append(Some("Add to Library"), Some("dial.add-to-library"));
+    }
+    m.append_section(None, &clip);
+    let spot = gio::Menu::new();
+    if info.pinned {
+        spot.append(Some("Unpin"), Some("dial.unpin"));
+    } else {
+        spot.append(Some("Pin to Every Page"), Some("dial.pin"));
+    }
+    spot.append(Some("Rename"), Some("dial.rename"));
+    // A pin covers this page's own dial, so there is nothing of this page's to remove.
+    if !info.pinned {
+        spot.append(Some("Remove from This Page"), Some("dial.remove"));
+    }
+    m.append_section(None, &spot);
+    m
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The labels of `m` and its sections, in order.
+    fn labels(m: &gio::Menu) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0..m.n_items() {
+            if let Some(l) = m
+                .item_attribute_value(i, "label", None)
+                .and_then(|v| v.str().map(str::to_owned))
+            {
+                out.push(l);
+            }
+            if let Some(sub) = m.item_link(i, "section").and_downcast::<gio::Menu>() {
+                out.extend(labels(&sub));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn dial_menu_follows_the_dial() {
+        use ulanzi_core::model::DialInfo;
+        let linked = DialInfo {
+            dial: Default::default(),
+            pinned: true,
+            library: Some(uuid::Uuid::new_v4()),
+        };
+        let m = dial_menu(&linked, true);
+        crate::ui::assert_menu_labels(&m);
+        let l = labels(&m);
+        assert!(l.contains(&"Edit for This Page Only".into()));
+        assert!(l.contains(&"Unpin".into()));
+        assert!(!l.contains(&"Add to Library".into()));
+        // A pinned spot shows the pin, not this page's own dial.
+        assert!(!l.contains(&"Remove from This Page".into()));
+
+        let own = DialInfo {
+            dial: Default::default(),
+            pinned: false,
+            library: None,
+        };
+        let m = dial_menu(&own, false);
+        crate::ui::assert_menu_labels(&m);
+        assert_eq!(
+            labels(&m),
+            [
+                "Copy",
+                "Paste",
+                "Add to Library",
+                "Pin to Every Page",
+                "Rename",
+                "Remove from This Page"
+            ]
+        );
+    }
+
+    #[test]
+    fn small_menu_pins_or_unpins() {
+        crate::ui::assert_menu_labels(&small_menu(false));
+        assert_eq!(labels(&small_menu(false)), ["Pin to Every Page"]);
+        assert_eq!(labels(&small_menu(true)), ["Unpin"]);
+    }
 
     #[test]
     fn a_gif_that_cant_play_says_why() {

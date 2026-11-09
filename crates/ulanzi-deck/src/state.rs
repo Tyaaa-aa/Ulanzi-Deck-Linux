@@ -92,6 +92,8 @@ pub struct AppState {
     pub dragging_action: Cell<bool>,
     /// An appearance change shown on the selected keys before it is applied (hovering a colour).
     pub preview: RefCell<Option<ulanzi_core::edit::Field>>,
+    /// Rename from a dial's menu: the inspector focuses this slot's Name row when it shows it.
+    pub focus_name: Cell<Option<Slot>>,
     /// Expandable rows the user opened, by path, so rebuilding the inspector keeps them open.
     pub expanded: RefCell<std::collections::HashSet<String>>,
     /// The daemon's plugins and their manifests.
@@ -152,6 +154,7 @@ impl AppState {
             inspector_edit: Cell::new(false),
             preview: RefCell::new(None),
             dragging_action: Cell::new(false),
+            focus_name: Cell::new(None),
             rules: RefCell::new(std::collections::HashMap::new()),
             expanded: RefCell::new(std::collections::HashSet::new()),
             plugins: RefCell::default(),

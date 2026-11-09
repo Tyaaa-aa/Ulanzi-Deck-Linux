@@ -8,6 +8,7 @@ pub mod canvas;
 pub mod capture;
 pub mod color_popover;
 pub mod dial_ring;
+pub mod dial_swap;
 pub mod effects_rows;
 pub mod how_it_works;
 pub mod icon_picker;
