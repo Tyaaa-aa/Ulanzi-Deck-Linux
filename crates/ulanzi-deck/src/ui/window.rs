@@ -510,7 +510,11 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
         "clear",
         Box::new(move || {
             if let Some(n) = selected_dial(&s) {
-                return s.edit(|e| e.remove_dial(n));
+                // As the menu: a pinned spot has nothing of this page's to remove.
+                if !s.editor.borrow().dial_info(n).pinned {
+                    s.edit(|e| e.remove_dial(n));
+                }
+                return;
             }
             let keys = s.selection.borrow().keys();
             s.edit(|e| e.clear(&keys));

@@ -279,6 +279,8 @@ pub fn attach(
     for (n, dial) in dials.iter().enumerate() {
         let n = n as u8;
         let g = gtk::GestureDrag::new();
+        // The left button only: a right-click opens the menu.
+        g.set_button(gtk::gdk::BUTTON_PRIMARY);
         g.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
             let (drag, row) = (drag.clone(), weak_row.clone());
@@ -329,10 +331,11 @@ pub fn attach(
                 }
             });
         }
-        {
+        // Pointer up, or the sequence went elsewhere: settle, and swap if over another spot.
+        let finish = {
             let (drag, row, slide, allowed) =
                 (drag.clone(), weak_row.clone(), slide.clone(), allowed.clone());
-            g.connect_drag_end(move |_, _, _| {
+            Rc::new(move |cancelled: bool| {
                 if drag.from.get() != Some(n) || drag.released.get() {
                     return;
                 }
@@ -342,8 +345,8 @@ pub fn attach(
                 }
                 let pitch = drag.pitch.get();
                 let mut to = drag.to.get();
-                // A spot that can't take it: back home.
-                if !allowed(n, to) {
+                // A spot that can't take it, or a cancelled drag: back home.
+                if cancelled || !allowed(n, to) {
                     to = n;
                 }
                 drag.to.set(to);
@@ -354,8 +357,13 @@ pub fn attach(
                     row.set_drop(None);
                 }
                 slide(end);
-            });
+            })
+        };
+        {
+            let finish = finish.clone();
+            g.connect_drag_end(move |_, _, _| finish(false));
         }
+        g.connect_cancel(move |_, _| finish(true));
         dial.add_controller(g);
     }
 }
