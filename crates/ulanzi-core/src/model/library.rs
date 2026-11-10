@@ -161,6 +161,13 @@ impl Profile {
             .collect()
     }
 
+    /// Page `page` as the deck shows it: its keys are [`Profile::keys_at`].
+    pub fn shown_page(&self, page: usize) -> Option<super::Page> {
+        let mut shown = self.pages.get(page)?.clone();
+        shown.keys = self.keys_at(page);
+        Some(shown)
+    }
+
     /// Where a library key is placed: pages that link it, and whether a pin does.
     pub fn key_usage(&self, id: Uuid) -> Usage {
         let linked = |k: &Key| k.library == Some(id);

@@ -461,7 +461,8 @@ pub fn missing_effects(
     let Some(effects) = cache.effects.clone() else {
         return Vec::new();
     };
-    let Some(page) = profile.pages.get(page) else {
+    // Pinned and linked keys as they show.
+    let Some(page) = profile.shown_page(page) else {
         return Vec::new();
     };
     let vars = dynamic.label_vars();
@@ -514,7 +515,9 @@ pub fn build_page(
     let mut entries = BTreeMap::new();
     let mut images = Vec::new();
     let mut h = DefaultHasher::new();
-    let keys = profile.pages.get(page).map(|p| &p.keys);
+    // Pinned and linked keys as they show.
+    let keys = profile.pages.get(page).map(|_| profile.keys_at(page));
+    let keys = keys.as_ref();
     let page_id = profile.pages.get(page).map(|p| p.id);
     let vars = dynamic.label_vars();
     let mut used = HashSet::new();
@@ -843,6 +846,37 @@ mod tests {
             build_page(&p, 0, &ctx(), &d, &mut cache);
         }
         assert_eq!(cache.moves.len(), 1);
+    }
+
+    #[test]
+    fn pinned_and_linked_keys_show_on_a_page_without_their_own() {
+        let mut p = profile();
+        p.pages.push(Page::new("Two"));
+        let key = p.pages[0].keys[&6].clone();
+        p.pinned.keys.insert(6, key.clone());
+        let id = uuid::Uuid::new_v4();
+        p.key_library.push(ulanzi_core::model::LibraryKey {
+            id,
+            name: "Lib".into(),
+            key,
+        });
+        p.pages[1].keys.insert(
+            2,
+            Key {
+                library: Some(id),
+                ..Key::default()
+            },
+        );
+        let b = build_page(
+            &p,
+            1,
+            &ctx(),
+            &DynamicState::default(),
+            &mut RenderCache::default(),
+        );
+        for i in [2, 6] {
+            assert!(b.entries[&i].icon.is_some(), "key {i}");
+        }
     }
 
     #[test]

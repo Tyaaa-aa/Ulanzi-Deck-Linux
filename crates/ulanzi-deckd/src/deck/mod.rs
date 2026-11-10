@@ -835,9 +835,8 @@ impl Deck {
     fn live_keys(&self) -> LiveKeys {
         let profile = self.profile();
         let keys = profile
-            .pages
-            .get(self.nav.page)
-            .map(|p| push::live_keys(p, &self.page_dynamic()))
+            .shown_page(self.nav.page)
+            .map(|p| push::live_keys(&p, &self.page_dynamic()))
             .unwrap_or_default();
         LiveKeys {
             profile: profile.id,
@@ -1117,13 +1116,13 @@ impl Deck {
 
     /// Key `i` on the current page.
     fn key(&self, i: u8) -> Option<&Key> {
-        self.profile().pages.get(self.nav.page)?.keys.get(&i)
+        self.profile().key_ref(self.nav.page, i)
     }
 
     fn tap_action(&self, c: Control) -> Option<Action> {
         let p = self.profile();
         match c {
-            Control::Key(i) => p.pages.get(self.nav.page)?.keys.get(&i)?.tap.clone(),
+            Control::Key(i) => p.key_ref(self.nav.page, i)?.tap.clone(),
             Control::Small(side) => p.small_at(self.nav.page, side),
             Control::Dial(i) => p.dial_at(self.nav.page, i).press,
             Control::Screen => match &p.screen {
@@ -1137,7 +1136,7 @@ impl Deck {
     fn hold_action(&self, c: Control) -> Option<Action> {
         let p = self.profile();
         match c {
-            Control::Key(i) => p.pages.get(self.nav.page)?.keys.get(&i)?.hold.clone(),
+            Control::Key(i) => p.key_ref(self.nav.page, i)?.hold.clone(),
             Control::Dial(i) => p.dial_at(self.nav.page, i).hold,
             Control::Screen => match &p.screen {
                 ScreenConfig::Custom { hold, .. } => hold.clone(),
@@ -1255,9 +1254,7 @@ impl Deck {
             return false;
         };
         self.profile()
-            .pages
-            .get(self.nav.page)
-            .and_then(|p| p.keys.get(&i))
+            .key_ref(self.nav.page, i)
             .is_some_and(|k| format!("{:?}", k.look).contains("{macro."))
     }
 

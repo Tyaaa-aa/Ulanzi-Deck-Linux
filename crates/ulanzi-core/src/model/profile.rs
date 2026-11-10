@@ -324,13 +324,20 @@ pub struct LiveKeys {
 }
 
 impl Profile {
+    /// Every key that has a look of its own: the pages' own, the pinned ones and the library's.
+    pub fn all_keys_mut(&mut self) -> impl Iterator<Item = &mut Key> {
+        self.pages
+            .iter_mut()
+            .flat_map(|p| p.keys.values_mut())
+            .chain(self.pinned.keys.values_mut())
+            .chain(self.key_library.iter_mut().map(|l| &mut l.key))
+    }
+
     /// "Hide All Labels" for labels drawn into the key pictures (the deck hides its own).
     pub fn hide_drawn_labels(&mut self) {
-        for page in &mut self.pages {
-            for k in page.keys.values_mut() {
-                if k.look.label.position.is_some() {
-                    k.look.label.visible = false;
-                }
+        for k in self.all_keys_mut() {
+            if k.look.label.position.is_some() {
+                k.look.label.visible = false;
             }
         }
     }
@@ -446,7 +453,7 @@ impl Profile {
 impl Profile {
     /// Every key back to the label settings from Preferences: shown, at the default position.
     pub fn clear_label_overrides(&mut self) {
-        for key in self.pages.iter_mut().flat_map(|p| p.keys.values_mut()) {
+        for key in self.all_keys_mut() {
             key.look.label.position = None;
             key.look.label.visible = true;
         }
