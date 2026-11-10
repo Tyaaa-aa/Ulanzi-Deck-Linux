@@ -66,29 +66,68 @@ pub fn usage_line(u: Usage) -> String {
     }
 }
 
-/// What deleting a library dial in use empties or unpins; `None` when nothing uses it (no need to
-/// ask).
-pub fn delete_body(u: Usage) -> Option<String> {
-    delete_body_for(u, "dial")
-}
-
-/// [`delete_body`] for a library `what` ("dial" or "key").
-pub fn delete_body_for(u: Usage, what: &str) -> Option<String> {
-    let (and_pinned, and_pin) = if u.pinned {
-        (" and pinned", " and the pin removed")
-    } else {
-        ("", "")
-    };
-    match (u.pinned, u.pages) {
-        (false, 0) => None,
-        (true, 0) => Some("It's pinned. The pin will be removed.".into()),
-        (_, 1) => Some(format!(
-            "It's used on 1 page{and_pinned}. That {what} will be empty{and_pin}."
+/// The question when deleting a library `what` ("dial" or "key") that `uses` controls use:
+/// (body, label of the button that deletes them too). `None` when nothing uses it.
+pub fn delete_question(uses: usize, what: &str) -> Option<(String, String)> {
+    match uses {
+        0 => None,
+        1 => Some((
+            format!("1 {what} uses it. Keep that {what} as it is, or delete it too?"),
+            format!("Delete the {}", title_case(what)),
         )),
-        (_, n) => Some(format!(
-            "It's used on {n} pages{and_pinned}. Those {what}s will be empty{and_pin}."
+        n => Some((
+            format!("{n} {what}s use it. Keep those {what}s as they are, or delete them too?"),
+            format!("Delete All {n} {}s", title_case(what)),
         )),
     }
+}
+
+fn title_case(what: &str) -> String {
+    let mut c = what.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
+/// Delete a library item named `name`, asking first (over `parent`) when `uses` controls use it:
+/// `keep` leaves them as copies of their own, `all` deletes them too.
+pub(crate) fn ask_delete(
+    state: &State,
+    parent: &impl IsA<gtk::Widget>,
+    name: &str,
+    what: &str,
+    uses: usize,
+    keep: impl Fn(&mut Editor) + 'static,
+    all: impl Fn(&mut Editor) + 'static,
+) {
+    let done = {
+        let state = state.clone();
+        move |f: &dyn Fn(&mut Editor)| {
+            state.edit(f);
+            *state.selected_library.borrow_mut() = None;
+            state.select(|s| s.clear());
+        }
+    };
+    let Some((body, delete_all)) = delete_question(uses, what) else {
+        done(&all);
+        return;
+    };
+    let alert = adw::AlertDialog::builder()
+        .heading(format!("Delete “{name}” From the Library?"))
+        .body(body)
+        .default_response("cancel")
+        .close_response("cancel")
+        .build();
+    alert.add_response("cancel", "Cancel");
+    alert.add_response("keep", if uses == 1 { "Keep It" } else { "Keep Them" });
+    alert.add_response("all", &delete_all);
+    alert.set_response_appearance("all", adw::ResponseAppearance::Destructive);
+    alert.connect_response(None, move |_, r| match r {
+        "keep" => done(&keep),
+        "all" => done(&all),
+        _ => {}
+    });
+    alert.present(Some(parent));
 }
 
 /// The library dials the empty-dial picker lists: most used first (ties keep the library's
@@ -197,6 +236,54 @@ fn zones(ctx: &C, path: &str, dial: &Dial, set: SetZone) -> adw::PreferencesGrou
 }
 
 /// A dim, wrapping line of text.
+/// What a pin hides on this page: the page's own `what` ("key", "dial" or "button"), shown but
+/// not editable, with its picture when it has one and what each of `actions` does.
+pub(super) fn hidden_by_pin(
+    what: &str,
+    picture: Option<gtk::gdk::Texture>,
+    name: &str,
+    actions: &[(&str, Option<&Action>)],
+) -> gtk::Box {
+    let column = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
+        .build();
+    let does: Vec<String> = actions
+        .iter()
+        .filter_map(|(when, a)| a.map(|a| format!("{when}: {}", ulanzi_core::catalog::describe(a))))
+        .collect();
+    let row = adw::ActionRow::builder()
+        .title(glib::markup_escape_text(name).as_str())
+        .subtitle(glib::markup_escape_text(&does.join(" · ")).as_str())
+        .build();
+    if let Some(t) = picture {
+        let image = gtk::Image::builder()
+            .pixel_size(40)
+            .css_classes(["key-preview"])
+            .valign(gtk::Align::Center)
+            .build();
+        image.set_paintable(Some(&t));
+        row.add_prefix(&image);
+    }
+    let list = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .css_classes(["boxed-list"])
+        .build();
+    list.append(&row);
+    column.append(
+        &gtk::Label::builder()
+            .label("Hidden by the Pin")
+            .xalign(0.0)
+            .css_classes(["heading"])
+            .build(),
+    );
+    column.append(&list);
+    column.append(&note(&format!(
+        "This page has its own {what} here, hidden by the pin. Unpin to use it."
+    )));
+    column
+}
+
 pub(super) fn note(text: &str) -> gtk::Label {
     gtk::Label::builder()
         .label(text)
@@ -229,7 +316,7 @@ fn buttons(ctx: &C, rows: Vec<Button>) -> Option<gtk::ListBox> {
 }
 
 /// The Open Library button: the tray opens with dial `n` outlined as the drop spot. Shown only
-/// while the tray is shut.
+/// while the tray is shut, and never on a D200, which has no dial library.
 fn open_library_button(state: &State, n: u8) -> gtk::Button {
     let b = gtk::Button::builder()
         .child(
@@ -242,12 +329,13 @@ fn open_library_button(state: &State, n: u8) -> gtk::Button {
     b.connect_clicked(move |b| {
         let _ = b.activate_action("win.library-place", Some(&n.to_variant()));
     });
-    b.set_visible(!state.tray_open.get());
+    let shown = |st: &State| !st.tray_open.get() && st.model() == ulanzi_core::model::Model::D200X;
+    b.set_visible(shown(state));
     let (weak, st) = (b.downgrade(), state.clone());
     state.on_while(move |c| {
         let Some(b) = weak.upgrade() else { return false };
         if c == Change::Tray {
-            b.set_visible(!st.tray_open.get());
+            b.set_visible(shown(&st));
         }
         true
     });
@@ -262,10 +350,16 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         let e = state.editor.borrow();
         let info = e.dial_info(d);
         let usage = info.library.map(|id| e.profile().dial_usage(id));
-        let own = e.profile().pages.get(e.page()).map(|p| &p.dials[d as usize]);
-        // Only when unpinning would show something else.
-        let covered = own.is_some_and(|o| !o.is_empty() && Some(o) != e.profile().pinned.dials.get(&d));
-        (info, usage, e.profile().dial_library.is_empty(), covered)
+        let p = e.profile();
+        let own = p.pages.get(e.page()).map(|pg| &pg.dials[d as usize]);
+        // Only when unpinning would show something else; a link shows its library dial.
+        let covered = own
+            .filter(|o| !o.is_empty() && Some(*o) != p.pinned.dials.get(&d))
+            .and_then(|o| match o.library {
+                Some(id) => p.library_dial(id).map(|l| l.dial.clone()),
+                None => Some(o.clone()),
+            });
+        (info, usage, p.dial_library.is_empty(), covered)
     };
     // A pin covers the page's dials even when blank: it keeps its Unpin.
     let empty = !info.pinned && info.library.is_none() && info.dial.is_empty();
@@ -339,9 +433,17 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
     if let Some(list) = buttons(ctx, rows) {
         page.append(&list);
     }
-    if covered {
-        page.append(&note(
-            "This page has its own dial here, hidden by the pin. Unpin to use it.",
+    if let Some(own) = covered {
+        page.append(&hidden_by_pin(
+            "dial",
+            None,
+            &shown_name(d, &own),
+            &[
+                ("Press", own.press.as_ref()),
+                ("Left", own.left.as_ref()),
+                ("Right", own.right.as_ref()),
+                ("Hold", own.hold.as_ref()),
+            ],
         ));
     }
     if focus {
@@ -595,36 +697,23 @@ pub(super) fn library_view(ctx: &C, content: &gtk::Box, id: Uuid) -> View {
     view
 }
 
-/// Delete library dial `id`, asking first (over `parent`) when a page uses it.
+/// Delete library dial `id`, asking first (over `parent`) what happens to the dials using it.
 pub(crate) fn delete_library_dial(state: &State, id: Uuid, parent: &impl IsA<gtk::Widget>) {
-    let (name, usage) = {
+    let (name, uses) = {
         let e = state.editor.borrow();
         let p = e.profile();
         let Some(lib) = p.library_dial(id) else { return };
-        (shown_name(0, &lib.dial), p.dial_usage(id))
+        (shown_name(0, &lib.dial), p.dial_uses(id))
     };
-    let gone = {
-        let state = state.clone();
-        move || {
-            state.edit(|e| e.delete_library_dial(id));
-            state.select(|s| s.clear());
-        }
-    };
-    let Some(body) = delete_body(usage) else {
-        gone();
-        return;
-    };
-    let alert = adw::AlertDialog::builder()
-        .heading(format!("Delete “{name}”?"))
-        .body(body)
-        .default_response("cancel")
-        .close_response("cancel")
-        .build();
-    alert.add_response("cancel", "Cancel");
-    alert.add_response("delete", "Delete");
-    alert.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-    alert.connect_response(Some("delete"), move |_, _| gone());
-    alert.present(Some(parent));
+    ask_delete(
+        state,
+        parent,
+        &name,
+        "dial",
+        uses,
+        move |e| e.delete_library_dial_keep_uses(id),
+        move |e| e.delete_library_dial(id),
+    );
 }
 
 pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
@@ -638,7 +727,7 @@ pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
         let own = own.and_then(|o| if s == 0 { o.left.as_ref() } else { o.right.as_ref() });
         let shown = p.small_at(e.page(), s);
         // Only when unpinning would show something else.
-        let covered = pinned && own.is_some() && own != shown.as_ref();
+        let covered = own.filter(|o| pinned && Some(*o) != shown.as_ref()).cloned();
         (shown, pinned, covered)
     };
     let sub = if pinned {
@@ -675,10 +764,9 @@ pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
     if let Some(list) = buttons(ctx, rows) {
         page.append(&list);
     }
-    if covered {
-        page.append(&note(
-            "This page has its own button here, hidden by the pin. Unpin to use it.",
-        ));
+    if let Some(own) = covered {
+        let name = format!("{side} Button");
+        page.append(&hidden_by_pin("button", None, &name, &[("Press", Some(&own))]));
     }
     view
 }
@@ -743,22 +831,17 @@ mod tests {
         assert_eq!(usage_line(u(2, false)), "Used on 2 pages");
         assert_eq!(usage_line(u(0, true)), "Pinned");
         assert_eq!(usage_line(u(1, true)), "Used on 1 page · Pinned");
-        assert_eq!(delete_body(u(0, false)), None);
+        assert_eq!(delete_question(0, "key"), None);
         assert_eq!(
-            delete_body(u(0, true)).as_deref(),
-            Some("It's pinned. The pin will be removed.")
+            delete_question(1, "key"),
+            Some((
+                "1 key uses it. Keep that key as it is, or delete it too?".into(),
+                "Delete the Key".into()
+            ))
         );
         assert_eq!(
-            delete_body(u(1, false)).as_deref(),
-            Some("It's used on 1 page. That dial will be empty.")
-        );
-        assert_eq!(
-            delete_body(u(1, true)).as_deref(),
-            Some("It's used on 1 page and pinned. That dial will be empty and the pin removed.")
-        );
-        assert_eq!(
-            delete_body(u(3, true)).as_deref(),
-            Some("It's used on 3 pages and pinned. Those dials will be empty and the pin removed.")
+            delete_question(4, "dial").map(|q| q.1).as_deref(),
+            Some("Delete All 4 Dials")
         );
     }
 

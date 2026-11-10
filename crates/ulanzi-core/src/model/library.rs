@@ -177,6 +177,17 @@ impl Profile {
         }
     }
 
+    /// How many keys use library key `id`: every linked key on every page, a pin counted once.
+    pub fn key_uses(&self, id: Uuid) -> usize {
+        let linked = |k: &&Key| k.library == Some(id);
+        self.pinned.keys.values().filter(linked).count()
+            + self
+                .pages
+                .iter()
+                .map(|p| p.keys.values().filter(linked).count())
+                .sum::<usize>()
+    }
+
     pub fn library_dial(&self, id: Uuid) -> Option<&LibraryDial> {
         self.dial_library.iter().find(|d| d.id == id)
     }
@@ -241,6 +252,17 @@ impl Profile {
             pages: self.pages.iter().filter(|p| p.dials.iter().any(linked)).count(),
             pinned: self.pinned.dials.values().any(linked),
         }
+    }
+
+    /// How many dials use library dial `id`, a pin counted once.
+    pub fn dial_uses(&self, id: Uuid) -> usize {
+        let linked = |d: &&Dial| d.library == Some(id);
+        self.pinned.dials.values().filter(linked).count()
+            + self
+                .pages
+                .iter()
+                .map(|p| p.dials.iter().filter(linked).count())
+                .sum::<usize>()
     }
 
     /// Make every linked dial an own copy of its library dial and empty the library.

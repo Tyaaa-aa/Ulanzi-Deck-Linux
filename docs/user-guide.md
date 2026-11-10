@@ -78,9 +78,12 @@ Keys join the same opt-in library as dials (see [Library tray](#library-tray)).
 - **Pin to Every Page** shows the key at its position on every page, folders included. Each page keeps
   its own key underneath, and **Unpin** shows it again; a page that had no key there is empty again.
   A pinned key has a pin badge, and editing it changes the pin. **Clear Key** is not offered on a
-  pinned key: unpin it instead. Adding keys skips pinned positions, and swapping a pinned key moves
-  its pin, with every page's own keys swapping underneath.
-- When this page has its own, different key under a pin, the editor says so under the buttons.
+  pinned key, and Delete says to unpin it first. Adding keys skips pinned positions, and swapping a
+  pinned key moves its pin, with every page's own keys swapping underneath.
+- Select several keys and right-click one of them to pin or unpin them all at once.
+- When this page has its own, different key under a pin, the editor shows it under **Hidden by the
+  Pin**, with its picture and what it does. It can't be edited until you unpin.
+- Switching pages keeps the selected key or dial, so the editor shows what the new page has there.
 - Copy and paste keep a link within the profile; pasting into another profile makes an own copy.
   Pasting onto a pinned position replaces the pin, which stays pinned.
 
@@ -292,21 +295,25 @@ The library is opt-in, like macros. A dial belongs to its page until you add it 
   keeps its own dial underneath, and **Unpin** shows it again, so a page that had no dial there is
   empty again. A pin that no page has a copy of (one edited while pinned, or a profile-wide dial from
   an earlier version) stays on the page you unpin on, so it is not lost. A pinned dial has a pin badge. When this page has its own dial under
-  the pin, the inspector says so under its buttons; unpin to use it. A dial can be both linked and pinned.
-- **Remove from This Page** clears the dial. Delete does the same on a selected dial, except one that is
-  pinned.
+  the pin, the inspector shows it under **Hidden by the Pin**; unpin to use it. A dial can be both linked and pinned.
+- **Remove from This Page** clears the dial. Delete does the same on a selected dial; on a pinned one it
+  says to unpin it first.
 
 ### Library tray
 
 The **Library** button in the header, next to Macros, opens the tray under the deck. **Keys** and
 **Dials** switch between the two libraries; it opens on Dials when a dial is selected, else on Keys.
-Each tile shows the item's name and where it is used (pinned, a number of pages, or not placed).
+A D200, which has no dials, has the key library only. Each tile shows the item's name and where it is
+used (pinned, a number of pages, or not placed). Each tab has its own short tour, shown the first time
+you open it and again from **?**.
 
+- Select a library key to edit it in the full key editor, with its name: every key that uses it
+  changes. **New Key**, the last tile, creates a blank library key and opens it there.
 - Drag a library key onto a key on the deck to place it as a linked key, or drag a key from the deck
-  into the tray to add it. Select a library key to rename or delete it; to change its look or action,
-  edit any key that uses it. **Add a Key**, the last tile, says how keys are added. Right-click a
-  library key for **Copy**, **Paste** and **Delete from Library**; drag keys onto each other to
-  reorder them.
+  into the tray to add it. Right-click a library key for **Copy**, **Paste** and **Delete from
+  Library**; drag keys onto each other to reorder them.
+- Deleting a library key or dial that is in use asks what happens to the keys or dials using it (the
+  count is shown): keep them as their own copies, or delete them too.
 
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.

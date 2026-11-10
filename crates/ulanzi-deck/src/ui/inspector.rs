@@ -11,7 +11,7 @@ use adw::prelude::*;
 use gtk::glib;
 use ulanzi_core::Color;
 use ulanzi_core::catalog;
-use ulanzi_core::edit::{Editor, Field, Mixed, Slot};
+use ulanzi_core::edit::{Editor, Field, LIBRARY_KEY, Mixed, Slot};
 use ulanzi_core::model::*;
 
 use crate::state::{Change, State};
@@ -356,9 +356,11 @@ fn fill(ctx: &C, content: &gtk::Box) -> bool {
     let view = match slots.as_slice() {
         [] => {
             // A library key picked in the Library tray.
+            // Edited in full, like a key on the deck: every key using it follows.
             if let Some(id) = picked_library_key(&ctx.state) {
-                let view = crate::ui::key_library::library_view(ctx, content, id);
-                add_sections(content, &[Section::Press], view);
+                ctx.state.editor.borrow_mut().edit_library_key(Some(id));
+                let view = key_view(ctx, content, LIBRARY_KEY);
+                add_sections(content, &sections(&[Slot::Key(LIBRARY_KEY)], &screen), view);
                 return true;
             }
             // A library dial picked in the Library tray.
@@ -551,17 +553,32 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
     let mut view = View::default();
     let header = gtk::Box::builder().spacing(16).build();
     header.append(&key_preview(ctx, k));
-    let subtitle = {
+    let library = k == LIBRARY_KEY;
+    let (title, subtitle) = {
         let e = state.editor.borrow();
         let info = e.key_info(k);
         let usage = info.library.map(|id| e.profile().key_usage(id));
-        crate::ui::key_library::key_subtitle(&page_name(state), &info, usage)
+        match info
+            .library
+            .and_then(|id| e.profile().library_key(id))
+            .filter(|_| library)
+        {
+            Some(lib) => (lib.name.clone(), crate::ui::key_library::library_subtitle(usage)),
+            None => (
+                format!("Key {}", k + 1),
+                crate::ui::key_library::key_subtitle(&page_name(state), &info, usage),
+            ),
+        }
     };
-    let titles = title_block(&format!("Key {}", k + 1), &subtitle);
+    let titles = title_block(&title, &subtitle);
     titles.set_valign(gtk::Align::Center);
     header.append(&titles);
     content.append(&padded(header));
-    if let Some(row) = crate::ui::key_library::library_row(ctx, k) {
+    if library {
+        if let Some(name) = crate::ui::key_library::name_entry(ctx, &titles) {
+            content.append(&padded(name));
+        }
+    } else if let Some(row) = crate::ui::key_library::library_row(ctx, k) {
         content.append(&padded(row));
     }
 
@@ -666,7 +683,9 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
     }
     // Clears the look and both actions, so it sits under every section. A pinned key has Unpin
     // instead (Clear leaves pins alone).
-    if !state.editor.borrow().key_info(k).pinned {
+    if library {
+        view.footer = crate::ui::key_library::delete_button(state);
+    } else if !state.editor.borrow().key_info(k).pinned {
         view.footer = Some(clear.upcast());
     }
     view

@@ -361,7 +361,9 @@ pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, start: Option<&str>) 
     {
         // Opens over this dialog.
         let state = state.clone();
-        tour.connect_clicked(move |b| crate::ui::library_guide::open(&state, b));
+        tour.connect_clicked(move |b| {
+            crate::ui::library_guide::open(&state, b, crate::ui::library_guide::Kind::Keys)
+        });
     }
     done.append(&tour);
     done.append(

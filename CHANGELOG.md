@@ -11,14 +11,24 @@ and the project uses [Semantic Versioning](https://semver.org).
   Library** makes a key shared by every page that uses it, **Make a Copy** gives a page its own copy
   again. Drag library keys onto the deck to place them, drag deck keys into the tray to add them, drag
   tiles to reorder, right-click for Copy, Paste and Delete. Library keys have their own name.
-- **Pin to Every Page** for keys, folders included; **Unpin** shows each page's own key again.
+- Library keys are edited in the full key editor from the tray; edits reach every key that uses them.
+  **New Key** in the tray makes a blank library key and opens it there.
+- **Pin to Every Page** for keys, folders included; **Unpin** shows each page's own key again. Pin or
+  unpin several selected keys at once from the right-click menu.
 - Keys show link and pin badges; the key menu and editor offer the library and pin actions.
+- A Library tour for keys, shown the first time the Keys tab opens and from **?** on that tab.
+- Deleting a library key or dial in use offers to keep the keys or dials using it as their own copies,
+  with how many there are.
+- Under a pin, the editor shows the page's own key, dial or small button (**Hidden by the Pin**).
 
 ### Changed
 
 - Profiles that use the key library or pinned keys need Ulanzi Deck 2.6 or newer.
 - The note that a pin hides this page's own dial or small button shows only when that item differs
   from the pin.
+- Switching pages keeps the selected key or dial.
+- Delete on a pinned key or dial says to unpin it first.
+- A D200 profile has no Dials tab in the Library tray.
 
 ## [2.5.0] - 2026-11-10
 

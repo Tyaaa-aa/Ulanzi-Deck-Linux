@@ -252,6 +252,25 @@ impl Editor {
 
     /// Delete library dial `id`; the page dials linked to it become blank, and a pin linked to it
     /// is removed so each page shows its own dial again.
+    /// Take library dial `id` out of the library but keep every dial that uses it, each as its own
+    /// copy, a pin too.
+    pub fn delete_library_dial_keep_uses(&mut self, id: Uuid) {
+        let Some(lib) = self.profile.library_dial(id).map(|l| l.dial.clone()) else {
+            return;
+        };
+        self.edit(|p, _| {
+            p.dial_library.retain(|l| l.id != id);
+            let dials = p
+                .pinned
+                .dials
+                .values_mut()
+                .chain(p.pages.iter_mut().flat_map(|pg| pg.dials.iter_mut()));
+            for d in dials.filter(|d| d.library == Some(id)) {
+                *d = lib.clone();
+            }
+        });
+    }
+
     pub fn delete_library_dial(&mut self, id: Uuid) {
         self.edit(|p, _| {
             p.dial_library.retain(|l| l.id != id);

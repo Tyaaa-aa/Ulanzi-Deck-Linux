@@ -347,10 +347,16 @@ fn main() -> glib::ExitCode {
                     }
                     WidgetExt::activate_action(&window, "win.library-tray", None).ok();
                 }
-                Some(o) if o.starts_with("library-guide") => {
-                    // `library-guide:<n>` opens it at step n (1-based).
+                Some(o) if o.starts_with("library-guide") || o.starts_with("key-library-guide") => {
+                    // `library-guide:<n>` (dials) or `key-library-guide:<n>` opens it at step n
+                    // (1-based).
                     let n: usize = o.split_once(':').and_then(|(_, n)| n.parse().ok()).unwrap_or(1);
-                    ui::library_guide::open_at(&state2, &window, n.saturating_sub(1));
+                    let kind = if o.starts_with("key") {
+                        ui::library_guide::Kind::Keys
+                    } else {
+                        ui::library_guide::Kind::Dials
+                    };
+                    ui::library_guide::open_at(&state2, &window, kind, n.saturating_sub(1));
                 }
                 Some(o) if o.starts_with("dial-menu") => {
                     // The right-click menu of dial N (1-based, default 1).

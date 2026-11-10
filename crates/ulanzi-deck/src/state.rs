@@ -372,9 +372,10 @@ impl AppState {
         }
     }
 
+    /// Show `page`. The selection stays on the same keys and dials, so the editor shows what
+    /// that page has there.
     pub fn set_page(&self, page: usize) {
         self.editor.borrow_mut().set_page(page);
-        self.selection.borrow_mut().clear();
         self.notify(Change::Page);
         self.notify(Change::Selection);
     }

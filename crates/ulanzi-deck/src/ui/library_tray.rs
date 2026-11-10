@@ -29,8 +29,7 @@ const ANIM_MS: u32 = 250;
 const HINT: &str = "Drag a dial onto the deck to place it, or a dial from the deck down here to add it. \
 Click one to edit it, right-click to copy, paste or delete it. Click ? for the tour.";
 const KEY_HINT: &str = "Drag a key onto the deck to place it, or a key from the deck down here to add it. \
-Edit a library key on any key that uses it; right-click one to copy, paste or delete it.";
-const ADD_KEY: &str = "Drag a key from the deck here, or right-click a key and choose Add to Library.";
+Click one to edit it, right-click to copy, paste or delete it. Click ? for the tour.";
 
 /// How many pages the tray has, and how many rows the shown page needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +57,14 @@ pub enum Tab {
 }
 
 impl Tab {
+    /// The first-time guide about this tab's library.
+    pub fn guide(self) -> crate::ui::library_guide::Kind {
+        match self {
+            Tab::Keys => crate::ui::library_guide::Kind::Keys,
+            Tab::Dials => crate::ui::library_guide::Kind::Dials,
+        }
+    }
+
     fn index(self) -> usize {
         match self {
             Tab::Keys => 0,
@@ -123,6 +130,8 @@ pub struct Tray {
     /// The tab shown, its switch, and the page each tab was on.
     tab: Cell<Tab>,
     tabs: [gtk::ToggleButton; 2],
+    /// The Keys | Dials switch; hidden on a deck without dials.
+    switch: gtk::Box,
     tab_pages: Cell<[usize; 2]>,
     help: gtk::Button,
     /// Sits under the page in the same area, so it eases in and out with the height.
@@ -170,11 +179,7 @@ impl Tray {
             .label("Dials")
             .group(&keys_tab)
             .build();
-        let switch = gtk::Box::builder()
-            .css_classes(["linked", "tray-tabs"])
-            .hexpand(true)
-            .halign(gtk::Align::Start)
-            .build();
+        let switch = gtk::Box::builder().css_classes(["linked", "tray-tabs"]).build();
         switch.append(&keys_tab);
         switch.append(&dials_tab);
         // The hint shows only on hovering ?.
@@ -193,6 +198,8 @@ impl Tray {
             .build();
         let header = gtk::Box::builder().spacing(6).margin_bottom(6).build();
         header.append(&switch);
+        // Keeps ? and close at the end with the switch hidden.
+        header.append(&gtk::Box::builder().hexpand(true).build());
         header.append(&help);
         header.append(&shut);
         let sizer = gtk::Box::builder().hexpand(true).build();
@@ -256,6 +263,7 @@ impl Tray {
             drawn: RefCell::default(),
             tab: Cell::new(Tab::Keys),
             tabs: [keys_tab, dials_tab],
+            switch,
             tab_pages: Cell::new([0, 0]),
             help,
             pager,
@@ -302,12 +310,15 @@ impl Tray {
 
     /// Show `tab`, on the page it was on.
     pub fn set_tab(&self, tab: Tab) {
-        let was = self.tab.replace(tab);
+        // A D200 has no dials, so it has no dial library to show.
+        let tab = if self.with_dials() { tab } else { Tab::Keys };
+        self.switch.set_visible(self.with_dials());
         if !self.tabs[tab.index()].is_active() {
             // Comes back here through the toggle.
             self.tabs[tab.index()].set_active(true);
             return;
         }
+        let was = self.tab.replace(tab);
         if was == tab && !self.grids.borrow().is_empty() {
             return;
         }
@@ -319,12 +330,22 @@ impl Tray {
             Tab::Keys => KEY_HINT,
             Tab::Dials => HINT,
         }));
+        // The other tab's tiles go, even when both tabs list nothing.
         self.drawn.borrow_mut().clear();
+        self.items.borrow_mut().clear();
+        for g in self.grids.take() {
+            self.pages.remove_overlay(&g);
+        }
         if self.open.get() {
             self.refresh();
+            self.first_guide(200);
         } else {
             self.stale.set(true);
         }
+    }
+
+    fn with_dials(&self) -> bool {
+        self.state.model() == ulanzi_core::model::Model::D200X
     }
 
     /// The items the shown tab lists.
@@ -343,6 +364,11 @@ impl Tray {
 
     pub fn is_open(&self) -> bool {
         self.open.get()
+    }
+
+    /// The tab shown.
+    pub fn tab(&self) -> Tab {
+        self.tab.get()
     }
 
     /// Called with the new state whenever the tray opens or closes.
@@ -366,24 +392,28 @@ impl Tray {
         self.run_grow(1.0);
         self.toggled(true);
         // The first time, the guide follows once the tray has grown.
-        if crate::ui::library_guide::should_show() {
-            crate::ui::library_guide::mark_shown();
-            let (state, stage, me) = (
-                self.state.clone(),
-                self.stage.downgrade(),
-                self.me.borrow().clone(),
-            );
-            glib::timeout_add_local_once(
-                std::time::Duration::from_millis(ANIM_MS as u64 + 100),
-                move || {
-                    // Not over a tray that was shut meanwhile.
-                    let still_open = me.upgrade().is_some_and(|t| t.is_open());
-                    if let Some(stage) = stage.upgrade().filter(|_| still_open) {
-                        crate::ui::library_guide::open(&state, &stage);
-                    }
-                },
-            );
+        self.first_guide(ANIM_MS as u64 + 100);
+    }
+
+    /// Open the shown tab's guide after `delay_ms`, the first time only.
+    fn first_guide(&self, delay_ms: u64) {
+        let kind = self.tab.get().guide();
+        if !crate::ui::library_guide::should_show(kind) {
+            return;
         }
+        crate::ui::library_guide::mark_shown(kind);
+        let (state, stage, me) = (
+            self.state.clone(),
+            self.stage.downgrade(),
+            self.me.borrow().clone(),
+        );
+        glib::timeout_add_local_once(std::time::Duration::from_millis(delay_ms), move || {
+            // Not over a tray that was shut meanwhile.
+            let still_open = me.upgrade().is_some_and(|t| t.is_open());
+            if let Some(stage) = stage.upgrade().filter(|_| still_open) {
+                crate::ui::library_guide::open(&state, &stage, kind);
+            }
+        });
     }
 
     pub fn close(&self) {
@@ -530,6 +560,10 @@ impl Tray {
             let Some(t) = me.upgrade() else { return };
             match c {
                 Change::Profile | Change::Plugins => {
+                    if !t.with_dials() && t.tab.get() == Tab::Dials {
+                        t.set_tab(Tab::Keys);
+                    }
+                    t.switch.set_visible(t.with_dials());
                     if t.open.get() {
                         t.refresh();
                     } else {
@@ -1046,8 +1080,7 @@ impl Tray {
         button
     }
 
-    /// The last tile on the Keys tab: says how keys get into the library (they are made on the
-    /// deck, where a key is edited).
+    /// The last tile on the Keys tab: a blank library key, opened in the key editor.
     fn add_key_item(&self) -> gtk::Button {
         let plus = gtk::Image::builder()
             .icon_name("list-add-symbolic")
@@ -1056,10 +1089,17 @@ impl Tray {
         let disc = self.disc(&plus);
         disc.add_css_class("new");
         disc.add_css_class("tray-key");
-        let (button, _, _) = self.item(&canvas::with_room(&disc, 6, 4, 2), "Add a Key");
-        button.set_tooltip_text(Some(ADD_KEY));
-        let state = self.state.clone();
-        button.connect_clicked(move |_| crate::ui::toast(&state, ADD_KEY));
+        let (button, _, _) = self.item(&canvas::with_room(&disc, 6, 4, 2), "New Key");
+        let me = self.me.borrow().clone();
+        button.connect_clicked(move |_| {
+            let Some(t) = me.upgrade() else { return };
+            let mut id = None;
+            t.state.edit(|e| id = Some(e.new_library_key()));
+            let Some(id) = id else { return };
+            let items = t.state.editor.borrow().profile().key_library.len();
+            t.go(items.saturating_sub(1) / PER_PAGE);
+            t.state.select_library(id);
+        });
         button
     }
 
@@ -1130,6 +1170,43 @@ fn eased(w: &impl IsA<gtk::Widget>, target: &impl IsA<adw::AnimationTarget>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tray_with(model: ulanzi_core::model::Model) -> (crate::state::State, Rc<Tray>) {
+        let state = crate::state::AppState::new(ulanzi_core::model::Profile::new_default("T", model));
+        crate::ui::library_guide::hold_back();
+        let canvas = canvas::build(&state);
+        (state, canvas.tray.clone())
+    }
+
+    #[test]
+    fn tabs_switch_back_and_forth_with_empty_libraries() {
+        crate::ui::with_gtk(|| {
+            let (state, t) = tray_with(ulanzi_core::model::Model::D200X);
+            t.open(Tab::Keys);
+            state.edit(|e| {
+                e.new_library_dial();
+            });
+            t.tabs[1].set_active(true);
+            assert_eq!(t.tab(), Tab::Dials);
+            assert_eq!(t.items.borrow().len(), 1);
+            // Back to Keys, whose library is empty: its own tiles show again.
+            t.tabs[0].set_active(true);
+            assert_eq!(t.tab(), Tab::Keys);
+            assert!(t.items.borrow().is_empty(), "no dial tiles left on the Keys tab");
+            t.tabs[1].set_active(true);
+            assert_eq!(t.items.borrow().len(), 1, "the dial is back");
+        });
+    }
+
+    #[test]
+    fn a_d200_has_no_dials_tab() {
+        crate::ui::with_gtk(|| {
+            let (_, t) = tray_with(ulanzi_core::model::Model::D200);
+            t.open(Tab::Dials);
+            assert_eq!(t.tab(), Tab::Keys);
+            assert!(!t.switch.is_visible());
+        });
+    }
 
     #[test]
     fn tile_menu_greys_out_paste_without_a_copy() {

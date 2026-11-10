@@ -399,12 +399,12 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
             );
         });
         window.add_action(&place);
-        // The tray's ? button replays the first-time guide.
+        // The tray's ? button replays the guide for the tab it shows.
         let guide = gio::SimpleAction::new("library-guide", None);
-        let (st, win) = (state.clone(), window.downgrade());
+        let (st, win, tray) = (state.clone(), window.downgrade(), canvas.tray.clone());
         guide.connect_activate(move |_, _| {
             if let Some(w) = win.upgrade() {
-                crate::ui::library_guide::open(&st, &w);
+                crate::ui::library_guide::open(&st, &w, tray.tab().guide());
             }
         });
         window.add_action(&guide);
@@ -580,14 +580,32 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
     action(
         "clear",
         Box::new(move || {
+            // As the menu: a pin has nothing of this page's to clear, so say how it goes.
             if let Some(n) = selected_dial(&s) {
-                // As the menu: a pinned spot has nothing of this page's to remove.
-                if !s.editor.borrow().dial_info(n).pinned {
+                if s.editor.borrow().dial_info(n).pinned {
+                    crate::ui::toast(&s, "This dial is pinned. Unpin it first.");
+                } else {
                     s.edit(|e| e.remove_dial(n));
                 }
                 return;
             }
             let keys = s.selection.borrow().keys();
+            let pinned = {
+                let e = s.editor.borrow();
+                keys.iter().filter(|k| e.key_info(**k).pinned).count()
+            };
+            if pinned > 0 {
+                crate::ui::toast(
+                    &s,
+                    if pinned == 1 && keys.len() == 1 {
+                        "This key is pinned. Unpin it first."
+                    } else if pinned == 1 {
+                        "One of these keys is pinned and stays. Unpin it first."
+                    } else {
+                        "Pinned keys stay. Unpin them first."
+                    },
+                );
+            }
             s.edit(|e| e.clear(&keys));
         }),
     );

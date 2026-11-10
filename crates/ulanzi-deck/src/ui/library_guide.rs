@@ -1,6 +1,7 @@
-//! The Library's first-time guide: three short steps in the onboarding style, each with a looping
-//! illustration drawn with Cairo (like How It Works). Shown the first time the tray opens, and again
-//! from the tray's ? button or the end of onboarding.
+//! The Library's first-time guides, one for keys and one for dials: three short steps in the
+//! onboarding style, each with a looping illustration drawn with Cairo (like How It Works). Each is
+//! shown the first time the tray opens on its tab, and again from the tray's ? button or the end of
+//! onboarding.
 
 use std::cell::Cell;
 use std::f64::consts::PI;
@@ -14,7 +15,30 @@ use gtk::{cairo, glib};
 use crate::state::State;
 use crate::ui::how_it_works::{BLUE, GREEN, ORANGE, cursor, phase, rounded};
 
-/// Each step's title and sentence.
+/// Which library a guide is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Keys,
+    Dials,
+}
+
+/// Each step's title and sentence, for keys.
+pub const KEY_STEPS: [(&str, &str); 3] = [
+    (
+        "Drag Keys onto the Deck",
+        "Drag a key from the library onto the deck to use it on this page, or drag a deck key down here to save it.",
+    ),
+    (
+        "Swap and Pin",
+        "Drag keys on the deck to swap them. Pin a key to keep it on every page.",
+    ),
+    (
+        "Copy and Paste",
+        "Right-click a key to copy it, then paste it onto another key or page.",
+    ),
+];
+
+/// Each step's title and sentence, for dials.
 pub const STEPS: [(&str, &str); 3] = [
     (
         "Drag Dials onto the Deck",
@@ -30,6 +54,13 @@ pub const STEPS: [(&str, &str); 3] = [
     ),
 ];
 
+fn steps(kind: Kind) -> &'static [(&'static str, &'static str); 3] {
+    match kind {
+        Kind::Keys => &KEY_STEPS,
+        Kind::Dials => &STEPS,
+    }
+}
+
 /// Each illustration's loop length, in seconds.
 const PERIODS: [f64; 3] = [4.6, 5.0, 6.0];
 const W: f64 = 440.0;
@@ -44,29 +75,32 @@ pub fn hold_back() {
     HELD_BACK.store(true, Ordering::Relaxed);
 }
 
-fn marker_in(state_home: &Path) -> PathBuf {
-    state_home.join("ulanzi-deck").join("library-guide-shown")
+fn marker_in(state_home: &Path, kind: Kind) -> PathBuf {
+    state_home.join("ulanzi-deck").join(match kind {
+        Kind::Keys => "key-library-guide-shown",
+        Kind::Dials => "library-guide-shown",
+    })
 }
 
-fn should_show_in(state_home: &Path) -> bool {
-    !marker_in(state_home).exists()
+fn should_show_in(state_home: &Path, kind: Kind) -> bool {
+    !marker_in(state_home, kind).exists()
 }
 
-fn mark_shown_in(state_home: &Path) {
-    let m = marker_in(state_home);
+fn mark_shown_in(state_home: &Path, kind: Kind) {
+    let m = marker_in(state_home, kind);
     let _ = m.parent().map(std::fs::create_dir_all);
     let _ = std::fs::write(m, b"1\n");
 }
 
-/// True until the guide has been shown once.
-pub fn should_show() -> bool {
+/// True until the `kind` guide has been shown once.
+pub fn should_show(kind: Kind) -> bool {
     !HELD_BACK.load(Ordering::Relaxed)
-        && crate::ui::onboarding::state_home().is_some_and(|d| should_show_in(&d))
+        && crate::ui::onboarding::state_home().is_some_and(|d| should_show_in(&d, kind))
 }
 
-pub fn mark_shown() {
+pub fn mark_shown(kind: Kind) {
     if let Some(d) = crate::ui::onboarding::state_home() {
-        mark_shown_in(&d);
+        mark_shown_in(&d, kind);
     }
 }
 
@@ -80,19 +114,20 @@ pub fn showing() -> Option<adw::Dialog> {
     SHOWING.with(|s| s.borrow().upgrade())
 }
 
-/// Open the guide over `parent` at its first step.
-pub fn open(state: &State, parent: &impl IsA<gtk::Widget>) {
-    open_at(state, parent, 0);
+/// Open the `kind` guide over `parent` at its first step.
+pub fn open(state: &State, parent: &impl IsA<gtk::Widget>, kind: Kind) {
+    open_at(state, parent, kind, 0);
 }
 
-/// Open the guide at step `step` (0-based; screenshots).
-pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
+/// Open the `kind` guide at step `step` (0-based; screenshots).
+pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, kind: Kind, step: usize) {
     if showing().is_some() {
         return;
     }
     if !HELD_BACK.load(Ordering::Relaxed) {
-        mark_shown();
+        mark_shown(kind);
     }
+    let steps = steps(kind);
     let dialog = adw::Dialog::builder()
         .title("Library Tour")
         .content_width(480)
@@ -106,8 +141,8 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
         .build();
     let current = Rc::new(Cell::new(0usize));
     let mut starts = Vec::new();
-    for (i, (title, sentence)) in STEPS.iter().enumerate() {
-        let (area, start) = illustration(i, current.clone());
+    for (i, (title, sentence)) in steps.iter().enumerate() {
+        let (area, start) = illustration(i, kind, current.clone());
         starts.push(start);
         let page = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -142,7 +177,7 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
         .valign(gtk::Align::Center)
         .css_classes(["guide-dots"])
         .build();
-    let dot_list: Vec<gtk::Box> = (0..STEPS.len())
+    let dot_list: Vec<gtk::Box> = (0..steps.len())
         .map(|_| {
             let d = gtk::Box::builder()
                 .css_classes(["page-dot"])
@@ -192,7 +227,7 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
                     d.remove_css_class("current");
                 }
             }
-            let last = i + 1 == STEPS.len();
+            let last = i + 1 == steps.len();
             next.set_label(if last { "Done" } else { "Next" });
             // Fades out instead of leaving a gap.
             if last {
@@ -208,7 +243,7 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
     {
         let current = current.clone();
         carousel.connect_position_notify(move |c| {
-            let i = (c.position().round().max(0.0) as usize).min(STEPS.len() - 1);
+            let i = (c.position().round().max(0.0) as usize).min(steps.len() - 1);
             if i != current.get() {
                 show_step(i);
             }
@@ -218,7 +253,7 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
         let (carousel, dialog, current) = (carousel.clone(), dialog.clone(), current.clone());
         next.connect_clicked(move |_| {
             let i = current.get();
-            if i + 1 < STEPS.len() {
+            if i + 1 < steps.len() {
                 carousel.scroll_to(&carousel.nth_page(i as u32 + 1), true);
             } else {
                 dialog.close();
@@ -232,7 +267,7 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
         });
     }
     dialog.present(Some(parent));
-    let step = step.min(STEPS.len() - 1);
+    let step = step.min(steps.len() - 1);
     if step > 0 {
         // Once the carousel has its size.
         glib::idle_add_local_once(move || carousel.scroll_to(&carousel.nth_page(step as u32), false));
@@ -240,7 +275,7 @@ pub fn open_at(_state: &State, parent: &impl IsA<gtk::Widget>, step: usize) {
 }
 
 /// Step `i`'s looping drawing; the loop restarts when its start is cleared.
-fn illustration(i: usize, current: Rc<Cell<usize>>) -> (gtk::DrawingArea, Rc<Cell<Option<i64>>>) {
+fn illustration(i: usize, kind: Kind, current: Rc<Cell<usize>>) -> (gtk::DrawingArea, Rc<Cell<Option<i64>>>) {
     let area = gtk::DrawingArea::builder()
         .content_width(W as i32)
         .content_height(H as i32)
@@ -257,7 +292,7 @@ fn illustration(i: usize, current: Rc<Cell<usize>>) -> (gtk::DrawingArea, Rc<Cel
             let k = (w as f64 / W).min(h as f64 / H);
             cr.translate((w as f64 - W * k) / 2.0, (h as f64 - H * k) / 2.0);
             cr.scale(k, k);
-            draw(cr, i, now.get(), fg);
+            draw(cr, kind, i, now.get(), fg);
         });
     }
     {
@@ -431,25 +466,60 @@ fn dial(cr: &cairo::Context, g: Glyph, cx: f64, cy: f64, r: f64, lift: f64) {
     glyph(cr, g, cx, cy, r);
 }
 
-/// An empty dial spot, outlined with dashes.
-fn spot(cr: &cairo::Context, cx: f64, cy: f64, r: f64, a: f64) {
+/// A key: a dark rounded square with its glyph; `lift` adds a shadow as if picked up.
+fn key(cr: &cairo::Context, g: Glyph, cx: f64, cy: f64, r: f64, lift: f64) {
+    if lift > 0.0 {
+        rounded(cr, cx - r + 2.0, cy - r + 5.0 * lift, 2.0 * r, 2.0 * r, r * 0.3);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.3 * lift);
+        let _ = cr.fill();
+    }
+    rounded(cr, cx - r, cy - r, 2.0 * r, 2.0 * r, r * 0.3);
+    let grad = cairo::LinearGradient::new(0.0, cy - r, 0.0, cy + r);
+    grad.add_color_stop_rgb(0.0, 0.13, 0.13, 0.145);
+    grad.add_color_stop_rgb(1.0, 0.05, 0.05, 0.055);
+    let _ = cr.set_source(&grad);
+    let _ = cr.fill_preserve();
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.12);
+    cr.set_line_width(1.2);
+    let _ = cr.stroke();
+    glyph(cr, g, cx, cy, r);
+}
+
+/// A dial or a key, as the guide is about.
+fn item(cr: &cairo::Context, kind: Kind, g: Glyph, cx: f64, cy: f64, r: f64, lift: f64) {
+    match kind {
+        Kind::Dials => dial(cr, g, cx, cy, r, lift),
+        Kind::Keys => key(cr, g, cx, cy, r * 0.9, lift),
+    }
+}
+
+/// The outline of a dial (a circle) or a key (a rounded square) of radius `r`.
+fn outline(cr: &cairo::Context, kind: Kind, cx: f64, cy: f64, r: f64) {
+    match kind {
+        Kind::Dials => cr.arc(cx, cy, r, 0.0, 2.0 * PI),
+        Kind::Keys => rounded(cr, cx - r * 0.9, cy - r * 0.9, 1.8 * r, 1.8 * r, r * 0.3),
+    }
+}
+
+/// An empty dial or key spot, outlined with dashes.
+fn spot(cr: &cairo::Context, kind: Kind, cx: f64, cy: f64, r: f64, a: f64) {
     if a <= 0.0 {
         return;
     }
     cr.set_dash(&[4.0, 4.0], 0.0);
     cr.set_line_width(2.0);
-    cr.arc(cx, cy, r, 0.0, 2.0 * PI);
+    outline(cr, kind, cx, cy, r);
     rgba(cr, BLUE, a);
     let _ = cr.stroke();
     cr.set_dash(&[], 0.0);
 }
 
-fn ring(cr: &cairo::Context, cx: f64, cy: f64, r: f64, a: f64) {
+fn ring(cr: &cairo::Context, kind: Kind, cx: f64, cy: f64, r: f64, a: f64) {
     if a <= 0.0 {
         return;
     }
     cr.set_line_width(2.5);
-    cr.arc(cx, cy, r, 0.0, 2.0 * PI);
+    outline(cr, kind, cx, cy, r);
     rgba(cr, BLUE, a);
     let _ = cr.stroke();
 }
@@ -458,21 +528,21 @@ fn pointer(cr: &cairo::Context, at: (f64, f64), a: f64, fg: (f64, f64, f64)) {
     faded(cr, a, || cursor(cr, at.0, at.1, fg));
 }
 
-fn draw(cr: &cairo::Context, step: usize, t: f64, fg: (f64, f64, f64)) {
+fn draw(cr: &cairo::Context, kind: Kind, step: usize, t: f64, fg: (f64, f64, f64)) {
     match step {
-        0 => draw_drag(cr, t, fg),
-        1 => draw_swap(cr, t, fg),
-        _ => draw_copy(cr, t, fg),
+        0 => draw_drag(cr, kind, t, fg),
+        1 => draw_swap(cr, kind, t, fg),
+        _ => draw_copy(cr, kind, t, fg),
     }
 }
 
 /// Step 1: a library dial moves onto an empty dial spot on the deck.
-fn draw_drag(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
+fn draw_drag(cr: &cairo::Context, kind: Kind, t: f64, fg: (f64, f64, f64)) {
     deck_panel(cr, 40.0, 10.0, 360.0, 96.0, "Deck");
     let deck_y = 62.0;
     let target = (290.0, deck_y);
-    dial(cr, Glyph::Volume, 150.0, deck_y, 22.0, 0.0);
-    dial(cr, Glyph::Play, 220.0, deck_y, 22.0, 0.0);
+    item(cr, kind, Glyph::Volume, 150.0, deck_y, 22.0, 0.0);
+    item(cr, kind, Glyph::Play, 220.0, deck_y, 22.0, 0.0);
 
     // The library under the deck.
     let (lx, ly, lw, lh) = (40.0, 118.0, 360.0, 92.0);
@@ -496,12 +566,19 @@ fn draw_drag(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
     {
         let x = 124.0 + i as f64 * 64.0;
         let a = if i == 2 { lib_a } else { 1.0 };
-        faded(cr, a, || dial(cr, *g, x, lib_y, 18.0, 0.0));
+        faded(cr, a, || item(cr, kind, *g, x, lib_y, 18.0, 0.0));
     }
 
     // The empty spot brightens as the dial nears, then the dial covers it.
     let glow = carry * (1.0 - phase(t, 1.85, 2.1));
-    spot(cr, target.0, target.1, 24.0, (0.5 + 0.5 * glow) * (1.0 - filled));
+    spot(
+        cr,
+        kind,
+        target.0,
+        target.1,
+        24.0,
+        (0.5 + 0.5 * glow) * (1.0 - filled),
+    );
 
     // A gentle arc from the library up to the spot.
     let ctrl = (340.0, 120.0);
@@ -511,7 +588,9 @@ fn draw_drag(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
     );
     if t >= 0.6 {
         let r = lerp(18.0, 22.0, carry) * (1.0 + 0.1 * lift);
-        faded(cr, 1.0 - gone, || dial(cr, Glyph::Bars, at.0, at.1, r, lift));
+        faded(cr, 1.0 - gone, || {
+            item(cr, kind, Glyph::Bars, at.0, at.1, r, lift)
+        });
     }
 
     let rest = (384.0, 196.0);
@@ -542,7 +621,7 @@ fn pin(cr: &cairo::Context, cx: f64, cy: f64) {
 }
 
 /// Step 2: two dials swap places, then a pin drops onto a third.
-fn draw_swap(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
+fn draw_swap(cr: &cairo::Context, kind: Kind, t: f64, fg: (f64, f64, f64)) {
     deck_panel(cr, 40.0, 24.0, 360.0, 168.0, "Deck");
     let y = 100.0;
     let (a0, b0, c) = (130.0, 200.0, 320.0);
@@ -556,14 +635,15 @@ fn draw_swap(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
     let bx = lerp(b0, a0, s);
     ring(
         cr,
+        kind,
         b0,
         y,
         r + 4.0,
         phase(t, 0.75, 0.95) * (1.0 - phase(t, 1.6, 1.85)),
     );
-    dial(cr, Glyph::Volume, bx, y, r, 0.0);
-    dial(cr, Glyph::Sun, c, y, r, 0.0);
-    dial(cr, Glyph::Play, ax, ay, r * (1.0 + 0.08 * lift), lift);
+    item(cr, kind, Glyph::Volume, bx, y, r, 0.0);
+    item(cr, kind, Glyph::Sun, c, y, r, 0.0);
+    item(cr, kind, Glyph::Play, ax, ay, r * (1.0 + 0.08 * lift), lift);
 
     // The pin drops onto the third dial.
     let away = phase(t, 4.2, 4.6);
@@ -628,21 +708,22 @@ fn popped(cr: &cairo::Context, x: f64, y: f64, p: f64, hi: [f64; 2]) {
 }
 
 /// Step 3: right-click a dial, Copy, then right-click a spot on another page, Paste.
-fn draw_copy(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
+fn draw_copy(cr: &cairo::Context, kind: Kind, t: f64, fg: (f64, f64, f64)) {
     deck_panel(cr, 20.0, 16.0, 196.0, 104.0, "Page 1");
     deck_panel(cr, 224.0, 72.0, 196.0, 104.0, "Page 2");
     let (y1, y2, r) = (76.0, 132.0, 18.0);
     let src = (118.0, y1);
     let dst = (322.0, y2);
-    dial(cr, Glyph::Volume, 62.0, y1, r, 0.0);
-    dial(cr, Glyph::Play, src.0, src.1, r, 0.0);
-    dial(cr, Glyph::Sun, 174.0, y1, r, 0.0);
-    dial(cr, Glyph::Arrows, 266.0, y2, r, 0.0);
-    dial(cr, Glyph::Search, 378.0, y2, r, 0.0);
+    item(cr, kind, Glyph::Volume, 62.0, y1, r, 0.0);
+    item(cr, kind, Glyph::Play, src.0, src.1, r, 0.0);
+    item(cr, kind, Glyph::Sun, 174.0, y1, r, 0.0);
+    item(cr, kind, Glyph::Arrows, 266.0, y2, r, 0.0);
+    item(cr, kind, Glyph::Search, 378.0, y2, r, 0.0);
 
     // The copied dial stays outlined until it is pasted.
     ring(
         cr,
+        kind,
         src.0,
         src.1,
         r + 4.0,
@@ -652,10 +733,17 @@ fn draw_copy(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
     let gone = phase(t, 5.2, 5.8);
     let pasted = phase(t, 3.6, 3.9) * (1.0 - gone);
     let near = phase(t, 2.2, 2.8) * (1.0 - phase(t, 3.6, 3.9));
-    spot(cr, dst.0, dst.1, r + 2.0, (0.5 + 0.5 * near) * (1.0 - pasted));
+    spot(
+        cr,
+        kind,
+        dst.0,
+        dst.1,
+        r + 2.0,
+        (0.5 + 0.5 * near) * (1.0 - pasted),
+    );
     faded(cr, pasted, || {
         let k = 0.7 + 0.3 * phase(t, 3.6, 3.9);
-        dial(cr, Glyph::Play, dst.0, dst.1, r * k, 0.0);
+        item(cr, kind, Glyph::Play, dst.0, dst.1, r * k, 0.0);
     });
 
     // Copy, then Paste.
@@ -695,7 +783,7 @@ fn draw_copy(cr: &cairo::Context, t: f64, fg: (f64, f64, f64)) {
     // A small copy rides along with the pointer to the other page.
     let carried = phase(t, 1.8, 2.0) * (1.0 - phase(t, 2.8, 3.0));
     faded(cr, 0.75 * carried, || {
-        dial(cr, Glyph::Play, ptr.0 + 18.0, ptr.1 + 20.0, 11.0, 0.0)
+        item(cr, kind, Glyph::Play, ptr.0 + 18.0, ptr.1 + 20.0, 11.0, 0.0)
     });
     pointer(cr, ptr, phase(t, 0.0, 0.3) * (1.0 - phase(t, 4.2, 4.6)), fg);
 }
@@ -711,7 +799,8 @@ mod tests {
             titles,
             ["Drag Dials onto the Deck", "Swap and Pin", "Copy and Paste"]
         );
-        for (_, sentence) in STEPS {
+        assert_eq!(KEY_STEPS[0].0, "Drag Keys onto the Deck");
+        for (_, sentence) in STEPS.iter().chain(&KEY_STEPS) {
             assert!(sentence.ends_with('.'), "{sentence:?}");
         }
     }
@@ -727,9 +816,9 @@ mod tests {
             let win = adw::Window::new();
             win.present();
             assert!(showing().is_none());
-            open(&state, &win);
+            open(&state, &win, Kind::Keys);
             let first = showing().expect("open");
-            open(&state, &win);
+            open(&state, &win, Kind::Dials);
             assert_eq!(showing(), Some(first.clone()));
             first.force_close();
             let main = glib::MainContext::default();
@@ -746,27 +835,30 @@ mod tests {
     fn the_guide_shows_once() {
         // A temporary state directory, never the real one.
         let dir = tempfile::tempdir().expect("temp dir");
-        assert!(should_show_in(dir.path()));
-        mark_shown_in(dir.path());
-        assert!(!should_show_in(dir.path()));
-        assert!(marker_in(dir.path()).ends_with("ulanzi-deck/library-guide-shown"));
+        assert!(should_show_in(dir.path(), Kind::Dials));
+        mark_shown_in(dir.path(), Kind::Dials);
+        assert!(!should_show_in(dir.path(), Kind::Dials));
+        assert!(should_show_in(dir.path(), Kind::Keys), "each guide shows once");
+        assert!(marker_in(dir.path(), Kind::Dials).ends_with("ulanzi-deck/library-guide-shown"));
     }
 
     /// Every loop ends where it starts, so nothing jumps when it wraps.
     #[test]
     fn loops_end_where_they_start() {
-        let render = |step: usize, t: f64| {
+        let render = |kind: Kind, step: usize, t: f64| {
             let surf =
                 cairo::ImageSurface::create(cairo::Format::ARgb32, W as i32, H as i32).expect("surface");
             let cr = cairo::Context::new(&surf).expect("context");
-            draw(&cr, step, t, (1.0, 1.0, 1.0));
+            draw(&cr, kind, step, t, (1.0, 1.0, 1.0));
             drop(cr);
             surf.take_data().expect("data").to_vec()
         };
-        for (step, period) in PERIODS.iter().enumerate() {
-            let (a, b) = (render(step, 0.0), render(step, period - 1e-6));
-            let diff = a.iter().zip(&b).filter(|(x, y)| x.abs_diff(**y) > 8).count();
-            assert!(diff < 40, "step {step}: {diff} bytes differ");
+        for kind in [Kind::Keys, Kind::Dials] {
+            for (step, period) in PERIODS.iter().enumerate() {
+                let (a, b) = (render(kind, step, 0.0), render(kind, step, period - 1e-6));
+                let diff = a.iter().zip(&b).filter(|(x, y)| x.abs_diff(**y) > 8).count();
+                assert!(diff < 40, "{kind:?} step {step}: {diff} bytes differ");
+            }
         }
     }
 
@@ -786,7 +878,7 @@ mod tests {
                 cr.set_source_rgb(0.14, 0.14, 0.15);
                 cr.paint().expect("bg");
                 cr.scale(2.0, 2.0);
-                draw(&cr, step, t, (1.0, 1.0, 1.0));
+                draw(&cr, Kind::Keys, step, t, (1.0, 1.0, 1.0));
                 drop(cr);
                 let (w, h, stride) = (surf.width() as u32, surf.height() as u32, surf.stride() as usize);
                 let data = surf.take_data().expect("data");

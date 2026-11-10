@@ -314,3 +314,73 @@ fn library_keys_copy_paste_move_rename_and_delete() {
     assert!(e.undo());
     assert!(e.profile().library_key(a).is_some());
 }
+
+#[test]
+fn a_library_key_is_edited_in_place_and_every_use_follows() {
+    use ulanzi_core::edit::LIBRARY_KEY;
+    let mut e = two_pages();
+    let id = e.add_key_to_library(0).expect("added");
+    e.set_page(1);
+    e.place_key(4, id);
+    assert_eq!(e.key(LIBRARY_KEY), None, "nothing picked");
+    e.edit_library_key(Some(id));
+    assert_eq!(
+        e.key(LIBRARY_KEY).map(|k| k.look.label.text.as_str()),
+        Some("Mute")
+    );
+    assert_eq!(e.key_info(LIBRARY_KEY).library, Some(id));
+    e.set_field(&[LIBRARY_KEY], Field::LabelText("Quiet".into()));
+    e.set_key_actions(LIBRARY_KEY, Some(Action::PrevPage), None);
+    assert_eq!(label(&e, 0, 0).as_deref(), Some("Quiet"));
+    assert_eq!(label(&e, 1, 4).as_deref(), Some("Quiet"));
+    assert_eq!(
+        e.profile().key_at(1, 4).and_then(|k| k.tap),
+        Some(Action::PrevPage)
+    );
+    assert!(
+        !e.profile().pinned.keys.contains_key(&LIBRARY_KEY),
+        "the stand-in never stays in the profile"
+    );
+    // One step each, undone like any edit.
+    assert!(e.undo());
+    assert!(e.undo());
+    assert_eq!(label(&e, 1, 4).as_deref(), Some("Mute"));
+    // A blank new library key is built the same way.
+    let fresh = e.new_library_key();
+    e.edit_library_key(Some(fresh));
+    e.drop_action(Slot::Key(LIBRARY_KEY), Action::NextPage);
+    assert_eq!(
+        e.profile().library_key(fresh).and_then(|l| l.key.tap.clone()),
+        Some(Action::NextPage)
+    );
+}
+
+#[test]
+fn several_keys_pin_and_unpin_in_one_step() {
+    let mut e = two_pages();
+    e.set_field(&[1], Field::LabelText("B".into()));
+    e.pin_keys(&[0, 1, 5]);
+    assert!(e.key_info(0).pinned && e.key_info(1).pinned);
+    assert!(!e.key_info(5).pinned, "nothing there to pin");
+    assert!(e.undo());
+    assert!(e.profile().pinned.keys.is_empty());
+    e.pin_keys(&[0, 1]);
+    e.unpin_keys(&[0, 1]);
+    assert!(e.profile().pinned.keys.is_empty());
+    assert_eq!(label(&e, 0, 1).as_deref(), Some("B"));
+}
+
+#[test]
+fn deleting_a_library_key_can_keep_its_keys() {
+    let mut e = two_pages();
+    let id = e.add_key_to_library(0).expect("added");
+    e.set_page(1);
+    e.place_key(4, id);
+    e.pin_key(4);
+    e.delete_library_key_keep_uses(id);
+    assert!(e.profile().library_key(id).is_none());
+    let own = &e.profile().pages[0].keys[&0];
+    assert_eq!((own.library, own.look.label.text.as_str()), (None, "Mute"));
+    assert_eq!(e.profile().pinned.keys[&4].library, None);
+    assert_eq!(label(&e, 1, 4).as_deref(), Some("Mute"));
+}

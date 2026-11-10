@@ -14,6 +14,9 @@ use crate::model::*;
 /// Number of undo steps kept.
 pub const HISTORY_LIMIT: usize = 200;
 const KEYS: u8 = 13;
+/// The library key picked with [`Editor::edit_library_key`], edited like a key on the deck: every
+/// key edit given this index changes that library key, and so every key linked to it.
+pub const LIBRARY_KEY: u8 = KEYS;
 const DIALS: u8 = 3;
 
 /// The action in `slot` that can hold a macro: what a press runs.
@@ -66,7 +69,8 @@ fn dial_mut(p: &mut Profile, page: usize, n: u8) -> Option<&mut Dial> {
 /// Where key `n` is set up on `page`: the pin if there is one, else the page's own (made when
 /// missing). A link is not followed.
 fn key_spot(p: &mut Profile, page: usize, n: u8) -> Option<&mut Key> {
-    if n >= KEYS {
+    // The library key stands at LIBRARY_KEY as a pinned link while an edit runs.
+    if n > LIBRARY_KEY || (n == LIBRARY_KEY && !p.pinned.keys.contains_key(&n)) {
         return None;
     }
     if p.pinned.keys.contains_key(&n) {
@@ -209,6 +213,8 @@ pub struct Editor {
     clipboard: Option<Clip>,
     /// Edits since the profile was last sent to the daemon.
     dirty: bool,
+    /// The library key edited at [`LIBRARY_KEY`].
+    library_key: Option<uuid::Uuid>,
     /// Consecutive edits with the same key share one undo step (typing in a field).
     merge: Option<&'static str>,
     last_merge: Option<&'static str>,
@@ -226,6 +232,7 @@ impl Editor {
             merge_next: false,
             clipboard: None,
             dirty: false,
+            library_key: None,
             merge: None,
             last_merge: None,
         }
@@ -284,7 +291,23 @@ impl Editor {
     /// Like [`Editor::edit`], for a change to the profile and the macro library as one step.
     fn edit_with_library(&mut self, f: impl FnOnce(&mut Profile, &mut MacroLibrary, usize)) {
         let (profile, library) = (self.profile.clone(), self.library.clone());
+        // Only for the edit: a pinned link at LIBRARY_KEY sends key edits there to the library key.
+        let target = self
+            .library_key
+            .filter(|id| self.profile.library_key(*id).is_some());
+        if let Some(id) = target {
+            self.profile.pinned.keys.insert(
+                LIBRARY_KEY,
+                Key {
+                    library: Some(id),
+                    ..Key::default()
+                },
+            );
+        }
         f(&mut self.profile, &mut self.library, self.page);
+        if target.is_some() || self.profile.pinned.keys.contains_key(&LIBRARY_KEY) {
+            self.profile.pinned.keys.remove(&LIBRARY_KEY);
+        }
         let same_library = self.library == library;
         if self.profile == profile && same_library {
             return;
@@ -460,6 +483,12 @@ impl Editor {
 
     /// Key `index` as it works on the current page: the pin, else the page's own, a link followed.
     pub fn key(&self, index: u8) -> Option<&Key> {
+        if index == LIBRARY_KEY {
+            return self
+                .library_key
+                .and_then(|id| self.profile.library_key(id))
+                .map(|l| &l.key);
+        }
         self.profile.key_ref(self.page, index)
     }
 
@@ -492,7 +521,7 @@ impl Editor {
     /// Set one appearance field on every key in `keys` (one undo step).
     pub fn set_field(&mut self, keys: &[u8], field: Field) {
         self.edit(|p, page| {
-            for &i in keys.iter().filter(|i| **i < KEYS) {
+            for &i in keys.iter().filter(|i| **i <= LIBRARY_KEY) {
                 if !taken(p, page, Slot::Key(i))
                     && let Some(key) = key_mut(p, page, i)
                 {
@@ -680,7 +709,7 @@ impl Editor {
             return;
         };
         self.edit(|p, page| {
-            for &i in keys.iter().filter(|i| **i < KEYS) {
+            for &i in keys.iter().filter(|i| **i <= LIBRARY_KEY) {
                 if !taken(p, page, Slot::Key(i))
                     && let Some(key) = key_mut(p, page, i)
                 {

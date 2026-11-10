@@ -1429,8 +1429,16 @@ pub fn build(state: &State) -> Canvas {
             if !state.selection.borrow().contains(slot) {
                 state.select(|s| s.click(slot));
             }
-            let info = state.editor.borrow().key_info(n as u8);
-            pop.set_menu_model(Some(&key_menu(&info)));
+            let (info, many) = {
+                let e = state.editor.borrow();
+                let keys = menu_keys(&state, n as u8);
+                let all_pinned = keys.iter().all(|k| e.key_info(*k).pinned);
+                (
+                    e.key_info(n as u8),
+                    (keys.len() > 1).then_some((keys.len(), all_pinned)),
+                )
+            };
+            pop.set_menu_model(Some(&key_menu(&info, many)));
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             pop.popup();
         });
@@ -1774,9 +1782,28 @@ pub(crate) fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     }
 }
 
+/// The keys a right-click on key `n` acts on: the selection when it holds `n` and other keys
+/// with something on them, else `n`.
+fn menu_keys(state: &State, n: u8) -> Vec<u8> {
+    let e = state.editor.borrow();
+    let keys: Vec<u8> = state
+        .selection
+        .borrow()
+        .keys()
+        .into_iter()
+        .filter(|k| e.key_info(*k).key.is_some())
+        .collect();
+    if keys.len() > 1 && keys.contains(&n) {
+        keys
+    } else {
+        vec![n]
+    }
+}
+
 /// The right-click menu of a key: copy, paste and clear, with their shortcuts shown; Add to
-/// Library or Make a Copy, and Pin or Unpin, for the key right-clicked.
-fn key_menu(info: &ulanzi_core::model::KeyInfo) -> gio::Menu {
+/// Library or Make a Copy, and Pin or Unpin, for the key right-clicked. With `many` (how many
+/// keys are selected, and whether all of them are pinned) Pin and Unpin act on all of them.
+fn key_menu(info: &ulanzi_core::model::KeyInfo, many: Option<(usize, bool)>) -> gio::Menu {
     // The shortcuts aren't application accelerators (see key_routing), so name them here.
     let item = |section: &gio::Menu, label: &str, action: &str| {
         let it = gio::MenuItem::new(Some(label), Some(&format!("win.{action}")));
@@ -1790,7 +1817,18 @@ fn key_menu(info: &ulanzi_core::model::KeyInfo) -> gio::Menu {
     item(&keys_section, "Copy Key", "copy");
     item(&keys_section, "Paste Key", "paste");
     m.append_section(None, &keys_section);
-    if info.key.is_some() || info.library.is_some() {
+    if let Some((count, all_pinned)) = many {
+        let lib = gio::Menu::new();
+        if all_pinned {
+            lib.append(Some(&format!("Unpin {count} Keys")), Some("keylib.unpin"));
+        } else {
+            lib.append(
+                Some(&format!("Pin {count} Keys to Every Page")),
+                Some("keylib.pin"),
+            );
+        }
+        m.append_section(None, &lib);
+    } else if info.key.is_some() || info.library.is_some() {
         let lib = gio::Menu::new();
         if info.library.is_some() {
             lib.append(Some("Make a Copy"), Some("keylib.own-copy"));
@@ -1832,8 +1870,14 @@ fn key_library_actions(state: &State, n: u8) -> gio::SimpleActionGroup {
         })
     });
     add("own-copy", |s, n| s.edit(|e| e.own_copy_key(n)));
-    add("pin", |s, n| s.edit(|e| e.pin_key(n)));
-    add("unpin", |s, n| s.edit(|e| e.unpin_key(n)));
+    add("pin", |s, n| {
+        let keys = menu_keys(s, n);
+        s.edit(|e| e.pin_keys(&keys))
+    });
+    add("unpin", |s, n| {
+        let keys = menu_keys(s, n);
+        s.edit(|e| e.unpin_keys(&keys))
+    });
     group
 }
 
@@ -2049,8 +2093,9 @@ mod tests {
             pinned,
             library,
         };
-        crate::ui::assert_menu_labels(&key_menu(&info(false, None)));
-        crate::ui::assert_menu_labels(&key_menu(&info(true, Some(uuid::Uuid::nil()))));
+        crate::ui::assert_menu_labels(&key_menu(&info(false, None), None));
+        crate::ui::assert_menu_labels(&key_menu(&info(false, None), Some((3, false))));
+        crate::ui::assert_menu_labels(&key_menu(&info(true, Some(uuid::Uuid::nil())), None));
     }
 
     #[test]
@@ -2060,7 +2105,7 @@ mod tests {
             pinned: false,
             library: None,
         };
-        let l = labels(&key_menu(&own));
+        let l = labels(&key_menu(&own, None));
         assert!(l.contains(&"Add to Library".into()) && l.contains(&"Pin to Every Page".into()));
         assert!(l.contains(&"Clear Key".into()));
         let pinned_link = ulanzi_core::model::KeyInfo {
@@ -2068,11 +2113,14 @@ mod tests {
             library: Some(uuid::Uuid::nil()),
             ..own.clone()
         };
-        let l = labels(&key_menu(&pinned_link));
+        let l = labels(&key_menu(&pinned_link, None));
         assert!(l.contains(&"Make a Copy".into()) && l.contains(&"Unpin".into()));
         assert!(!l.contains(&"Clear Key".into()), "Unpin removes a pin");
         let empty = ulanzi_core::model::KeyInfo { key: None, ..own };
-        assert!(!labels(&key_menu(&empty)).contains(&"Pin to Every Page".into()));
+        assert!(!labels(&key_menu(&empty, None)).contains(&"Pin to Every Page".into()));
+        let l = labels(&key_menu(&own, Some((3, false))));
+        assert!(l.contains(&"Pin 3 Keys to Every Page".into()) && !l.contains(&"Add to Library".into()));
+        assert!(labels(&key_menu(&own, Some((2, true)))).contains(&"Unpin 2 Keys".into()));
     }
 
     #[test]
