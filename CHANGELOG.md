@@ -5,30 +5,37 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-10
+
 ### Added
 
-- A banner asks for a restart when the window and the service run different versions, or a package
-  update replaced the app while it was open. **Restart** restarts both.
-- **Dial library**, opt-in like macros: **Add to Library** makes a dial shared by every page that uses
-  it, **Edit for This Page Only** takes a page's own copy, and the **Library** button in the header opens
-  a tray of library dials with paging and **New Dial**. A first-time guide explains it (**?** in the
-  tray, **Take the Library Tour** in Set Up Deck).
-- **Pinned dials and small buttons**: **Pin to Every Page** shows a dial or small button at its position on
-  every page, **Unpin** shows the page's own again (the page you unpin on keeps the pinned one if it has
-  none). Deleting a library dial removes a pin that used it.
-- A pinned dial or small button's inspector says when the page has its own one hidden under the pin.
-- Drag a dial onto another to swap them; right-click menu, Ctrl+C, Ctrl+V and Delete for dials; dial
-  names; link and pin badges.
-- Turning a dial lights its ring and sweeps an arc in the direction of the turn.
+- **Dial library**, opt-in like macros. **Add to Library** makes a dial shared by every page that uses
+  it (a link badge shows it); editing it changes every page. **Make a Copy** turns a linked dial back
+  into the page's own copy, named "<name> (copy)".
+- **Library tray**: the **Library** button in the header opens a tray of library dials under the deck,
+  with paging, **New Dial**, a close button and a hint on **?**. Drag a library dial onto a deck dial to
+  place it, drag a deck dial out of the dial row into the tray to add it, and drag library dials onto
+  each other to reorder them. Right-click a library dial for Copy, Paste and Delete from Library. A
+  first-time guide explains it (**?** in the tray, **Take the Library Tour** in Set Up Deck).
+- **Pinned dials and small buttons**: **Pin to Every Page** shows one at its position on every page;
+  **Unpin** shows each page's own again. Deleting a library dial removes a pin that used it. The
+  inspector says when a page has its own dial or button hidden under a pin.
+- Drag a dial onto another to swap them (one Undo step); right-click menu, Ctrl+C, Ctrl+V and Delete
+  for dials; dial names; tooltips on the link and pin badges.
+- An empty dial's inspector lists library dials to place, with **New Dial** and **Open Library**.
+- Turning a dial sweeps an arc in the direction of the turn on the drawn deck; a press lights its ring.
 - Small buttons are drawn with their action's icon and name.
 - **Include Library** when exporting and **Also Import Its Library** when importing a profile with a
   dial library.
+- A banner asks for a restart when the window and the service run different versions, or a package
+  update replaced the app while it was open. **Restart** restarts both.
 
 ### Changed
 
-- Old profile-wide dials load as pinned dials. Once, on the first start of 2.5 and after a backup, a dial
-  that is the same on every page of a profile is pinned, and each page keeps its copy underneath; profiles
-  imported from files made before 2.5 get the same. New pages start without dials.
+- Old profile-wide dials load as pinned dials. Once, on the first start of 2.5 and after a backup
+  (**Preferences → Backups → before-pinning-dials**), a dial that is the same on every page of a profile
+  is pinned, and each page keeps its copy underneath; profiles imported from files made before 2.5 get
+  the same. New pages start without dials.
 - Small buttons now belong to each page. Existing small buttons load as pinned.
 - Profiles that use the library or pins need Ulanzi Deck 2.5 or newer.
 - A pinned dial or a page's small button from a newer version is kept as written, like a key, instead

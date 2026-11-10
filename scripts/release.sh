@@ -107,9 +107,17 @@ fi
 step 8 "Checksums" "sha256sum"
 (cd "$dist" && sha256sum -- *.tar.gz *.deb *.rpm *.pkg.tar.zst *.AppImage 2>/dev/null >SHA256SUMS || true)
 # Signed with the release key, which stays on this computer and is never given to CI. The app
-# checks this signature before it installs an update. Asks for the key's password.
-if [ -f "$HOME/.minisign/ulanzi-deck-release.key" ]; then
-  minisign -S -s "$HOME/.minisign/ulanzi-deck-release.key" -m "$dist/SHA256SUMS" -t "file:SHA256SUMS"
+# checks this signature before it installs an update. The key's password comes from the desktop
+# keyring when it is stored there, else minisign asks for it. To store it once:
+#   secret-tool store --label="Ulanzi Deck release key" service ulanzi-deck-release-key
+key=$HOME/.minisign/ulanzi-deck-release.key
+if [ -f "$key" ]; then
+  if pw=$(secret-tool lookup service ulanzi-deck-release-key 2>/dev/null) && [ -n "$pw" ]; then
+    printf '%s\n' "$pw" | minisign -S -s "$key" -m "$dist/SHA256SUMS" -t "file:SHA256SUMS"
+    unset pw
+  else
+    minisign -S -s "$key" -m "$dist/SHA256SUMS" -t "file:SHA256SUMS"
+  fi
 else
   echo "WARNING: no release key, so SHA256SUMS is unsigned and scripts/publish.sh will refuse it."
 fi

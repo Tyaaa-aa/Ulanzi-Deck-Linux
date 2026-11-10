@@ -49,6 +49,12 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.5.0" date="2026-11-10">
+      <description>
+        <p>Dial library: dials shared across pages, a Library tray under the deck, pinned dials and
+        small buttons, and drag to swap dials. Keys follow in the next release.</p>
+      </description>
+    </release>
     <release version="2.4.0" date="2026-11-09">
       <description>
         <p>Switch Output keys can show a different image, colour and label for each output and set its
