@@ -53,7 +53,9 @@ pub(super) fn library_row(ctx: &C, k: u8) -> Option<gtk::Box> {
         let e = ctx.state.editor.borrow();
         let p = e.profile();
         let info = e.key_info(k);
-        let covered = info.pinned && p.pages.get(e.page()).is_some_and(|pg| pg.keys.contains_key(&k));
+        // Only when unpinning would show something else.
+        let own = p.pages.get(e.page()).and_then(|pg| pg.keys.get(&k));
+        let covered = own.is_some() && own != p.pinned.keys.get(&k);
         (info, covered)
     };
     let buttons = library_buttons(&info);

@@ -664,8 +664,11 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
         let ctx = ctx.clone();
         clear.connect_clicked(move |_| ctx.commit(How::Structure, |e| e.clear(&[k])));
     }
-    // Clears the look and both actions, so it sits under every section.
-    view.footer = Some(clear.upcast());
+    // Clears the look and both actions, so it sits under every section. A pinned key has Unpin
+    // instead (Clear leaves pins alone).
+    if !state.editor.borrow().key_info(k).pinned {
+        view.footer = Some(clear.upcast());
+    }
     view
 }
 

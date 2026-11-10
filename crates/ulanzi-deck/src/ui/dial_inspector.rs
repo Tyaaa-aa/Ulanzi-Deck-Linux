@@ -263,7 +263,8 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         let info = e.dial_info(d);
         let usage = info.library.map(|id| e.profile().dial_usage(id));
         let own = e.profile().pages.get(e.page()).map(|p| &p.dials[d as usize]);
-        let covered = info.pinned && own.is_some_and(|o| !o.is_empty());
+        // Only when unpinning would show something else.
+        let covered = own.is_some_and(|o| !o.is_empty() && Some(o) != e.profile().pinned.dials.get(&d));
         (info, usage, e.profile().dial_library.is_empty(), covered)
     };
     // A pin covers the page's dials even when blank: it keeps its Unpin.
@@ -635,7 +636,10 @@ pub(super) fn small_view(ctx: &C, content: &gtk::Box, s: u8) -> View {
         let pinned = p.small_pinned(s);
         let own = p.pages.get(e.page()).map(|pg| &pg.small_buttons);
         let own = own.and_then(|o| if s == 0 { o.left.as_ref() } else { o.right.as_ref() });
-        (p.small_at(e.page(), s), pinned, pinned && own.is_some())
+        let shown = p.small_at(e.page(), s);
+        // Only when unpinning would show something else.
+        let covered = pinned && own.is_some() && own != shown.as_ref();
+        (shown, pinned, covered)
     };
     let sub = if pinned {
         "Pinned to every page".to_string()
