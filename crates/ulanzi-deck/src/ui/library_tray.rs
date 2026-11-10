@@ -262,6 +262,7 @@ impl Tray {
             return;
         }
         self.state.tray_open.set(true);
+        self.state.notify(Change::Tray);
         if self.stale.get() {
             self.refresh();
         }
@@ -296,6 +297,7 @@ impl Tray {
             return;
         }
         self.state.tray_open.set(false);
+        self.state.notify(Change::Tray);
         self.dial_row.set_marked(None);
         self.run_grow(0.0);
         self.toggled(false);

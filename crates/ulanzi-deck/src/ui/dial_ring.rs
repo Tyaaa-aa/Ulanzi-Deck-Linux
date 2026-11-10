@@ -32,7 +32,7 @@ pub fn glow_alpha(t: f64) -> f64 {
 /// Where the arc starts: the top of the dial.
 const TOP: f64 = -PI / 2.0;
 /// How opaque the arc is at its start; it fades to nothing at its moving end.
-const ARC_ALPHA: f64 = 0.55;
+const ARC_ALPHA: f64 = 0.9;
 
 /// The direction arc at `t` as (start, end) angles in radians (Cairo's: clockwise from 3 o'clock),
 /// growing from the top of the dial the way it turned; `None` for a press.

@@ -8,7 +8,7 @@ use ulanzi_core::edit::{Editor, Slot};
 use ulanzi_core::model::*;
 use uuid::Uuid;
 
-use crate::state::State;
+use crate::state::{Change, State};
 use crate::ui::action_editor::{self, How};
 use crate::ui::inspector::{
     C, Section, View, Write, padded, page_name, slot_expander, slot_rows, title_block,
@@ -223,8 +223,9 @@ fn buttons(ctx: &C, rows: Vec<Button>) -> Option<gtk::ListBox> {
     Some(list)
 }
 
-/// The Open Library button: the tray opens with dial `n` outlined as the drop spot.
-fn open_library_button(n: u8) -> gtk::Button {
+/// The Open Library button: the tray opens with dial `n` outlined as the drop spot. Shown only
+/// while the tray is shut.
+fn open_library_button(state: &State, n: u8) -> gtk::Button {
     let b = gtk::Button::builder()
         .child(
             &adw::ButtonContent::builder()
@@ -235,6 +236,15 @@ fn open_library_button(n: u8) -> gtk::Button {
         .build();
     b.connect_clicked(move |b| {
         let _ = b.activate_action("win.library-place", Some(&n.to_variant()));
+    });
+    b.set_visible(!state.tray_open.get());
+    let (weak, st) = (b.downgrade(), state.clone());
+    state.on_while(move |c| {
+        let Some(b) = weak.upgrade() else { return false };
+        if c == Change::Tray {
+            b.set_visible(!st.tray_open.get());
+        }
+        true
     });
     b
 }
@@ -262,7 +272,7 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         header(
             &format!("Dial {}", d + 1),
             &format!("{} · Empty on this page", page_name(state)),
-            Some(open_library_button(d)),
+            Some(open_library_button(state, d)),
         )
     } else if info.library.is_none() && info.dial.name.trim().is_empty() {
         // The title already says "Dial N": name the page instead.
@@ -365,7 +375,7 @@ fn empty_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
     let (head, _) = header(
         &format!("Dial {}", d + 1),
         &format!("{} · Empty on this page", page_name(state)),
-        Some(open_library_button(d)),
+        Some(open_library_button(state, d)),
     );
     content.append(&padded(head));
 

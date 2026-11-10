@@ -35,6 +35,8 @@ pub enum Change {
     Preview,
     /// Dragging an action from the library started or ended.
     Drag,
+    /// The Library tray opened or closed.
+    Tray,
     /// The plugin list, a plugin's status or the manifests changed.
     Plugins,
     /// A key on the deck moved to another live state or cycle step.
