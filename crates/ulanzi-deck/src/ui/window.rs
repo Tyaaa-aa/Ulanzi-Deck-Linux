@@ -347,14 +347,29 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
     {
         // The Library tray under the deck; the header button shows whether it is open.
         let a = gio::SimpleAction::new_stateful("library-tray", None, &false.to_variant());
-        let tray = canvas.tray.clone();
+        let (tray, st) = (canvas.tray.clone(), state.clone());
         a.connect_change_state(move |a, v| {
             let Some(open) = v.and_then(|v| v.get::<bool>()) else {
                 return;
             };
             a.set_state(&open.to_variant());
             if open {
-                tray.open(crate::ui::library_tray::Tab::Dials);
+                // With a dial or a dial's library item picked: Dials, else Keys.
+                let dial = {
+                    let picked = *st.selected_library.borrow();
+                    let e = st.editor.borrow();
+                    st.selection
+                        .borrow()
+                        .slots()
+                        .first()
+                        .is_some_and(|s| matches!(s, Slot::Dial(_)))
+                        || picked.is_some_and(|id| e.profile().library_dial(id).is_some())
+                };
+                tray.open(if dial {
+                    crate::ui::library_tray::Tab::Dials
+                } else {
+                    crate::ui::library_tray::Tab::Keys
+                });
             } else {
                 tray.close();
             }

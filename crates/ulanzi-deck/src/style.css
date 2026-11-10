@@ -420,6 +420,29 @@ row.drop-target {
   outline-color: @accent_bg_color;
 }
 
+.tray-dial.tray-key {
+  border-radius: 12px;
+  background-image: none;
+  background-color: black;
+}
+
+.tray-dial.tray-key > image {
+  -gtk-icon-size: 56px;
+}
+
+.library-tray.compact .tray-dial.tray-key > image {
+  -gtk-icon-size: 44px;
+}
+
+.tray-dial.tray-key.new {
+  background-color: transparent;
+}
+
+.tray-tabs > button {
+  padding: 2px 14px;
+  min-height: 26px;
+}
+
 .tray-dial.drop-target {
   outline-color: alpha(@accent_bg_color, 0.7);
   outline-style: dashed;

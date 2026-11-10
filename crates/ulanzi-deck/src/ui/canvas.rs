@@ -68,6 +68,8 @@ pub enum Payload {
     File(std::path::PathBuf),
     /// A dial from the Library tray.
     LibraryDial(uuid::Uuid),
+    /// A key from the Library tray.
+    LibraryKey(uuid::Uuid),
     /// Dial `n` of the deck, dragged out of its row (into the Library tray).
     DeckDial(u8),
 }
@@ -78,6 +80,10 @@ pub fn action_payload(a: &ulanzi_core::model::Action) -> String {
 
 pub fn library_dial_payload(id: uuid::Uuid) -> String {
     format!("ulanzi-library-dial:{id}")
+}
+
+pub fn library_key_payload(id: uuid::Uuid) -> String {
+    format!("ulanzi-library-key:{id}")
 }
 
 pub fn deck_dial_payload(n: u8) -> String {
@@ -94,6 +100,9 @@ pub fn parse_payload(s: &str) -> Option<Payload> {
     if let Some(id) = s.strip_prefix("ulanzi-library-dial:") {
         return id.parse().ok().map(Payload::LibraryDial);
     }
+    if let Some(id) = s.strip_prefix("ulanzi-library-key:") {
+        return id.parse().ok().map(Payload::LibraryKey);
+    }
     let json = s.strip_prefix("ulanzi-action:")?;
     serde_json::from_str(json).ok().map(Payload::Action)
 }
@@ -101,9 +110,11 @@ pub fn parse_payload(s: &str) -> Option<Payload> {
 /// Accept dragged keys and actions on `w`; `on_drop` gets the payload and the drop x position.
 /// A deck dial carried out of its row is taken only where `takes_dial` says so for it; anywhere
 /// else it is not outlined, so nothing promises a drop that does nothing.
+/// A library item from the tray is taken only where `kind` is its kind.
 fn accept_drops(
     w: &gtk::Button,
     state: &State,
+    kind: Option<crate::state::LibraryKind>,
     takes_dial: impl Fn(u8) -> bool + 'static,
     on_drop: impl Fn(Payload, f64) + 'static,
 ) {
@@ -112,7 +123,9 @@ fn accept_drops(
     {
         let (w, state) = (w.clone(), state.clone());
         target.connect_enter(move |t, _, _| {
-            if state.carried_dial.get().is_some_and(|from| !takes_dial(from)) {
+            if state.carried_dial.get().is_some_and(|from| !takes_dial(from))
+                || state.library_drag.get().is_some_and(|k| Some(k) != kind)
+            {
                 return gdk::DragAction::empty();
             }
             w.add_css_class("drop-target");
@@ -1146,10 +1159,16 @@ pub fn build(state: &State) -> Canvas {
         accept_drops(
             &k.button,
             &state.clone(),
+            Some(crate::state::LibraryKind::Key),
             |_| false,
             move |p, _| match p {
                 Payload::Key(from) if from != n => {
                     state.edit(|e| e.swap(from, n));
+                    state.select(|s| s.click(Slot::Key(n)));
+                }
+                // From the Library tray: link it here.
+                Payload::LibraryKey(id) => {
+                    state.edit(|e| e.place_key(n, id));
                     state.select(|s| s.click(Slot::Key(n)));
                 }
                 Payload::Key(_) | Payload::LibraryDial(_) | Payload::DeckDial(_) => {}
@@ -1176,6 +1195,7 @@ pub fn build(state: &State) -> Canvas {
         accept_drops(
             &screen.0.button,
             &state.clone(),
+            None,
             |_| false,
             move |p, _| {
                 if let Payload::Action(a) = p {
@@ -1190,6 +1210,7 @@ pub fn build(state: &State) -> Canvas {
         accept_drops(
             b,
             &state.clone(),
+            None,
             |_| false,
             move |p, _| {
                 if let Payload::Action(a) = p {
@@ -1240,34 +1261,40 @@ pub fn build(state: &State) -> Canvas {
         };
         let state = state.clone();
         let (dial, row) = (d.clone(), dial_row.downgrade());
-        accept_drops(d, &state.clone(), takes, move |p, x| match p {
-            Payload::Action(a) => {
-                let zone = hit_zone(dial.width() as f64, x);
-                state.edit(|e| {
-                    e.set_dial(n as u8, |d| match zone {
-                        DialZone::Left => d.left = Some(a),
-                        DialZone::Right => d.right = Some(a),
-                        DialZone::Press => d.press = Some(a),
-                    })
-                });
-                state.select(|s| s.click(Slot::Dial(n as u8)));
-            }
-            // From the Library tray: link it here.
-            Payload::LibraryDial(id) => {
-                state.edit(|e| e.place_dial(n as u8, id));
-                state.select(|s| s.click(Slot::Dial(n as u8)));
-                // Placed: Open Library's outline has done its job.
-                if let Some(row) = row.upgrade() {
-                    row.set_marked(None);
+        accept_drops(
+            d,
+            &state.clone(),
+            Some(crate::state::LibraryKind::Dial),
+            takes,
+            move |p, x| match p {
+                Payload::Action(a) => {
+                    let zone = hit_zone(dial.width() as f64, x);
+                    state.edit(|e| {
+                        e.set_dial(n as u8, |d| match zone {
+                            DialZone::Left => d.left = Some(a),
+                            DialZone::Right => d.right = Some(a),
+                            DialZone::Press => d.press = Some(a),
+                        })
+                    });
+                    state.select(|s| s.click(Slot::Dial(n as u8)));
                 }
-            }
-            // Carried out of the row and brought back onto another dial: swap.
-            Payload::DeckDial(from) if from != n as u8 => {
-                state.edit(|e| e.swap_dials(from, n as u8));
-                state.select(|s| s.click(Slot::Dial(n as u8)));
-            }
-            _ => {}
-        });
+                // From the Library tray: link it here.
+                Payload::LibraryDial(id) => {
+                    state.edit(|e| e.place_dial(n as u8, id));
+                    state.select(|s| s.click(Slot::Dial(n as u8)));
+                    // Placed: Open Library's outline has done its job.
+                    if let Some(row) = row.upgrade() {
+                        row.set_marked(None);
+                    }
+                }
+                // Carried out of the row and brought back onto another dial: swap.
+                Payload::DeckDial(from) if from != n as u8 => {
+                    state.edit(|e| e.swap_dials(from, n as u8));
+                    state.select(|s| s.click(Slot::Dial(n as u8)));
+                }
+                _ => {}
+            },
+        );
     }
 
     // Drag a dial onto another: that one slides into its place, then they swap (one undo step).
@@ -2092,6 +2119,11 @@ mod tests {
     fn drag_payloads_roundtrip() {
         assert_eq!(parse_payload("ulanzi-key:7"), Some(Payload::Key(7)));
         assert_eq!(parse_payload(&deck_dial_payload(2)), Some(Payload::DeckDial(2)));
+        let id = uuid::Uuid::new_v4();
+        assert_eq!(
+            parse_payload(&library_key_payload(id)),
+            Some(Payload::LibraryKey(id))
+        );
         let a = ulanzi_core::model::Action::NextPage;
         assert_eq!(parse_payload(&action_payload(&a)), Some(Payload::Action(a)));
         assert_eq!(parse_payload("hello"), None);

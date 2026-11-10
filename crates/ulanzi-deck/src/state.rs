@@ -122,10 +122,19 @@ pub struct AppState {
     pub tray_open: Cell<bool>,
     /// The deck dial being carried out of its row (to the tray or back onto another dial).
     pub carried_dial: Cell<Option<u8>>,
+    /// What kind of library item is being dragged from the tray, so only its kind lights up.
+    pub library_drag: Cell<Option<LibraryKind>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
 pub type State = Rc<AppState>;
+
+/// A library's kind: keys or dials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryKind {
+    Key,
+    Dial,
+}
 
 /// An item row waiting for its picker's answer (see [`AppState::item_labels`]).
 pub type LabelWaiter = Box<dyn FnOnce(&[ulanzi_core::plugin::PickItem])>;
@@ -179,6 +188,7 @@ impl AppState {
             tray_page: Cell::new(0),
             tray_open: Cell::new(false),
             carried_dial: Cell::new(None),
+            library_drag: Cell::new(None),
             listeners: RefCell::new(Vec::new()),
         })
     }

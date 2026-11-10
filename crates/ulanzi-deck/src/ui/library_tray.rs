@@ -1,16 +1,16 @@
-//! The Library tray under the deck: library dials to drag onto the deck or click to edit. Opening
-//! it grows the tray at the bottom and slides the deck up only as far as needed, never past its
-//! dial row.
+//! The Library tray under the deck: library keys and dials (one tab each) to drag onto the deck or
+//! click to pick. Opening it grows the tray at the bottom and slides the deck up only as far as
+//! needed, never past its dial row.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use ulanzi_core::model::{LibraryDial, Usage};
+use ulanzi_core::model::{LibraryDial, LibraryKey, Usage};
 use uuid::Uuid;
 
-use crate::state::{Change, State};
+use crate::state::{Change, LibraryKind, State};
 use crate::ui::canvas;
 use crate::ui::dial_swap::DialRow;
 
@@ -28,6 +28,9 @@ const ANIM_MS: u32 = 250;
 
 const HINT: &str = "Drag a dial onto the deck to place it, or a dial from the deck down here to add it. \
 Click one to edit it, right-click to copy, paste or delete it. Click ? for the tour.";
+const KEY_HINT: &str = "Drag a key onto the deck to place it, or a key from the deck down here to add it. \
+Edit a library key on any key that uses it; right-click one to copy, paste or delete it.";
+const ADD_KEY: &str = "Drag a key from the deck here, or right-click a key and choose Add to Library.";
 
 /// How many pages the tray has, and how many rows the shown page needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,21 +50,49 @@ pub fn layout(items: usize, page: usize) -> Layout {
     }
 }
 
-/// The tray's tabs (phase 2 adds Keys).
+/// The tray's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    Keys,
     Dials,
+}
+
+impl Tab {
+    fn index(self) -> usize {
+        match self {
+            Tab::Keys => 0,
+            Tab::Dials => 1,
+        }
+    }
+}
+
+/// One library item as a tile shows it.
+#[derive(Debug, Clone, PartialEq)]
+enum Entry {
+    Dial(LibraryDial),
+    Key(LibraryKey),
+}
+
+impl Entry {
+    fn id(&self) -> Uuid {
+        match self {
+            Entry::Dial(d) => d.id,
+            Entry::Key(k) => k.id,
+        }
+    }
 }
 
 type OnToggle = Box<dyn Fn(bool)>;
 /// What a library dial's menu item does, given the dial's tile.
 type TileAction = Box<dyn Fn(&State, &gtk::Button)>;
 
-/// A library dial's tile, kept so edits update it in place.
+/// A library item's tile, kept so edits update it in place.
 struct Item {
     id: Uuid,
     disc: gtk::Box,
-    face: canvas::DialFace,
+    /// A dial's face, or a key's picture.
+    face: Option<canvas::DialFace>,
+    picture: Option<gtk::Image>,
     name: gtk::Label,
     usage: gtk::Label,
     pin: gtk::Image,
@@ -88,7 +119,12 @@ pub struct Tray {
     grids: RefCell<Vec<gtk::Grid>>,
     items: RefCell<Vec<Item>>,
     /// The library as the tiles show it, so unrelated edits change nothing.
-    drawn: RefCell<Vec<(LibraryDial, Usage)>>,
+    drawn: RefCell<Vec<(Entry, Usage)>>,
+    /// The tab shown, its switch, and the page each tab was on.
+    tab: Cell<Tab>,
+    tabs: [gtk::ToggleButton; 2],
+    tab_pages: Cell<[usize; 2]>,
+    help: gtk::Button,
     /// Sits under the page in the same area, so it eases in and out with the height.
     pager: gtk::Box,
     with_pager: Cell<bool>,
@@ -128,17 +164,24 @@ impl Tray {
         stage.add_overlay(deck);
         stage.set_measure_overlay(deck, true);
 
-        let title = gtk::Label::builder()
-            .label("Library")
-            .css_classes(["tray-title"])
-            .hexpand(true)
-            .xalign(0.0)
+        // Keys | Dials, linked like a view switcher.
+        let keys_tab = gtk::ToggleButton::builder().label("Keys").active(true).build();
+        let dials_tab = gtk::ToggleButton::builder()
+            .label("Dials")
+            .group(&keys_tab)
             .build();
+        let switch = gtk::Box::builder()
+            .css_classes(["linked", "tray-tabs"])
+            .hexpand(true)
+            .halign(gtk::Align::Start)
+            .build();
+        switch.append(&keys_tab);
+        switch.append(&dials_tab);
         // The hint shows only on hovering ?.
         let help = gtk::Button::builder()
             .label("?")
             .css_classes(["circular", "tray-help"])
-            .tooltip_text(HINT)
+            .tooltip_text(KEY_HINT)
             .action_name("win.library-guide")
             .valign(gtk::Align::Center)
             .build();
@@ -149,7 +192,7 @@ impl Tray {
             .valign(gtk::Align::Center)
             .build();
         let header = gtk::Box::builder().spacing(6).margin_bottom(6).build();
-        header.append(&title);
+        header.append(&switch);
         header.append(&help);
         header.append(&shut);
         let sizer = gtk::Box::builder().hexpand(true).build();
@@ -211,6 +254,10 @@ impl Tray {
             grids: RefCell::default(),
             items: RefCell::default(),
             drawn: RefCell::default(),
+            tab: Cell::new(Tab::Keys),
+            tabs: [keys_tab, dials_tab],
+            tab_pages: Cell::new([0, 0]),
+            help,
             pager,
             with_pager: Cell::new(false),
             dots,
@@ -238,9 +285,55 @@ impl Tray {
                 }
             });
         }
+        for (i, tab) in [Tab::Keys, Tab::Dials].into_iter().enumerate() {
+            let me = Rc::downgrade(&tray);
+            tray.tabs[i].connect_toggled(move |b| {
+                if b.is_active()
+                    && let Some(t) = me.upgrade()
+                {
+                    t.set_tab(tab);
+                }
+            });
+        }
         tray.accept_deck_dials();
         tray.wire();
         tray
+    }
+
+    /// Show `tab`, on the page it was on.
+    pub fn set_tab(&self, tab: Tab) {
+        let was = self.tab.replace(tab);
+        if !self.tabs[tab.index()].is_active() {
+            // Comes back here through the toggle.
+            self.tabs[tab.index()].set_active(true);
+            return;
+        }
+        if was == tab && !self.grids.borrow().is_empty() {
+            return;
+        }
+        let mut pages = self.tab_pages.get();
+        pages[was.index()] = self.state.tray_page.get();
+        self.tab_pages.set(pages);
+        self.state.tray_page.set(pages[tab.index()]);
+        self.help.set_tooltip_text(Some(match tab {
+            Tab::Keys => KEY_HINT,
+            Tab::Dials => HINT,
+        }));
+        self.drawn.borrow_mut().clear();
+        if self.open.get() {
+            self.refresh();
+        } else {
+            self.stale.set(true);
+        }
+    }
+
+    /// The items the shown tab lists.
+    fn count(&self) -> usize {
+        let e = self.state.editor.borrow();
+        match self.tab.get() {
+            Tab::Keys => e.profile().key_library.len(),
+            Tab::Dials => e.profile().dial_library.len(),
+        }
     }
 
     /// The deck with the tray under it.
@@ -257,7 +350,8 @@ impl Tray {
         *self.on_toggle.borrow_mut() = Some(Box::new(f));
     }
 
-    pub fn open(&self, _tab: Tab) {
+    pub fn open(&self, tab: Tab) {
+        self.set_tab(tab);
         if self.open.replace(true) {
             return;
         }
@@ -313,9 +407,9 @@ impl Tray {
         canvas::set_class(&self.content, "compact", compact);
     }
 
-    /// A dial dragged down from the deck into the tray is added to the library.
+    /// A key or dial dragged from the deck into the tray is added to the library.
     fn accept_deck_dials(&self) {
-        // Only the deck's dials leave their row as a move; library tiles are copied.
+        // The deck's keys and dials move; library tiles are copied.
         let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::MOVE);
         {
             let content = self.content.clone();
@@ -332,17 +426,23 @@ impl Tray {
         target.connect_drop(move |_, value, _, _| {
             let Some(t) = me.upgrade() else { return false };
             t.content.remove_css_class("drop-target");
-            let Some(canvas::Payload::DeckDial(n)) =
-                value.get::<String>().ok().and_then(|s| canvas::parse_payload(&s))
-            else {
-                return false;
+            let (tab, added) = match value.get::<String>().ok().and_then(|s| canvas::parse_payload(&s)) {
+                Some(canvas::Payload::DeckDial(n)) => {
+                    let mut added = None;
+                    t.state.edit(|e| added = e.add_dial_to_library(n));
+                    (Tab::Dials, added)
+                }
+                Some(canvas::Payload::Key(n)) => {
+                    let mut added = None;
+                    t.state.edit(|e| added = e.add_key_to_library(n));
+                    (Tab::Keys, added)
+                }
+                _ => return false,
             };
-            let mut added = None;
-            t.state.edit(|e| added = e.add_dial_to_library(n));
             if added.is_some() {
-                // Shown where it landed: the last page.
-                let items = t.state.editor.borrow().profile().dial_library.len();
-                t.go(items.saturating_sub(1) / PER_PAGE);
+                // Shown where it landed: the last page of its tab.
+                t.set_tab(tab);
+                t.go(t.count().saturating_sub(1) / PER_PAGE);
             }
             added.is_some()
         });
@@ -554,8 +654,7 @@ impl Tray {
 
     /// Show page `page` (sliding to it while the tray is open).
     pub fn go(&self, page: usize) {
-        let items = self.state.editor.borrow().profile().dial_library.len();
-        let l = layout(items, page);
+        let l = layout(self.count(), page);
         let page = page.min(l.pages - 1);
         self.state.tray_page.set(page);
         self.show_pager(l.pages, page);
@@ -621,24 +720,33 @@ impl Tray {
     /// dials are there, else laid out again.
     fn refresh(&self) {
         self.stale.set(false);
-        let now: Vec<(LibraryDial, Usage)> = {
+        let now: Vec<(Entry, Usage)> = {
             let e = self.state.editor.borrow();
             let p = e.profile();
-            p.dial_library
-                .iter()
-                .map(|d| (d.clone(), p.dial_usage(d.id)))
-                .collect()
+            match self.tab.get() {
+                Tab::Dials => p
+                    .dial_library
+                    .iter()
+                    .map(|d| (Entry::Dial(d.clone()), p.dial_usage(d.id)))
+                    .collect(),
+                Tab::Keys => p
+                    .key_library
+                    .iter()
+                    .map(|k| (Entry::Key(k.clone()), p.key_usage(k.id)))
+                    .collect(),
+            }
         };
         if *self.drawn.borrow() == now && !self.grids.borrow().is_empty() {
             return;
         }
         let same = {
             let items = self.items.borrow();
-            items.len() == now.len() && items.iter().zip(&now).all(|(i, (l, _))| i.id == l.id)
+            items.len() == now.len() && items.iter().zip(&now).all(|(i, (l, _))| i.id == l.id())
         };
         if same && !self.grids.borrow().is_empty() {
+            let dir = canvas::profile_dir(&self.state);
             for (item, (lib, usage)) in self.items.borrow().iter().zip(&now) {
-                fill(item, lib, *usage);
+                fill(item, lib, *usage, &dir);
             }
         } else {
             self.rebuild(&now);
@@ -646,13 +754,13 @@ impl Tray {
         *self.drawn.borrow_mut() = now;
     }
 
-    /// Lay out the library's dials again.
-    fn rebuild(&self, now: &[(LibraryDial, Usage)]) {
+    /// Lay out the shown tab's items again.
+    fn rebuild(&self, now: &[(Entry, Usage)]) {
         for g in self.grids.take() {
             self.pages.remove_overlay(&g);
         }
         self.items.borrow_mut().clear();
-        let (library, usage): (Vec<LibraryDial>, Vec<Usage>) = now.iter().cloned().unzip();
+        let (library, usage): (Vec<Entry>, Vec<Usage>) = now.iter().cloned().unzip();
         let pages = layout(library.len(), 0).pages;
         for p in 0..pages {
             let grid = gtk::Grid::builder()
@@ -663,9 +771,12 @@ impl Tray {
             let start = p * PER_PAGE;
             let end = (start + PER_PAGE).min(library.len());
             let mut cells: Vec<gtk::Widget> = (start..end)
-                .map(|i| self.dial_item(&library[i], usage[i]).upcast())
+                .map(|i| self.lib_item(&library[i], usage[i]).upcast())
                 .collect();
-            cells.push(self.new_item().upcast());
+            cells.push(match self.tab.get() {
+                Tab::Dials => self.new_item().upcast(),
+                Tab::Keys => self.add_key_item().upcast(),
+            });
             // Blanks keep six columns on a short page.
             while cells.len() < PER_ROW {
                 cells.push(gtk::Box::builder().hexpand(true).build().upcast());
@@ -724,25 +835,44 @@ impl Tray {
         (button, name, usage)
     }
 
-    fn dial_item(&self, lib: &LibraryDial, usage: Usage) -> gtk::Button {
-        let zones = gtk::DrawingArea::new();
-        let face = canvas::dial_face(&zones);
-        let disc = self.disc(&face.overlay);
+    /// A library dial's or key's tile.
+    fn lib_item(&self, lib: &Entry, usage: Usage) -> gtk::Button {
+        let (face, picture, disc) = match lib {
+            Entry::Dial(_) => {
+                let face = canvas::dial_face(&gtk::DrawingArea::new());
+                let disc = self.disc(&face.overlay);
+                (Some(face), None, disc)
+            }
+            Entry::Key(_) => {
+                let picture = gtk::Image::new();
+                let disc = self.disc(&picture);
+                disc.add_css_class("tray-key");
+                // The picture takes the tile's rounded corners.
+                disc.set_overflow(gtk::Overflow::Hidden);
+                (None, Some(picture), disc)
+            }
+        };
         let room = canvas::with_room(&disc, 6, 4, 2);
         let pin = canvas::slot_badge("pin", gtk::Align::End);
         room.add_overlay(&pin);
         let (button, name, usage_label) = self.item(&room, "");
-        let id = lib.id;
+        let id = lib.id();
+        let kind = match lib {
+            Entry::Dial(_) => Tab::Dials,
+            Entry::Key(_) => Tab::Keys,
+        };
         {
             let state = self.state.clone();
             button.connect_clicked(move |_| state.select_library(id));
         }
-        // Drag it onto a dial on the deck to place it there.
+        // Drag it onto the deck to place it there.
         let source = gtk::DragSource::builder().actions(gdk::DragAction::COPY).build();
         source.connect_prepare(move |_, _, _| {
-            Some(gdk::ContentProvider::for_value(
-                &canvas::library_dial_payload(id).to_value(),
-            ))
+            let payload = match kind {
+                Tab::Dials => canvas::library_dial_payload(id),
+                Tab::Keys => canvas::library_key_payload(id),
+            };
+            Some(gdk::ContentProvider::for_value(&payload.to_value()))
         });
         let me = self.me.borrow().clone();
         {
@@ -752,6 +882,10 @@ impl Tray {
                 src.set_icon(Some(&icon), disc.width() / 2, disc.height() / 2);
                 if let Some(t) = me.upgrade() {
                     t.moving.set(Some(id));
+                    t.state.library_drag.set(Some(match kind {
+                        Tab::Keys => LibraryKind::Key,
+                        Tab::Dials => LibraryKind::Dial,
+                    }));
                 }
             });
         }
@@ -760,27 +894,29 @@ impl Tray {
             source.connect_drag_end(move |_, _, _| {
                 if let Some(t) = me.upgrade() {
                     t.moving.set(None);
+                    t.state.library_drag.set(None);
                 }
             });
         }
         button.add_controller(source);
-        self.take_moved_tiles(&button, &disc, id);
-        self.tile_menu(&button, id);
+        self.take_moved_tiles(&button, &disc, id, kind);
+        self.tile_menu(&button, id, kind);
         let item = Item {
             id,
             disc,
             face,
+            picture,
             name,
             usage: usage_label,
             pin,
         };
-        fill(&item, lib, usage);
+        fill(&item, lib, usage, &canvas::profile_dir(&self.state));
         self.items.borrow_mut().push(item);
         button
     }
 
-    /// Another tile dropped on this one (library dial `id`) moves to its place; the rest shift.
-    fn take_moved_tiles(&self, button: &gtk::Button, disc: &gtk::Box, id: Uuid) {
+    /// Another tile dropped on this one (library item `id`) moves to its place; the rest shift.
+    fn take_moved_tiles(&self, button: &gtk::Button, disc: &gtk::Box, id: Uuid, kind: Tab) {
         // Tiles are copied out; a deck dial carried in moves, so the tray behind takes that.
         let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::COPY);
         let me = self.me.borrow().clone();
@@ -809,16 +945,18 @@ impl Tray {
                 let Some((Some(from), t)) = other() else {
                     return false;
                 };
-                let to = t
-                    .state
-                    .editor
-                    .borrow()
-                    .profile()
-                    .dial_library
-                    .iter()
-                    .position(|l| l.id == id);
+                let to = {
+                    let e = t.state.editor.borrow();
+                    match kind {
+                        Tab::Dials => e.profile().dial_library.iter().position(|l| l.id == id),
+                        Tab::Keys => e.profile().key_library.iter().position(|l| l.id == id),
+                    }
+                };
                 if let Some(to) = to {
-                    t.state.edit(|e| e.move_library_dial(from, to));
+                    t.state.edit(|e| match kind {
+                        Tab::Dials => e.move_library_dial(from, to),
+                        Tab::Keys => e.move_library_key(from, to),
+                    });
                 }
                 to.is_some()
             });
@@ -826,8 +964,8 @@ impl Tray {
         button.add_controller(target);
     }
 
-    /// Right-click a library dial: Copy, Paste (greyed out with nothing copied) and Delete.
-    fn tile_menu(&self, button: &gtk::Button, id: Uuid) {
+    /// Right-click a library item: Copy, Paste (greyed out with nothing copied) and Delete.
+    fn tile_menu(&self, button: &gtk::Button, id: Uuid, kind: Tab) {
         let actions = gio::SimpleActionGroup::new();
         let add = |name: &str, f: TileAction| {
             let a = gio::SimpleAction::new(name, None);
@@ -839,18 +977,33 @@ impl Tray {
             });
             actions.add_action(&a);
         };
-        add(
-            "copy",
-            Box::new(move |s, _| s.editor.borrow_mut().copy_library_dial(id)),
-        );
-        add(
-            "paste",
-            Box::new(move |s, _| s.edit(|e| e.paste_library_dial(id))),
-        );
-        add(
-            "delete",
-            Box::new(move |s, b| crate::ui::dial_inspector::delete_library_dial(s, id, b)),
-        );
+        match kind {
+            Tab::Dials => {
+                add(
+                    "copy",
+                    Box::new(move |s, _| s.editor.borrow_mut().copy_library_dial(id)),
+                );
+                add(
+                    "paste",
+                    Box::new(move |s, _| s.edit(|e| e.paste_library_dial(id))),
+                );
+                add(
+                    "delete",
+                    Box::new(move |s, b| crate::ui::dial_inspector::delete_library_dial(s, id, b)),
+                );
+            }
+            Tab::Keys => {
+                add(
+                    "copy",
+                    Box::new(move |s, _| s.editor.borrow_mut().copy_library_key(id)),
+                );
+                add("paste", Box::new(move |s, _| s.edit(|e| e.paste_library_key(id))));
+                add(
+                    "delete",
+                    Box::new(move |s, b| crate::ui::key_library::delete_library_key(s, id, b)),
+                );
+            }
+        }
         button.insert_action_group("tile", Some(&actions));
         let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         pop.set_has_arrow(true);
@@ -860,7 +1013,11 @@ impl Tray {
         right.connect_pressed(move |g, _, x, y| {
             g.set_state(gtk::EventSequenceState::Claimed);
             state.select_library(id);
-            pop.set_menu_model(Some(&tile_menu(state.editor.borrow().has_dial_clip())));
+            let can_paste = match kind {
+                Tab::Dials => state.editor.borrow().has_dial_clip(),
+                Tab::Keys => state.editor.borrow().has_keys_clip(),
+            };
+            pop.set_menu_model(Some(&tile_menu(can_paste)));
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             pop.popup();
         });
@@ -886,6 +1043,23 @@ impl Tray {
             t.go(items.saturating_sub(1) / PER_PAGE);
             t.state.select_library(id);
         });
+        button
+    }
+
+    /// The last tile on the Keys tab: says how keys get into the library (they are made on the
+    /// deck, where a key is edited).
+    fn add_key_item(&self) -> gtk::Button {
+        let plus = gtk::Image::builder()
+            .icon_name("list-add-symbolic")
+            .pixel_size(20)
+            .build();
+        let disc = self.disc(&plus);
+        disc.add_css_class("new");
+        disc.add_css_class("tray-key");
+        let (button, _, _) = self.item(&canvas::with_room(&disc, 6, 4, 2), "Add a Key");
+        button.set_tooltip_text(Some(ADD_KEY));
+        let state = self.state.clone();
+        button.connect_clicked(move |_| crate::ui::toast(&state, ADD_KEY));
         button
     }
 
@@ -915,12 +1089,26 @@ fn tile_menu(can_paste: bool) -> gio::Menu {
     m
 }
 
-/// Show `lib` and where it is used on its tile.
-fn fill(item: &Item, lib: &LibraryDial, usage: Usage) {
-    item.face.show(&lib.dial);
-    item.name.set_label(match lib.dial.name.trim() {
-        "" => "Dial",
-        n => n,
+/// Show `lib` and where it is used on its tile; key pictures come from `dir`.
+fn fill(item: &Item, lib: &Entry, usage: Usage, dir: &std::path::Path) {
+    let name = match lib {
+        Entry::Dial(d) => {
+            if let Some(face) = &item.face {
+                face.show(&d.dial);
+            }
+            d.dial.name.trim()
+        }
+        Entry::Key(k) => {
+            if let Some(p) = &item.picture {
+                p.set_paintable(canvas::key_texture(&k.key.shown_look(), dir).as_ref());
+            }
+            k.name.trim()
+        }
+    };
+    item.name.set_label(match (name, lib) {
+        ("", Entry::Dial(_)) => "Dial",
+        ("", Entry::Key(_)) => "Key",
+        (n, _) => n,
     });
     item.usage.set_label(&usage.text());
     canvas::set_class(&item.usage, "pinned", usage.pinned);
