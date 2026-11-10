@@ -129,8 +129,9 @@ impl Editor {
         });
     }
 
-    /// Remove the pin at `n`; each page shows its own dial again. This page keeps the pinned dial
-    /// when it has none of its own, so unpinning never empties the dial you are looking at.
+    /// Remove the pin at `n`; each page shows its own dial again, an empty one too. Only a pin no
+    /// page has a copy of (an old profile-wide dial, or one edited while pinned) stays on this page
+    /// when it has nothing of its own, so unpinning never loses it.
     pub fn unpin_dial(&mut self, n: u8) {
         if !self.dial_free(n) || !self.profile.pinned.dials.contains_key(&n) {
             return;
@@ -139,8 +140,9 @@ impl Editor {
             let Some(pin) = p.pinned.dials.remove(&n) else {
                 return;
             };
+            let copied = p.pages.iter().any(|pg| pg.dials[n as usize] == pin);
             let own = &mut p.pages[page].dials[n as usize];
-            if own.is_empty() {
+            if own.is_empty() && !copied {
                 *own = pin;
             }
         });
@@ -163,22 +165,23 @@ impl Editor {
         });
     }
 
-    /// Remove the pin on `side`; each page shows its own small button again. This page keeps the
-    /// pinned button when it has none of its own.
+    /// Remove the pin on `side`; each page shows its own small button again. As for dials, only a
+    /// pin no page has a copy of stays on this page.
     pub fn unpin_small(&mut self, side: u8) {
         if side > 1 || !self.profile.small_pinned(side) || self.is_foreign(Slot::Small(side)) {
             return;
         }
         self.edit(|p, page| {
-            let (pin, own) = if side == 0 {
-                (p.small_buttons.left.take(), &mut p.pages[page].small_buttons.left)
-            } else {
-                (
-                    p.small_buttons.right.take(),
-                    &mut p.pages[page].small_buttons.right,
-                )
-            };
-            if own.is_none() {
+            fn pick(b: &mut SmallButtons, side: u8) -> &mut Option<Action> {
+                if side == 0 { &mut b.left } else { &mut b.right }
+            }
+            let pin = pick(&mut p.small_buttons, side).take();
+            let copied = p
+                .pages
+                .iter_mut()
+                .any(|pg| *pick(&mut pg.small_buttons, side) == pin);
+            let own = pick(&mut p.pages[page].small_buttons, side);
+            if own.is_none() && !copied {
                 *own = pin;
             }
         });
@@ -228,6 +231,23 @@ impl Editor {
             return;
         }
         self.set_library_dial(id, |d| d.name = name.to_string());
+    }
+
+    /// Move library dial `id` to position `to` in the library (the tray's order); the others
+    /// shift to make room.
+    pub fn move_library_dial(&mut self, id: Uuid, to: usize) {
+        let lib = &self.profile.dial_library;
+        let Some(from) = lib.iter().position(|l| l.id == id) else {
+            return;
+        };
+        let to = to.min(lib.len() - 1);
+        if from == to {
+            return;
+        }
+        self.edit(|p, _| {
+            let d = p.dial_library.remove(from);
+            p.dial_library.insert(to, d);
+        });
     }
 
     /// Delete library dial `id`; the page dials linked to it become blank, and a pin linked to it

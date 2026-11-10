@@ -454,6 +454,8 @@ fn empty_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         list.append(&row);
         ids.push(*id);
     }
+    // A click on a row reaches the list's row-activated, never the row's own activate.
+    let mut toggle_row: Option<(gtk::ListBoxRow, Box<dyn Fn()>)> = None;
     if !extra.is_empty() {
         let count = all.len();
         let label = move |open: bool| {
@@ -472,26 +474,33 @@ fn empty_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         let toggle = gtk::ListBoxRow::builder().activatable(true).child(&text).build();
         list.append(&toggle);
         let state = state.clone();
-        toggle.connect_activate(move |_| {
-            let open = !state.expanded.borrow().contains(PICKER_PATH);
-            if open {
-                state.expanded.borrow_mut().insert(PICKER_PATH.into());
-            } else {
-                state.expanded.borrow_mut().remove(PICKER_PATH);
-            }
-            for (row, revealer) in &extra {
+        toggle_row = Some((
+            toggle,
+            Box::new(move || {
+                let open = !state.expanded.borrow().contains(PICKER_PATH);
                 if open {
-                    row.set_visible(true);
+                    state.expanded.borrow_mut().insert(PICKER_PATH.into());
+                } else {
+                    state.expanded.borrow_mut().remove(PICKER_PATH);
                 }
-                revealer.set_reveal_child(open);
-            }
-            text.set_label(&label(open));
-        });
+                for (row, revealer) in &extra {
+                    if open {
+                        row.set_visible(true);
+                    }
+                    revealer.set_reveal_child(open);
+                }
+                text.set_label(&label(open));
+            }),
+        ));
     }
     {
         let ctx = ctx.clone();
         list.connect_row_activated(move |_, row| {
-            if let Some(&id) = usize::try_from(row.index()).ok().and_then(|i| ids.get(i)) {
+            if let Some((toggle, flip)) = &toggle_row
+                && toggle == row
+            {
+                flip();
+            } else if let Some(&id) = usize::try_from(row.index()).ok().and_then(|i| ids.get(i)) {
                 ctx.commit(How::Structure, |e| e.place_dial(d, id));
             }
         });
@@ -521,7 +530,10 @@ fn empty_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         .build();
     new_list.append(&new);
     page.append(&new_list);
-    page.append(&note("Or use Open Library and drag a dial onto this spot."));
+    page.append(&note(&format!(
+        "Or open the Library and drag a dial onto Dial {} on the deck.",
+        d + 1
+    )));
     view
 }
 

@@ -1,5 +1,5 @@
-//! The light on a drawn dial when the real one moves: the whole ring glows and fades, and an arc
-//! sweeps the way it turned (a press only glows).
+//! The light on a drawn dial when the real one moves: a turn sweeps an arc the way it turned, a
+//! press lights the whole ring.
 
 use std::cell::Cell;
 use std::f64::consts::PI;
@@ -110,29 +110,28 @@ impl Ring {
 fn draw(cr: &gtk::cairo::Context, cx: f64, cy: f64, rim: f64, m: DialMove, t: f64) {
     let accent = adw::StyleManager::default().accent_color_rgba();
     let (r, g, b) = (accent.red() as f64, accent.green() as f64, accent.blue() as f64);
-    let a = glow_alpha(t);
-    // A press also lights the face a little.
-    if m == DialMove::Press {
+    let Some((start, end)) = arc(m, t) else {
+        // A press: the face and the whole ring light up.
+        let a = glow_alpha(t);
         cr.arc(cx, cy, rim, 0.0, 2.0 * PI);
         cr.set_source_rgba(r, g, b, 0.22 * a);
         let _ = cr.fill();
-    }
-    // Soft glow, then the ring itself.
-    for (width, alpha) in [(7.0, 0.25), (2.0, 1.0)] {
-        cr.arc(cx, cy, rim, 0.0, 2.0 * PI);
-        cr.set_line_width(width);
-        cr.set_source_rgba(r, g, b, alpha * a);
-        let _ = cr.stroke();
-    }
-    let Some((start, end)) = arc(m, t) else { return };
+        // Soft glow, then the ring itself.
+        for (width, alpha) in [(7.0, 0.25), (2.0, 1.0)] {
+            cr.arc(cx, cy, rim, 0.0, 2.0 * PI);
+            cr.set_line_width(width);
+            cr.set_source_rgba(r, g, b, alpha * a);
+            let _ = cr.stroke();
+        }
+        return;
+    };
     // Not grown yet.
     if (end - start).abs() < 0.01 {
         return;
     }
     let out = rim + 5.0;
     cr.set_line_width(2.5);
-    // Lighter than the ring, fading more slowly so the grown arc can be seen, and from full at
-    // its start to nothing at its moving end (Cairo has no gradient along an arc: short pieces).
+    // Lighter than the accent, fading from full at its start to nothing at its moving end (Cairo has no gradient along an arc: short pieces).
     let (r, g, b) = (0.6 + r * 0.4, 0.6 + g * 0.4, 0.6 + b * 0.4);
     let fade = ARC_ALPHA * (1.0 - t.clamp(0.0, 1.0));
     const PIECES: usize = 32;

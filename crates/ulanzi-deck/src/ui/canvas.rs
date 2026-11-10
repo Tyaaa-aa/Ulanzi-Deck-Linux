@@ -99,14 +99,28 @@ pub fn parse_payload(s: &str) -> Option<Payload> {
 }
 
 /// Accept dragged keys and actions on `w`; `on_drop` gets the payload and the drop x position.
-fn accept_drops(w: &gtk::Button, on_drop: impl Fn(Payload, f64) + 'static) {
+/// A deck dial carried out of its row is taken only where `takes_dial` says so for it; anywhere
+/// else it is not outlined, so nothing promises a drop that does nothing.
+fn accept_drops(
+    w: &gtk::Button,
+    state: &State,
+    takes_dial: impl Fn(u8) -> bool + 'static,
+    on_drop: impl Fn(Payload, f64) + 'static,
+) {
     let target = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY | gdk::DragAction::MOVE);
     target.set_types(&[glib::Type::STRING, gdk::FileList::static_type()]);
     {
-        let w = w.clone();
-        target.connect_enter(move |_, _, _| {
+        let (w, state) = (w.clone(), state.clone());
+        target.connect_enter(move |t, _, _| {
+            if state.carried_dial.get().is_some_and(|from| !takes_dial(from)) {
+                return gdk::DragAction::empty();
+            }
             w.add_css_class("drop-target");
-            gdk::DragAction::COPY
+            // A carried deck dial moves; everything else is copied in.
+            match t.current_drop().map(|d| d.actions()) {
+                Some(a) if !a.contains(gdk::DragAction::COPY) => gdk::DragAction::MOVE,
+                _ => gdk::DragAction::COPY,
+            }
         });
     }
     {
@@ -1113,53 +1127,73 @@ pub fn build(state: &State) -> Canvas {
         let n = n as u8;
         drag_key(k, n);
         let state = state.clone();
-        accept_drops(&k.button, move |p, _| match p {
-            Payload::Key(from) if from != n => {
-                state.edit(|e| e.swap(from, n));
-                state.select(|s| s.click(Slot::Key(n)));
-            }
-            Payload::Key(_) | Payload::LibraryDial(_) | Payload::DeckDial(_) => {}
-            Payload::Action(a) => {
-                state.edit(|e| e.drop_action(Slot::Key(n), a));
-                state.select(|s| s.click(Slot::Key(n)));
-            }
-            Payload::File(path) if path.extension().is_some_and(|e| e == "ulanzideck") => {
-                if let Some(root) = state.toast_root() {
-                    crate::ui::bundle_dialogs::open_import(&state, &root, &path);
+        accept_drops(
+            &k.button,
+            &state.clone(),
+            |_| false,
+            move |p, _| match p {
+                Payload::Key(from) if from != n => {
+                    state.edit(|e| e.swap(from, n));
+                    state.select(|s| s.click(Slot::Key(n)));
                 }
-            }
-            Payload::File(path) => {
-                // Dropping on a selected key sets the image on the whole selection.
-                let sel = state.selection.borrow().keys();
-                let keys = if sel.contains(&n) { sel } else { vec![n] };
-                crate::ui::icon_picker::import_into(&state, &path, &keys, |_| {});
-            }
-        });
+                Payload::Key(_) | Payload::LibraryDial(_) | Payload::DeckDial(_) => {}
+                Payload::Action(a) => {
+                    state.edit(|e| e.drop_action(Slot::Key(n), a));
+                    state.select(|s| s.click(Slot::Key(n)));
+                }
+                Payload::File(path) if path.extension().is_some_and(|e| e == "ulanzideck") => {
+                    if let Some(root) = state.toast_root() {
+                        crate::ui::bundle_dialogs::open_import(&state, &root, &path);
+                    }
+                }
+                Payload::File(path) => {
+                    // Dropping on a selected key sets the image on the whole selection.
+                    let sel = state.selection.borrow().keys();
+                    let keys = if sel.contains(&n) { sel } else { vec![n] };
+                    crate::ui::icon_picker::import_into(&state, &path, &keys, |_| {});
+                }
+            },
+        );
     }
     {
         let state = state.clone();
-        accept_drops(&screen.0.button, move |p, _| {
-            if let Payload::Action(a) = p {
-                state.edit(|e| e.drop_action(Slot::Screen, a));
-                state.select(|s| s.click(Slot::Screen));
-            }
-        });
+        accept_drops(
+            &screen.0.button,
+            &state.clone(),
+            |_| false,
+            move |p, _| {
+                if let Payload::Action(a) = p {
+                    state.edit(|e| e.drop_action(Slot::Screen, a));
+                    state.select(|s| s.click(Slot::Screen));
+                }
+            },
+        );
     }
     for (n, b) in small.iter().enumerate() {
         let state = state.clone();
-        accept_drops(b, move |p, _| {
-            if let Payload::Action(a) = p {
-                state.edit(|e| e.drop_action(Slot::Small(n as u8), a));
-                state.select(|s| s.click(Slot::Small(n as u8)));
-            }
-        });
+        accept_drops(
+            b,
+            &state.clone(),
+            |_| false,
+            move |p, _| {
+                if let Payload::Action(a) = p {
+                    state.edit(|e| e.drop_action(Slot::Small(n as u8), a));
+                    state.select(|s| s.click(Slot::Small(n as u8)));
+                }
+            },
+        );
     }
     for (n, d) in dials.iter().enumerate() {
         // Show which zone the pointer is over while dragging across the dial.
         let motion = gtk::DropControllerMotion::new();
         {
             let (zone, area, dial, hint) = (zones[n].clone(), zone_areas[n].clone(), d.clone(), hint.clone());
+            let state = state.clone();
             motion.connect_motion(move |_, x, _| {
+                // A whole dial lands as a whole: no zones.
+                if state.carried_dial.get().is_some() {
+                    return;
+                }
                 let z = hit_zone(dial.width() as f64, x);
                 if zone.get() != Some(z) {
                     zone.set(Some(z));
@@ -1180,9 +1214,17 @@ pub fn build(state: &State) -> Canvas {
             });
         }
         d.add_controller(motion);
+        let n8 = n as u8;
+        let takes = {
+            let state = state.clone();
+            move |from: u8| {
+                let e = state.editor.borrow();
+                from != n8 && !e.is_foreign(Slot::Dial(from)) && !e.is_foreign(Slot::Dial(n8))
+            }
+        };
         let state = state.clone();
         let (dial, row) = (d.clone(), dial_row.downgrade());
-        accept_drops(d, move |p, x| match p {
+        accept_drops(d, &state.clone(), takes, move |p, x| match p {
             Payload::Action(a) => {
                 let zone = hit_zone(dial.width() as f64, x);
                 state.edit(|e| {
@@ -1203,13 +1245,19 @@ pub fn build(state: &State) -> Canvas {
                     row.set_marked(None);
                 }
             }
+            // Carried out of the row and brought back onto another dial: swap.
+            Payload::DeckDial(from) if from != n as u8 => {
+                state.edit(|e| e.swap_dials(from, n as u8));
+                state.select(|s| s.click(Slot::Dial(n as u8)));
+            }
             _ => {}
         });
     }
 
     // Drag a dial onto another: that one slides into its place, then they swap (one undo step).
     {
-        let (place_state, allowed_state, state) = (state.clone(), state.clone(), state.clone());
+        let (place_state, allowed_state, carry_state, state) =
+            (state.clone(), state.clone(), state.clone(), state.clone());
         crate::ui::dial_swap::attach(
             &dial_row,
             &dials,
@@ -1238,6 +1286,7 @@ pub fn build(state: &State) -> Canvas {
                     && info.library.is_none()
                     && !info.dial.is_empty()
             },
+            move |n| carry_state.carried_dial.set(n),
         );
     }
 

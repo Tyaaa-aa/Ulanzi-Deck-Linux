@@ -420,6 +420,11 @@ row.drop-target {
   outline-color: @accent_bg_color;
 }
 
+.tray-dial.drop-target {
+  outline-color: alpha(@accent_bg_color, 0.7);
+  outline-style: dashed;
+}
+
 .tray-dial.new {
   background-image: none;
   border: 1.5px dashed alpha(white, 0.35);

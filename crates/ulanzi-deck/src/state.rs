@@ -118,6 +118,8 @@ pub struct AppState {
     pub tray_page: Cell<usize>,
     /// The Library tray is open (deck dials can be dragged into it).
     pub tray_open: Cell<bool>,
+    /// The deck dial being carried out of its row (to the tray or back onto another dial).
+    pub carried_dial: Cell<Option<u8>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -174,6 +176,7 @@ impl AppState {
             selected_library: RefCell::new(None),
             tray_page: Cell::new(0),
             tray_open: Cell::new(false),
+            carried_dial: Cell::new(None),
             listeners: RefCell::new(Vec::new()),
         })
     }

@@ -897,8 +897,8 @@ fn pinning_keeps_the_page_dial_underneath() {
     assert!(info.pinned);
     assert_eq!(info.dial.press, Some(Action::NextPage));
     e.unpin_dial(1);
-    // Page 0 had none of its own, so it keeps what showed.
-    assert_eq!(e.dial_info(1).dial.press, Some(Action::NextPage));
+    // Page 0 had none of its own and page 2 still has it, so page 0 is empty again.
+    assert!(e.dial_info(1).dial.is_empty());
     assert!(!e.dial_info(1).pinned);
     assert!(e.profile().dial_at(1, 1).is_empty());
     assert_eq!(e.profile().dial_at(2, 1).press, Some(Action::NextPage));
@@ -938,6 +938,35 @@ fn unpin_keeps_the_dial_on_a_page_without_its_own() {
     assert_eq!(e.profile().dial_at(2, 0).press, Some(Action::NextPage));
     assert!(e.undo());
     assert_eq!(e.profile(), &before);
+}
+
+#[test]
+fn unpin_leaves_an_empty_dial_empty() {
+    // Pinned from page 1, unpinned on page 2 where the dial was empty: it is empty again.
+    let mut p = Profile::new_default("U", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    p.pages[0].dials[0] = own(Action::NextPage);
+    let mut e = Editor::new(p);
+    e.pin_dial(0);
+    e.set_page(1);
+    e.unpin_dial(0);
+    assert!(!e.dial_info(0).pinned);
+    assert!(e.profile().dial_at(1, 0).is_empty());
+    assert_eq!(e.profile().dial_at(0, 0).press, Some(Action::NextPage));
+}
+
+#[test]
+fn unpin_leaves_an_empty_small_button_empty() {
+    let mut p = Profile::new_default("S", Model::D200X);
+    p.pages.push(Page::new("Two"));
+    let mut e = Editor::new(p);
+    e.unpin_small(0);
+    e.set_small_button(0, Some(Action::SleepNow));
+    e.pin_small(0);
+    e.set_page(1);
+    e.unpin_small(0);
+    assert_eq!(e.profile().small_at(1, 0), None);
+    assert_eq!(e.profile().small_at(0, 0), Some(Action::SleepNow));
 }
 
 #[test]
@@ -1210,4 +1239,23 @@ fn small_buttons_edit_the_pin_or_the_page() {
     assert_eq!(e.profile().pages[0].small_buttons.right, Some(Action::Back));
     e.set_slot_action(Slot::Small(0), Action::NextPage);
     assert_eq!(e.profile().small_buttons.left, Some(Action::NextPage));
+}
+
+#[test]
+fn library_dials_move() {
+    let mut e = Editor::new(Profile::new_default("L", Model::D200X));
+    let ids: Vec<_> = (0..3).map(|_| e.new_library_dial()).collect();
+    let order = |e: &Editor| e.profile().dial_library.iter().map(|l| l.id).collect::<Vec<_>>();
+    e.move_library_dial(ids[0], 2);
+    assert_eq!(order(&e), [ids[1], ids[2], ids[0]]);
+    e.move_library_dial(ids[0], 0);
+    assert_eq!(order(&e), ids);
+    // Past the end lands last; the same place changes nothing.
+    e.move_library_dial(ids[1], 99);
+    assert_eq!(order(&e), [ids[0], ids[2], ids[1]]);
+    let before = order(&e);
+    e.move_library_dial(ids[0], 0);
+    assert_eq!(order(&e), before);
+    assert!(e.undo());
+    assert_eq!(order(&e), ids);
 }

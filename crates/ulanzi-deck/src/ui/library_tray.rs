@@ -108,6 +108,8 @@ pub struct Tray {
     to: Cell<(f64, f64)>,
     slide: RefCell<Option<adw::TimedAnimation>>,
     last_size: Cell<(i32, i32)>,
+    /// The library dial being dragged from its tile, so the others can take it to reorder.
+    moving: Cell<Option<Uuid>>,
     on_toggle: RefCell<Option<OnToggle>>,
 }
 
@@ -224,6 +226,7 @@ impl Tray {
             to: Cell::new((0.0, 0.0)),
             slide: RefCell::default(),
             last_size: Cell::new((0, 0)),
+            moving: Cell::new(None),
             on_toggle: RefCell::default(),
         });
         *tray.me.borrow_mut() = Rc::downgrade(&tray);
@@ -397,13 +400,28 @@ impl Tray {
         };
         *self.slide.borrow_mut() = Some(eased(&self.stage, &slide_target));
         for (b, step) in [(&self.prev, -1isize), (&self.next, 1)] {
+            let turn = {
+                let me = me.clone();
+                move || {
+                    if let Some(t) = me.upgrade() {
+                        let page = t.state.tray_page.get().saturating_add_signed(step);
+                        t.go(page);
+                    }
+                }
+            };
+            {
+                let turn = turn.clone();
+                b.connect_clicked(move |_| turn());
+            }
+            // A tile held over an arrow turns the page, to reorder it onto another.
+            let hover = gtk::DropControllerMotion::new();
             let me = me.clone();
-            b.connect_clicked(move |_| {
-                if let Some(t) = me.upgrade() {
-                    let page = t.state.tray_page.get().saturating_add_signed(step);
-                    t.go(page);
+            hover.connect_enter(move |_, _, _| {
+                if me.upgrade().is_some_and(|t| t.moving.get().is_some()) {
+                    turn();
                 }
             });
+            b.add_controller(hover);
         }
         let st = self.state.clone();
         st.on(move |c| {
@@ -724,14 +742,27 @@ impl Tray {
                 &canvas::library_dial_payload(id).to_value(),
             ))
         });
+        let me = self.me.borrow().clone();
         {
-            let disc = disc.clone();
+            let (disc, me) = (disc.clone(), me.clone());
             source.connect_drag_begin(move |src, _| {
                 let icon = gtk::WidgetPaintable::new(Some(&disc));
                 src.set_icon(Some(&icon), disc.width() / 2, disc.height() / 2);
+                if let Some(t) = me.upgrade() {
+                    t.moving.set(Some(id));
+                }
+            });
+        }
+        {
+            let me = me.clone();
+            source.connect_drag_end(move |_, _, _| {
+                if let Some(t) = me.upgrade() {
+                    t.moving.set(None);
+                }
             });
         }
         button.add_controller(source);
+        self.take_moved_tiles(&button, &disc, id);
         self.tile_menu(&button, id);
         let item = Item {
             id,
@@ -744,6 +775,53 @@ impl Tray {
         fill(&item, lib, usage);
         self.items.borrow_mut().push(item);
         button
+    }
+
+    /// Another tile dropped on this one (library dial `id`) moves to its place; the rest shift.
+    fn take_moved_tiles(&self, button: &gtk::Button, disc: &gtk::Box, id: Uuid) {
+        // Tiles are copied out; a deck dial carried in moves, so the tray behind takes that.
+        let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::COPY);
+        let me = self.me.borrow().clone();
+        let other = move || {
+            me.upgrade()
+                .map(|t| (t.moving.get().filter(|from| *from != id), t))
+        };
+        {
+            let (other, disc) = (other.clone(), disc.clone());
+            target.connect_enter(move |_, _, _| match other() {
+                Some((Some(_), _)) => {
+                    disc.add_css_class("drop-target");
+                    gdk::DragAction::COPY
+                }
+                _ => gdk::DragAction::empty(),
+            });
+        }
+        {
+            let disc = disc.clone();
+            target.connect_leave(move |_| disc.remove_css_class("drop-target"));
+        }
+        {
+            let disc = disc.clone();
+            target.connect_drop(move |_, _, _, _| {
+                disc.remove_css_class("drop-target");
+                let Some((Some(from), t)) = other() else {
+                    return false;
+                };
+                let to = t
+                    .state
+                    .editor
+                    .borrow()
+                    .profile()
+                    .dial_library
+                    .iter()
+                    .position(|l| l.id == id);
+                if let Some(to) = to {
+                    t.state.edit(|e| e.move_library_dial(from, to));
+                }
+                to.is_some()
+            });
+        }
+        button.add_controller(target);
     }
 
     /// Right-click a library dial: Copy, Paste (greyed out with nothing copied) and Delete.

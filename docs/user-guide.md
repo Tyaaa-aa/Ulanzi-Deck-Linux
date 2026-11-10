@@ -260,8 +260,8 @@ keys and buttons a macro is holding.
 Each dial has four actions: **Turn Left**, **Turn Right**, **Press** and **Hold**, and a name shown
 under it on the drawn deck (empty means "Dial 1" to "Dial 3"). Dials are configured per page, and a new
 page starts without dials. Volume, OBS input volume, brightness, page navigation and media seeking work
-well on dials. When a dial turns or is pressed, its ring on the drawn deck lights up, and a turn also
-sweeps an arc in the direction of the turn.
+well on dials. When a dial turns, an arc on the drawn deck sweeps from its top in the direction of the
+turn. When it is pressed, the whole ring lights up.
 
 ### Dial library
 
@@ -272,8 +272,9 @@ The library is opt-in, like macros. A dial belongs to its page until you add it 
   that uses it, and the inspector shows how many pages that is.
 - **Make a Copy** turns a linked dial back into this page's own copy, named "<name> (copy)".
 - **Pin to Every Page** shows the dial at the same position on every page, folders included. Each page
-  keeps its own dial underneath, and **Unpin** shows it again. The page you unpin on keeps the pinned
-  dial if it has none of its own. A pinned dial has a pin badge. When this page has its own dial under
+  keeps its own dial underneath, and **Unpin** shows it again, so a page that had no dial there is
+  empty again. A pin that no page has a copy of (one edited while pinned, or a profile-wide dial from
+  an earlier version) stays on the page you unpin on, so it is not lost. A pinned dial has a pin badge. When this page has its own dial under
   the pin, the inspector says so under its buttons; unpin to use it. A dial can be both linked and pinned.
 - **Remove from This Page** clears the dial. Delete does the same on a selected dial, except one that is
   pinned.
@@ -285,7 +286,10 @@ library dials with their name and where they are used (pinned, a number of pages
 
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.
-- Drag a dial from the deck down into the open tray to add it to the library, as **Add to Library** does.
+- Drag a dial from the deck out of the dial row into the open tray to add it to the library, as
+  **Add to Library** does. Bring it back onto another dial before letting go to swap them instead.
+- Drag a library dial onto another one in the tray to move it there. Hold it over an arrow button to
+  turn the page.
 - Right-click a library dial for **Copy**, **Paste** and **Delete from Library**. A copied library dial
   pastes onto the deck as a linked dial. Pasting onto a library dial replaces what it does everywhere it
   is used.

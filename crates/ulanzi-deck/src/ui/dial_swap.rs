@@ -1,7 +1,7 @@
 //! Dragging a dial left or right to swap it: which spot it lands on and how the others make room.
 //! The row draws its dials shifted by eased offsets; nothing moves in the layout until the drop.
-//! Dragged down while something below takes dials (the Library tray), a dial leaves the row as an
-//! ordinary drag and drop instead.
+//! Dragged out of the row, whichever way, while something takes dials (the Library tray), the dial
+//! settles home and an ordinary drag and drop carries it on: to the tray, or back onto a dial.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -14,6 +14,13 @@ use gtk::subclass::prelude::*;
 const START_PX: f64 = 8.0;
 /// How long the others take to slide aside, and the dragged dial to settle.
 const SLIDE_MS: u32 = 200;
+/// How far past the row's edge the pointer goes before the dial is carried out of it.
+const LEAVE_PX: f64 = 12.0;
+
+/// Whether a pointer at (`x`, `y`) in a row `w` by `h` px has left it.
+pub fn left_row(x: f64, y: f64, w: f64, h: f64) -> bool {
+    x < -LEAVE_PX || y < -LEAVE_PX || x > w + LEAVE_PX || y > h + LEAVE_PX
+}
 
 /// The dial that dial `from` lands on when dragged `dx` px; `pitch` is the distance between dial
 /// centres.
@@ -213,8 +220,10 @@ struct Drag {
     end: Cell<[f64; 3]>,
     /// The pointer is up: the animation settles the dial, then the swap commits.
     released: Cell<bool>,
-    /// Dragged down out of the row: a drag and drop carries it, not the row.
+    /// Carried out of the row: a drag and drop has it now, and the row lets it go.
     out: Cell<bool>,
+    /// Where the press was, in the dial's coordinates.
+    press: Cell<(f64, f64)>,
 }
 
 fn lerp(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
@@ -231,7 +240,8 @@ pub fn lands<K: PartialEq>(from: u8, to: u8, at_release: Option<&K>, now: &K) ->
 /// names what the dials show (a page); a move is dropped if it changes while the dial settles.
 /// `allowed` says whether a dial may move from one spot to another (else it settles back home);
 /// `commit` makes the move once the dial has settled. While `can_leave` says so for it, a dial
-/// dragged downwards leaves the row as a drag and drop carrying [`canvas::deck_dial_payload`].
+/// dragged out of the row is carried on by a drag and drop of [`canvas::deck_dial_payload`];
+/// `carrying` hears which dial that is, and `None` when it ends.
 pub fn attach<K: PartialEq + 'static>(
     row: &DialRow,
     dials: &[gtk::Button],
@@ -239,8 +249,10 @@ pub fn attach<K: PartialEq + 'static>(
     allowed: impl Fn(u8, u8) -> bool + 'static,
     commit: impl Fn(u8, u8) + 'static,
     can_leave: impl Fn(u8) -> bool + 'static,
+    carrying: impl Fn(Option<u8>) + 'static,
 ) {
     let can_leave = Rc::new(can_leave);
+    let carrying: Rc<dyn Fn(Option<u8>)> = Rc::new(carrying);
     let drag = Rc::new(Drag::default());
     let place = Rc::new(place);
     let released_on: Rc<RefCell<Option<K>>> = Rc::new(RefCell::new(None));
@@ -313,7 +325,7 @@ pub fn attach<K: PartialEq + 'static>(
         g.set_propagation_phase(gtk::PropagationPhase::Capture);
         {
             let (drag, row) = (drag.clone(), weak_row.clone());
-            g.connect_drag_begin(move |g, _, _| {
+            g.connect_drag_begin(move |g, x, y| {
                 // Still settling the last one.
                 if drag.from.get().is_some() {
                     g.set_state(gtk::EventSequenceState::Denied);
@@ -325,12 +337,13 @@ pub fn attach<K: PartialEq + 'static>(
                 drag.x.set(0.0);
                 drag.moving.set(false);
                 drag.out.set(false);
+                drag.press.set((x, y));
                 drag.pitch.set(row.pitch());
             });
         }
         {
             let (drag, row, dial, slide) = (drag.clone(), weak_row.clone(), dial.clone(), slide.clone());
-            let can_leave = can_leave.clone();
+            let (can_leave, carrying) = (can_leave.clone(), carrying.clone());
             g.connect_drag_update(move |g, dx, dy| {
                 let Some(row) = row.upgrade() else { return };
                 if drag.from.get() != Some(n) || drag.released.get() || drag.out.get() {
@@ -340,17 +353,33 @@ pub fn attach<K: PartialEq + 'static>(
                     if dx.hypot(dy) < START_PX {
                         return;
                     }
-                    // Downwards: left unclaimed, so the drag source below takes it.
-                    if dy > dx.abs() && can_leave(n) {
-                        drag.out.set(true);
-                        return;
-                    }
                     // A drag now, not a click.
                     g.set_state(gtk::EventSequenceState::Claimed);
                     drag.moving.set(true);
                     dial.add_css_class("lifted");
                     row.set_lifted(Some(n));
                     row.set_drop(Some(n));
+                }
+                // Out of the row: settle home and let a drag and drop carry it on.
+                let (px, py) = drag.press.get();
+                let at = dial.compute_point(
+                    &row,
+                    &gtk::graphene::Point::new((px + dx) as f32, (py + dy) as f32),
+                );
+                if let Some(at) = at
+                    && left_row(
+                        at.x() as f64,
+                        at.y() as f64,
+                        row.width() as f64,
+                        row.height() as f64,
+                    )
+                    && can_leave(n)
+                    && carry_out(n, &dial, g, carrying.clone())
+                {
+                    drag.out.set(true);
+                    // Ends the press here; finish sends the dial home.
+                    g.reset();
+                    return;
                 }
                 let pitch = drag.pitch.get();
                 let x = dx.clamp(-(n as f64) * pitch, (2.0 - n as f64) * pitch);
@@ -383,8 +412,8 @@ pub fn attach<K: PartialEq + 'static>(
                 }
                 let pitch = drag.pitch.get();
                 let mut to = drag.to.get();
-                // A spot that can't take it, or a cancelled drag: back home.
-                if cancelled || !allowed(n, to) {
+                // A spot that can't take it, a cancelled drag or one carried out: back home.
+                if cancelled || drag.out.get() || !allowed(n, to) {
                     to = n;
                 }
                 drag.to.set(to);
@@ -404,41 +433,50 @@ pub fn attach<K: PartialEq + 'static>(
         }
         g.connect_cancel(move |_, _| finish(true));
         dial.add_controller(g);
-        dial.add_controller(leave_source(n, dial, &drag));
     }
 }
 
-/// The drag and drop a dial leaves the row with; it starts only once the row has let it go.
-fn leave_source(n: u8, dial: &gtk::Button, drag: &Rc<Drag>) -> gtk::DragSource {
-    let source = gtk::DragSource::builder()
-        .actions(gtk::gdk::DragAction::MOVE)
-        .build();
+/// Start a drag and drop of dial `n` from where `g`'s pointer is; false if it can't start.
+fn carry_out(n: u8, dial: &gtk::Button, g: &gtk::GestureDrag, carrying: Rc<dyn Fn(Option<u8>)>) -> bool {
+    let (Some(device), Some(surface)) = (g.device(), dial.native().and_then(|w| w.surface())) else {
+        return false;
+    };
+    let content = gtk::gdk::ContentProvider::for_value(&crate::ui::canvas::deck_dial_payload(n).to_value());
+    let Some(d) = gtk::gdk::Drag::begin(&surface, &device, &content, gtk::gdk::DragAction::MOVE, 0.0, 0.0)
+    else {
+        return false;
+    };
+    // A still picture: the dial itself goes home under it.
+    let icon = gtk::WidgetPaintable::new(Some(dial)).current_image();
+    gtk::DragIcon::set_from_paintable(&d, &icon, dial.width() / 2, dial.height() / 2);
+    carrying(Some(n));
     {
-        // Asked again on every move until it gives something.
-        let drag = drag.clone();
-        source.connect_prepare(move |_, _, _| {
-            drag.out.get().then(|| {
-                gtk::gdk::ContentProvider::for_value(&crate::ui::canvas::deck_dial_payload(n).to_value())
-            })
+        let carrying = carrying.clone();
+        d.connect_dnd_finished(move |d| {
+            d.drop_done(true);
+            carrying(None);
         });
     }
-    {
-        let dial = dial.clone();
-        source.connect_drag_begin(move |src, _| {
-            let icon = gtk::WidgetPaintable::new(Some(&dial));
-            src.set_icon(Some(&icon), dial.width() / 2, dial.height() / 2);
-        });
-    }
-    {
-        let drag = drag.clone();
-        source.connect_drag_end(move |_, _, _| drag.out.set(false));
-    }
-    source
+    d.connect_cancel(move |d, _| {
+        d.drop_done(false);
+        carrying(None);
+    });
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_the_row_takes_more_than_its_edge() {
+        let (w, h) = (300.0, 100.0);
+        assert!(!left_row(150.0, 50.0, w, h));
+        assert!(!left_row(-LEAVE_PX, h + LEAVE_PX, w, h));
+        assert!(left_row(150.0, h + LEAVE_PX + 1.0, w, h));
+        assert!(left_row(150.0, -LEAVE_PX - 1.0, w, h));
+        assert!(left_row(w + LEAVE_PX + 1.0, 50.0, w, h));
+    }
 
     #[test]
     fn target_rounds_to_the_nearest_dial() {
