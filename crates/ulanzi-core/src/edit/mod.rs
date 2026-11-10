@@ -2,6 +2,7 @@
 //! directly; the GTK app is a thin layer over [`Editor`].
 
 mod dials;
+mod keys;
 mod selection;
 
 pub use selection::{Selection, Slot};
@@ -18,7 +19,7 @@ const DIALS: u8 = 3;
 /// The action in `slot` that can hold a macro: what a press runs.
 fn macro_slot(p: &mut Profile, page: usize, slot: Slot) -> Option<&mut Action> {
     let a = match slot {
-        Slot::Key(i) => p.pages.get_mut(page)?.keys.get_mut(&i)?.tap.as_mut(),
+        Slot::Key(i) => key_existing(p, page, i)?.tap.as_mut(),
         Slot::Dial(i) => dial_mut(p, page, i)?.press.as_mut(),
         Slot::Small(side) => small_mut(p, page, side).as_mut(),
         Slot::Screen => None,
@@ -60,6 +61,34 @@ fn dial_mut(p: &mut Profile, page: usize, n: u8) -> Option<&mut Dial> {
             .map(|l| &mut l.dial),
         None => dial_spot(p, page, n),
     }
+}
+
+/// Where key `n` is set up on `page`: the pin if there is one, else the page's own (made when
+/// missing). A link is not followed.
+fn key_spot(p: &mut Profile, page: usize, n: u8) -> Option<&mut Key> {
+    if n >= KEYS {
+        return None;
+    }
+    if p.pinned.keys.contains_key(&n) {
+        return p.pinned.keys.get_mut(&n);
+    }
+    Some(p.pages.get_mut(page)?.keys.entry(n).or_default())
+}
+
+/// The key that edits of key `n` change: [`key_spot`], with a link followed to the library key.
+/// `None` for a link to nothing.
+fn key_mut(p: &mut Profile, page: usize, n: u8) -> Option<&mut Key> {
+    let link = key_spot(p, page, n)?.library;
+    match link {
+        Some(id) => p.key_library.iter_mut().find(|l| l.id == id).map(|l| &mut l.key),
+        None => key_spot(p, page, n),
+    }
+}
+
+/// [`key_mut`] for a key that is there; never makes one.
+fn key_existing(p: &mut Profile, page: usize, n: u8) -> Option<&mut Key> {
+    let shown = p.pinned.keys.contains_key(&n) || p.pages.get(page)?.keys.contains_key(&n);
+    if shown { key_mut(p, page, n) } else { None }
 }
 
 /// Store `m`, keeping the version it replaces one level back.
@@ -144,8 +173,12 @@ pub fn shared<T: PartialEq + Clone>(mut values: impl Iterator<Item = T>) -> Mixe
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 enum Clip {
-    /// Keys relative to the first copied index.
-    Keys(Vec<(u8, Key)>),
+    /// Keys relative to the first copied index: as set up (a link kept) and as they work, and the
+    /// profile they came from.
+    Keys {
+        items: Vec<(u8, Key, Key)>,
+        profile: uuid::Uuid,
+    },
     Style(KeyLook),
     /// A dial as it shows, with its link kept, and the profile it came from.
     Dial {
@@ -323,8 +356,7 @@ impl Editor {
         }
         self.edit(|p, page| match slot {
             Slot::Key(i) => {
-                if i < KEYS {
-                    let key = p.pages[page].keys.entry(i).or_default();
+                if let Some(key) = key_mut(p, page, i) {
                     key.tap = Some(action);
                 }
             }
@@ -426,12 +458,9 @@ impl Editor {
         });
     }
 
-    fn keys(&self) -> &std::collections::BTreeMap<u8, Key> {
-        &self.profile.pages[self.page].keys
-    }
-
+    /// Key `index` as it works on the current page: the pin, else the page's own, a link followed.
     pub fn key(&self, index: u8) -> Option<&Key> {
-        self.keys().get(&index)
+        self.profile.key_ref(self.page, index)
     }
 
     pub fn shared_foreground(&self, keys: &[u8]) -> Mixed<Color> {
@@ -464,8 +493,10 @@ impl Editor {
     pub fn set_field(&mut self, keys: &[u8], field: Field) {
         self.edit(|p, page| {
             for &i in keys.iter().filter(|i| **i < KEYS) {
-                if !taken(p, page, Slot::Key(i)) {
-                    apply_field(&mut p.pages[page].keys.entry(i).or_default().look, &field);
+                if !taken(p, page, Slot::Key(i))
+                    && let Some(key) = key_mut(p, page, i)
+                {
+                    apply_field(&mut key.look, &field);
                 }
             }
         });
@@ -477,12 +508,12 @@ impl Editor {
             return;
         }
         self.edit(|p, page| match slot {
-            Slot::Key(i) if i < KEYS => {
-                let key = p.pages[page].keys.entry(i).or_default();
-                crate::catalog::refresh_look(&mut key.look, key.tap.as_ref(), &action);
-                key.tap = Some(action);
+            Slot::Key(i) => {
+                if let Some(key) = key_mut(p, page, i) {
+                    crate::catalog::refresh_look(&mut key.look, key.tap.as_ref(), &action);
+                    key.tap = Some(action);
+                }
             }
-            Slot::Key(_) => {}
             Slot::Small(side) => *small_mut(p, page, side) = Some(action),
             Slot::Dial(d) => {
                 if let Some(dial) = dial_mut(p, page, d) {
@@ -502,8 +533,7 @@ impl Editor {
             return;
         }
         self.edit(|p, page| {
-            if index < KEYS {
-                let key = p.pages[page].keys.entry(index).or_default();
+            if let Some(key) = key_mut(p, page, index) {
                 if let Some(new) = &tap
                     && key.tap.as_ref() != Some(new)
                 {
@@ -569,15 +599,33 @@ impl Editor {
         {
             return;
         }
+        // A pin moves with its key; then every page swaps underneath, so no page shows a
+        // different key there.
+        let pinned = self.profile.pinned.keys.contains_key(&a) || self.profile.pinned.keys.contains_key(&b);
         self.edit(|p, page| {
-            let keys = &mut p.pages[page].keys;
-            let ka = keys.remove(&a);
-            let kb = keys.remove(&b);
-            if let Some(k) = ka {
-                keys.insert(b, k);
+            fn swap_in(keys: &mut std::collections::BTreeMap<u8, Key>, a: u8, b: u8) {
+                let (ka, kb) = (keys.remove(&a), keys.remove(&b));
+                if let Some(k) = ka {
+                    keys.insert(b, k);
+                }
+                if let Some(k) = kb {
+                    keys.insert(a, k);
+                }
             }
-            if let Some(k) = kb {
-                keys.insert(a, k);
+            if pinned {
+                for pg in &mut p.pages {
+                    swap_in(&mut pg.keys, a, b);
+                }
+                for f in p.foreign.iter_mut().filter(|f| f.page.is_some()) {
+                    if f.slot == Slot::Key(a) {
+                        f.slot = Slot::Key(b);
+                    } else if f.slot == Slot::Key(b) {
+                        f.slot = Slot::Key(a);
+                    }
+                }
+                swap_in(&mut p.pinned.keys, a, b);
+            } else {
+                swap_in(&mut p.pages[page].keys, a, b);
             }
         });
     }
@@ -586,23 +634,36 @@ impl Editor {
         let Some(&first) = keys.iter().min() else {
             return;
         };
+        let p = &self.profile;
         let items = keys
             .iter()
-            .filter_map(|i| self.key(*i).map(|k| (i - first, k.clone())))
+            .filter_map(|i| {
+                let raw = p.pinned.keys.get(i).or_else(|| p.pages[self.page].keys.get(i))?;
+                Some((i - first, raw.clone(), p.key_at(self.page, *i)?))
+            })
             .collect();
-        self.clipboard = Some(Clip::Keys(items));
+        self.clipboard = Some(Clip::Keys { items, profile: p.id });
     }
 
     /// Paste copied keys starting at `at`, keeping their spacing; keys past the last slot are dropped.
     pub fn paste_keys(&mut self, at: u8) {
-        let Some(Clip::Keys(items)) = self.clipboard.clone() else {
+        let Some(Clip::Keys { items, profile }) = self.clipboard.clone() else {
             return;
         };
+        // A link stays a link in the profile it was copied from while its library key is there.
+        let same = profile == self.profile.id;
         self.edit(|p, page| {
-            for (offset, key) in items {
+            for (offset, raw, key) in items {
                 let i = at + offset;
-                if i < KEYS && !taken(p, page, Slot::Key(i)) {
-                    p.pages[page].keys.insert(i, key);
+                if taken(p, page, Slot::Key(i)) {
+                    continue;
+                }
+                let key = match raw.library {
+                    Some(id) if same && p.library_key(id).is_some() => raw,
+                    _ => key,
+                };
+                if let Some(spot) = key_spot(p, page, i) {
+                    *spot = key;
                 }
             }
         });
@@ -620,8 +681,10 @@ impl Editor {
         };
         self.edit(|p, page| {
             for &i in keys.iter().filter(|i| **i < KEYS) {
-                if !taken(p, page, Slot::Key(i)) {
-                    p.pages[page].keys.entry(i).or_default().look = look.clone();
+                if !taken(p, page, Slot::Key(i))
+                    && let Some(key) = key_mut(p, page, i)
+                {
+                    key.look = look.clone();
                 }
             }
         });
@@ -632,12 +695,13 @@ impl Editor {
     }
 
     pub fn has_keys_clip(&self) -> bool {
-        matches!(self.clipboard, Some(Clip::Keys(_)))
+        matches!(self.clipboard, Some(Clip::Keys { .. }))
     }
 
+    /// Clear the page's own keys. A pinned key is left alone: Unpin removes it.
     pub fn clear(&mut self, keys: &[u8]) {
         self.edit(|p, page| {
-            for i in keys {
+            for i in keys.iter().filter(|i| !p.pinned.keys.contains_key(i)) {
                 p.pages[page].keys.remove(i);
                 let id = Some(p.pages[page].id);
                 p.foreign.retain(|f| !(f.page == id && f.slot == Slot::Key(*i)));
@@ -649,7 +713,7 @@ impl Editor {
     pub fn reset_to_default_look(&mut self, keys: &[u8]) {
         self.edit(|p, page| {
             for i in keys {
-                if let Some(k) = p.pages[page].keys.get_mut(i)
+                if let Some(k) = key_existing(p, page, *i)
                     && let Some(a) = &k.tap
                 {
                     k.look = default_look(a);
@@ -664,9 +728,18 @@ impl Editor {
             return;
         }
         self.edit(|p, page| {
-            let moving: Vec<Key> = keys.iter().filter_map(|i| p.pages[page].keys.remove(i)).collect();
+            // A pinned key is on every page already.
+            let moving: Vec<Key> = keys
+                .iter()
+                .filter(|i| !p.pinned.keys.contains_key(i))
+                .filter_map(|i| p.pages[page].keys.remove(i))
+                .collect();
             let mut free = (0..KEYS)
-                .filter(|i| !p.pages[target].keys.contains_key(i) && !taken(p, target, Slot::Key(*i)))
+                .filter(|i| {
+                    !p.pages[target].keys.contains_key(i)
+                        && !p.pinned.keys.contains_key(i)
+                        && !taken(p, target, Slot::Key(*i))
+                })
                 .collect::<Vec<_>>()
                 .into_iter();
             for key in moving {
@@ -706,7 +779,11 @@ impl Editor {
                 let group: Vec<Key> = group.into_iter().take(KEYS as usize).collect();
                 let free = |p: &Profile, at: usize| {
                     (0..KEYS)
-                        .filter(|i| !p.pages[at].keys.contains_key(i) && !taken(p, at, Slot::Key(*i)))
+                        .filter(|i| {
+                            !p.pages[at].keys.contains_key(i)
+                                && !p.pinned.keys.contains_key(i)
+                                && !taken(p, at, Slot::Key(*i))
+                        })
                         .collect::<Vec<_>>()
                 };
                 if free(p, at).len() < group.len() {
@@ -725,7 +802,11 @@ impl Editor {
     pub fn free_keys(&self) -> usize {
         let keys = &self.profile.pages[self.page].keys;
         (0..KEYS)
-            .filter(|i| !keys.contains_key(i) && !self.is_foreign(Slot::Key(*i)))
+            .filter(|i| {
+                !keys.contains_key(i)
+                    && !self.profile.pinned.keys.contains_key(i)
+                    && !self.is_foreign(Slot::Key(*i))
+            })
             .count()
     }
 

@@ -108,6 +108,7 @@ fn profile_roundtrip_all_action_variants() {
             look: KeyLook::default(),
             tap: Some(a.clone()),
             hold: Some(a),
+            library: None,
         };
         p.pages[0].keys.insert((i % 13) as u8, key);
     }
@@ -547,6 +548,7 @@ fn live_states_pick_the_first_match_and_fill_params() {
         look: KeyLook::default(),
         tap: Some(a.clone()),
         hold: None,
+        library: None,
     })
     .expect("toml");
     let back: Key = toml::from_str(&text).expect("parse");
@@ -1061,6 +1063,7 @@ fn switch_output_settings_round_trip_and_old_keys_still_load() {
         look: KeyLook::default(),
         tap: Some(a.clone()),
         hold: None,
+        library: None,
     };
     let back: Key = toml::from_str(&toml::to_string(&key).expect("toml")).expect("parse");
     assert_eq!(back.tap, Some(a.clone()));

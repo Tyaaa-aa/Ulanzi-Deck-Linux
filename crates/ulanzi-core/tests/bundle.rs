@@ -30,6 +30,7 @@ fn profile_with_icon(s: &Store, name: &str) -> Profile {
             },
             tap: Some(Action::NextPage),
             hold: None,
+            library: None,
         },
     );
     p.r#match.apps = vec!["firefox.desktop".into()];

@@ -214,6 +214,7 @@ impl Migrator {
             look,
             tap: self.action_of(b, &ctx),
             hold: None,
+            library: None,
         }
     }
 

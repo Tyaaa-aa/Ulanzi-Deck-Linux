@@ -242,9 +242,13 @@ pub fn export_with(
         includes_settings: include_settings,
         // Only when there is a library to import, so the import switch shows only then.
         includes_library: include_library
-            && out
-                .iter()
-                .any(|bp| !bp.profile.dial_library.is_empty() || !bp.profile.foreign_library.is_empty()),
+            && out.iter().any(|bp| {
+                let p = &bp.profile;
+                !p.dial_library.is_empty()
+                    || !p.foreign_library.is_empty()
+                    || !p.key_library.is_empty()
+                    || !p.foreign_key_library.is_empty()
+            }),
         looks: out
             .iter()
             .map(|bp| (bp.profile.id.to_string(), store.profile_look(bp.profile.id)))
@@ -681,7 +685,12 @@ pub fn commands(b: &Bundle) -> Vec<String> {
         for f in &bp.profile.foreign {
             foreign_commands(&f.raw, &mut out);
         }
-        for v in &bp.profile.foreign_library {
+        for v in bp
+            .profile
+            .foreign_library
+            .iter()
+            .chain(&bp.profile.foreign_key_library)
+        {
             foreign_commands(v, &mut out);
         }
         for a in bp.profile.actions() {

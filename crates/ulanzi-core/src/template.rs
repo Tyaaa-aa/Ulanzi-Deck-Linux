@@ -197,6 +197,7 @@ fn key(icon: &str, label: &str, colour: &str, action: Action) -> Key {
         look: look(icon, IconSet::Lucide, label, colour),
         tap: Some(action),
         hold: None,
+        library: None,
     }
 }
 
@@ -205,6 +206,7 @@ fn brand(icon: &str, label: &str, colour: &str, action: Action) -> Key {
         look: look(icon, IconSet::Brands, label, colour),
         tap: Some(action),
         hold: None,
+        library: None,
     }
 }
 
@@ -255,6 +257,7 @@ fn volume_dial(target: AudioTarget) -> Dial {
         press: Some(volume(target.clone(), VolumeOp::Mute)),
         right: Some(volume(target, VolumeOp::Up)),
         hold: None,
+        library: None,
         ..Default::default()
     }
 }
@@ -281,6 +284,7 @@ fn track_dial() -> Dial {
         press: Some(media(MediaControl::PlayPause)),
         right: Some(media(MediaControl::Next)),
         hold: None,
+        library: None,
         ..Default::default()
     }
 }
@@ -442,6 +446,7 @@ fn video_editing() -> Profile {
                 press: Some(sc("ctrl+z")),
                 right: Some(sc("down")),
                 hold: None,
+                library: None,
                 ..Default::default()
             },
             Dial {
@@ -449,6 +454,7 @@ fn video_editing() -> Profile {
                 press: None,
                 right: Some(sc("equal")),
                 hold: None,
+                library: None,
                 ..Default::default()
             },
         ],

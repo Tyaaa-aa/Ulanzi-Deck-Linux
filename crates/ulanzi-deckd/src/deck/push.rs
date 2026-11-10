@@ -823,6 +823,7 @@ mod tests {
                     player: None,
                 }),
                 hold: None,
+                library: None,
             },
         );
         p
@@ -1159,6 +1160,7 @@ mod tests {
                 look: KeyLook::default(),
                 tap: Some(tap.clone()),
                 hold: None,
+                library: None,
             },
         );
         let mut d = DynamicState::default();

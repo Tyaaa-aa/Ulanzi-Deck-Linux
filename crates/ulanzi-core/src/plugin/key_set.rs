@@ -88,6 +88,7 @@ impl KeySet {
                         params: fill_table(&k.params, &item.id, &item.name),
                     }),
                     hold: None,
+                    library: None,
                 }
             })
             .collect()

@@ -5,7 +5,7 @@
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-use super::{Action, Dial, Key, LibraryDial, Profile, ScreenConfig};
+use super::{Action, Dial, Key, Profile, ScreenConfig};
 
 pub use crate::edit::Slot;
 
@@ -29,8 +29,7 @@ impl Profile {
     pub fn foreign_shown(&self, page: usize, slot: Slot) -> Option<&ForeignSlot> {
         let id = self.pages.get(page).map(|p| p.id);
         match slot {
-            Slot::Key(_) => self.foreign_at(id, slot),
-            Slot::Dial(_) => self.foreign_at(None, slot).or_else(|| self.foreign_at(id, slot)),
+            Slot::Key(_) | Slot::Dial(_) => self.foreign_at(None, slot).or_else(|| self.foreign_at(id, slot)),
             Slot::Small(side) => self.foreign_at(None, slot).or_else(|| {
                 if self.small_pinned(side) {
                     None
@@ -78,26 +77,33 @@ pub fn separate(table: &mut toml::Table) -> Vec<ForeignSlot> {
             }
         }
     }
-    if let Some(pins) = table
-        .get_mut("pinned")
-        .and_then(|v| v.as_table_mut())
-        .and_then(|t| t.get_mut("dials"))
-        .and_then(|v| v.as_table_mut())
-    {
-        let bad: Vec<String> = pins
-            .iter()
-            .filter(|(_, v)| !parses::<Dial>(v))
-            .map(|(k, _)| k.clone())
-            .collect();
-        for k in bad {
-            if let Ok(i) = k.parse::<u8>()
-                && let Some(raw) = pins.remove(&k)
-            {
-                out.push(ForeignSlot {
-                    page: None,
-                    slot: Slot::Dial(i),
-                    raw,
-                });
+    if let Some(pinned) = table.get_mut("pinned").and_then(|v| v.as_table_mut()) {
+        for (field, fits, slot) in [
+            (
+                "dials",
+                parses::<Dial> as fn(&toml::Value) -> bool,
+                Slot::Dial as fn(u8) -> Slot,
+            ),
+            ("keys", parses::<Key>, Slot::Key),
+        ] {
+            let Some(pins) = pinned.get_mut(field).and_then(|v| v.as_table_mut()) else {
+                continue;
+            };
+            let bad: Vec<String> = pins
+                .iter()
+                .filter(|(_, v)| !fits(v))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in bad {
+                if let Ok(i) = k.parse::<u8>()
+                    && let Some(raw) = pins.remove(&k)
+                {
+                    out.push(ForeignSlot {
+                        page: None,
+                        slot: slot(i),
+                        raw,
+                    });
+                }
             }
         }
     }
@@ -162,23 +168,24 @@ pub fn separate(table: &mut toml::Table) -> Vec<ForeignSlot> {
     out
 }
 
-/// Take the library dials that do not parse out of a profile's table and return them.
-pub fn separate_library(table: &mut toml::Table) -> Vec<toml::Value> {
-    let Some(items) = table.get_mut("dial_library").and_then(|v| v.as_array_mut()) else {
+/// Take the library items (`field` is `dial_library` or `key_library`) that do not parse as `T`
+/// out of a profile's table and return them.
+pub fn separate_library<T: DeserializeOwned>(table: &mut toml::Table, field: &str) -> Vec<toml::Value> {
+    let Some(items) = table.get_mut(field).and_then(|v| v.as_array_mut()) else {
         return Vec::new();
     };
-    let (good, bad): (Vec<_>, Vec<_>) = std::mem::take(items).into_iter().partition(parses::<LibraryDial>);
+    let (good, bad): (Vec<_>, Vec<_>) = std::mem::take(items).into_iter().partition(parses::<T>);
     *items = good;
     bad
 }
 
-/// Put the library dials [`separate_library`] set aside back at the end of the array.
-pub fn restore_library(table: &mut toml::Table, items: &[toml::Value]) {
+/// Put the library items [`separate_library`] set aside back at the end of `field`'s array.
+pub fn restore_library(table: &mut toml::Table, field: &str, items: &[toml::Value]) {
     if items.is_empty() {
         return;
     }
     if let Some(arr) = table
-        .entry("dial_library")
+        .entry(field)
         .or_insert_with(|| toml::Value::Array(Vec::new()))
         .as_array_mut()
     {
@@ -204,17 +211,21 @@ pub fn restore(table: &mut toml::Table, foreign: &[ForeignSlot]) {
                 Slot::Screen => {
                     table.insert("screen".into(), f.raw.clone());
                 }
-                Slot::Dial(i) => {
+                Slot::Dial(i) | Slot::Key(i) => {
+                    let field = if matches!(f.slot, Slot::Dial(_)) {
+                        "dials"
+                    } else {
+                        "keys"
+                    };
                     let pins = table
                         .entry("pinned")
                         .or_insert_with(new_table)
                         .as_table_mut()
-                        .and_then(|t| t.entry("dials").or_insert_with(new_table).as_table_mut());
+                        .and_then(|t| t.entry(field).or_insert_with(new_table).as_table_mut());
                     if let Some(pins) = pins {
                         pins.insert(i.to_string(), f.raw.clone());
                     }
                 }
-                Slot::Key(_) => {}
             }
             continue;
         };

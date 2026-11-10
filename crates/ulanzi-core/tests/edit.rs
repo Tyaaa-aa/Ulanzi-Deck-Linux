@@ -20,6 +20,7 @@ fn editor_with_keys() -> Editor {
                 look,
                 tap: Some(Action::NextPage),
                 hold: None,
+                library: None,
             },
         );
     }
@@ -286,6 +287,7 @@ fn editor_with(look: KeyLook, tap: Action) -> Editor {
             look,
             tap: Some(tap),
             hold: None,
+            library: None,
         },
     );
     Editor::new(p)
@@ -425,6 +427,7 @@ fn add_keys_keeps_each_group_on_one_page() {
         },
         tap: Some(Action::NextPage),
         hold: None,
+        library: None,
     };
     let pages = e.profile().pages.len();
     // 13 slots: four groups of three fill twelve; the fifth goes to a new page.

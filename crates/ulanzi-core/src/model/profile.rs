@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::foreign::{ForeignSlot, Slot};
-use super::{Action, Background, KeyLook, LibraryDial, MediaTakeover, Pinned, Rotation, Widget};
+use super::{Action, Background, KeyLook, LibraryDial, LibraryKey, MediaTakeover, Pinned, Rotation, Widget};
 use crate::Color;
 
 /// The file format version written. 2 (Ulanzi Deck 2.1): OBS lives in the OBS plugin; older
@@ -38,7 +38,10 @@ pub struct Profile {
     /// Dials kept here and placed on pages by link.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dial_library: Vec<LibraryDial>,
-    /// Dials that are the same on every page.
+    /// Keys kept here and placed on pages by link.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_library: Vec<LibraryKey>,
+    /// Dials and keys that are the same on every page.
     #[serde(default, skip_serializing_if = "Pinned::is_empty")]
     pub pinned: Pinned,
     /// Before dials were per page they lived here; kept only to read old files (moved onto every
@@ -57,6 +60,9 @@ pub struct Profile {
     /// Library dials from a newer version, kept as written.
     #[serde(skip)]
     pub foreign_library: Vec<toml::Value>,
+    /// Library keys from a newer version, kept as written.
+    #[serde(skip)]
+    pub foreign_key_library: Vec<toml::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -244,6 +250,9 @@ pub struct Key {
     pub tap: Option<Action>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hold: Option<Action>,
+    /// Linked to this library key: its own look and actions are ignored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<Uuid>,
 }
 
 impl Key {
@@ -357,6 +366,15 @@ impl Profile {
             add(&mut out, &page.small_buttons.left);
             add(&mut out, &page.small_buttons.right);
         }
+        for k in self
+            .key_library
+            .iter()
+            .map(|l| &l.key)
+            .chain(self.pinned.keys.values())
+        {
+            add(&mut out, &k.tap);
+            add(&mut out, &k.hold);
+        }
         for d in self
             .dial_library
             .iter()
@@ -449,6 +467,7 @@ impl Profile {
                 right: Some(Action::NextPage),
             },
             dial_library: Vec::new(),
+            key_library: Vec::new(),
             pinned: Pinned::default(),
             dials: Default::default(),
             screen: ScreenConfig::default(),
@@ -456,6 +475,7 @@ impl Profile {
             min_app: None,
             foreign: Vec::new(),
             foreign_library: Vec::new(),
+            foreign_key_library: Vec::new(),
         }
     }
 
@@ -485,6 +505,11 @@ impl Profile {
                     )),
                 }
             }
+        }
+        let bad: Vec<u8> = self.pinned.keys.keys().copied().filter(|i| *i >= 13).collect();
+        for i in bad {
+            self.pinned.keys.remove(&i);
+            warnings.push(format!("dropped pinned key {i}: there is no such key"));
         }
         let bad: Vec<u8> = self.pinned.dials.keys().copied().filter(|i| *i >= 3).collect();
         for i in bad {

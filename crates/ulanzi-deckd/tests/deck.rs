@@ -57,7 +57,12 @@ fn key(tap: Option<Action>, hold: Option<Action>) -> Key {
         },
         ..KeyLook::default()
     };
-    Key { look, tap, hold }
+    Key {
+        look,
+        tap,
+        hold,
+        library: None,
+    }
 }
 
 /// Pages: 0 "Main", 1 "Two", 2 folder "Stuff".
