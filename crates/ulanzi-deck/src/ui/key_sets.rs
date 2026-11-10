@@ -157,8 +157,8 @@ pub fn needed(
 ) -> Vec<(String, String, String)> {
     use ulanzi_core::model::{Action, fill_params};
     let mut out = Vec::new();
-    for page in &profile.pages {
-        for key in page.keys.values() {
+    {
+        for key in profile.all_keys() {
             let Some(Action::Plugin {
                 plugin,
                 action,

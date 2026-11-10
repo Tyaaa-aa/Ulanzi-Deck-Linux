@@ -327,9 +327,18 @@ fn picked_library(state: &State) -> Option<uuid::Uuid> {
     state.editor.borrow().profile().library_dial(id).map(|l| l.id)
 }
 
-/// Something to edit: a slot, or a library dial picked in the tray.
+/// The library key picked in the Library tray, while it still exists. Dial and key ids never
+/// clash, so one pick serves both.
+fn picked_library_key(state: &State) -> Option<uuid::Uuid> {
+    let id = (*state.selected_library.borrow())?;
+    state.editor.borrow().profile().library_key(id).map(|l| l.id)
+}
+
+/// Something to edit: a slot, or a library dial or key picked in the tray.
 pub fn has_selection(state: &State) -> bool {
-    !state.selection.borrow().is_empty() || picked_library(state).is_some()
+    !state.selection.borrow().is_empty()
+        || picked_library(state).is_some()
+        || picked_library_key(state).is_some()
 }
 
 /// Fill the inspector for the current selection; false when nothing is selected.
@@ -346,6 +355,12 @@ fn fill(ctx: &C, content: &gtk::Box) -> bool {
     }
     let view = match slots.as_slice() {
         [] => {
+            // A library key picked in the Library tray.
+            if let Some(id) = picked_library_key(&ctx.state) {
+                let view = crate::ui::key_library::library_view(ctx, content, id);
+                add_sections(content, &[Section::Press], view);
+                return true;
+            }
             // A library dial picked in the Library tray.
             let Some(id) = picked_library(&ctx.state) else {
                 return false;
@@ -536,10 +551,19 @@ fn key_view(ctx: &C, content: &gtk::Box, k: u8) -> View {
     let mut view = View::default();
     let header = gtk::Box::builder().spacing(16).build();
     header.append(&key_preview(ctx, k));
-    let titles = title_block(&format!("Key {}", k + 1), &page_name(state));
+    let subtitle = {
+        let e = state.editor.borrow();
+        let info = e.key_info(k);
+        let usage = info.library.map(|id| e.profile().key_usage(id));
+        crate::ui::key_library::key_subtitle(&page_name(state), &info, usage)
+    };
+    let titles = title_block(&format!("Key {}", k + 1), &subtitle);
     titles.set_valign(gtk::Align::Center);
     header.append(&titles);
     content.append(&padded(header));
+    if let Some(row) = crate::ui::key_library::library_row(ctx, k) {
+        content.append(&padded(row));
+    }
 
     let problem = state
         .editor

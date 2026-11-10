@@ -16,6 +16,7 @@ pub mod icon_picker;
 pub mod inspector;
 pub mod integrations;
 pub mod item_picker;
+pub mod key_library;
 pub(crate) mod key_routing;
 pub mod key_sets;
 pub mod library;

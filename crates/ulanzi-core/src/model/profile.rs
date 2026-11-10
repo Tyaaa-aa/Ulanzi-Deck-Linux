@@ -333,6 +333,15 @@ impl Profile {
             .chain(self.key_library.iter_mut().map(|l| &mut l.key))
     }
 
+    /// Every key with a look of its own, as [`Profile::all_keys_mut`].
+    pub fn all_keys(&self) -> impl Iterator<Item = &Key> {
+        self.pages
+            .iter()
+            .flat_map(|p| p.keys.values())
+            .chain(self.pinned.keys.values())
+            .chain(self.key_library.iter().map(|l| &l.key))
+    }
+
     /// "Hide All Labels" for labels drawn into the key pictures (the deck hides its own).
     pub fn hide_drawn_labels(&mut self) {
         for k in self.all_keys_mut() {

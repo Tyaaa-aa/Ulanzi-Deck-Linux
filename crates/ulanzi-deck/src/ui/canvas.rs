@@ -749,6 +749,9 @@ struct KeyWidget {
     label: gtk::Label,
     /// Shown when the key's action can't work (a missing app, scene, file…).
     warning: gtk::Image,
+    /// From the Library, and pinned to every page.
+    link: gtk::Image,
+    pin: gtk::Image,
     animation: Rc<Cell<u64>>,
 }
 
@@ -816,6 +819,17 @@ fn key_widget(width: i32) -> KeyWidget {
         .visible(false)
         .build();
     overlay.add_overlay(&warning);
+    // Top left, clear of the warning.
+    let badges = gtk::Box::builder()
+        .spacing(2)
+        .halign(gtk::Align::Start)
+        .valign(gtk::Align::Start)
+        .build();
+    let link = slot_badge("link", gtk::Align::Start);
+    let pin = slot_badge("pin", gtk::Align::Start);
+    badges.append(&link);
+    badges.append(&pin);
+    overlay.add_overlay(&badges);
     let button = gtk::Button::builder()
         .child(&overlay)
         .css_classes(["deck-key"])
@@ -826,6 +840,8 @@ fn key_widget(width: i32) -> KeyWidget {
         picture,
         label,
         warning,
+        link,
+        pin,
         animation: Rc::default(),
     }
 }
@@ -1369,12 +1385,14 @@ pub fn build(state: &State) -> Canvas {
         b.add_controller(right);
     }
 
-    // Right-click a key: copy, paste and clear, with their shortcuts shown.
-    let key_menu = key_menu();
+    // Right-click a key: copy, paste and clear with their shortcuts shown, and the library and pin
+    // items as they apply to this key.
     for (n, k) in keys.iter().enumerate() {
-        let pop = gtk::PopoverMenu::from_model(Some(&key_menu));
+        let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         pop.set_has_arrow(true);
         pop.set_parent(&k.button);
+        k.button
+            .insert_action_group("keylib", Some(&key_library_actions(state, n as u8)));
         let right = gtk::GestureClick::builder().button(3).build();
         let state = state.clone();
         right.connect_pressed(move |g, _, x, y| {
@@ -1384,6 +1402,8 @@ pub fn build(state: &State) -> Canvas {
             if !state.selection.borrow().contains(slot) {
                 state.select(|s| s.click(slot));
             }
+            let info = state.editor.borrow().key_info(n as u8);
+            pop.set_menu_model(Some(&key_menu(&info)));
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             pop.popup();
         });
@@ -1458,15 +1478,19 @@ pub fn build(state: &State) -> Canvas {
                 let preview = state.preview.borrow().clone();
                 let sel = state.selection.borrow().clone();
                 let e = state.editor.borrow();
-                let page = &e.profile().pages[e.page()];
-                let moving = moving_note(page.moving_keys());
+                let moving = e.profile().shown_page(e.page()).map_or(0, |p| p.moving_keys());
+                let moving = moving_note(moving);
                 note.set_visible(moving.is_some());
                 note.set_label(moving.as_deref().unwrap_or_default());
                 for (i, k) in keys.iter().enumerate() {
+                    let info = e.key_info(i as u8);
+                    k.link.set_visible(info.library.is_some());
+                    k.pin.set_visible(info.pinned);
                     // A hovered colour shows on the selected keys before it is applied.
                     let previewed = preview.as_ref().filter(|_| sel.contains(Slot::Key(i as u8)));
                     let owned;
-                    let key = match (page.keys.get(&(i as u8)), previewed) {
+                    // Pinned and linked keys as they work here.
+                    let key = match (e.key(i as u8), previewed) {
                         (k, Some(f)) => {
                             let mut key = k.cloned().unwrap_or_default();
                             ulanzi_core::edit::apply_field(&mut key.look, f);
@@ -1723,8 +1747,9 @@ pub(crate) fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     }
 }
 
-/// The right-click menu of a key: copy, paste and clear, with their shortcuts shown.
-fn key_menu() -> gio::Menu {
+/// The right-click menu of a key: copy, paste and clear, with their shortcuts shown; Add to
+/// Library or Make a Copy, and Pin or Unpin, for the key right-clicked.
+fn key_menu(info: &ulanzi_core::model::KeyInfo) -> gio::Menu {
     // The shortcuts aren't application accelerators (see key_routing), so name them here.
     let item = |section: &gio::Menu, label: &str, action: &str| {
         let it = gio::MenuItem::new(Some(label), Some(&format!("win.{action}")));
@@ -1738,14 +1763,51 @@ fn key_menu() -> gio::Menu {
     item(&keys_section, "Copy Key", "copy");
     item(&keys_section, "Paste Key", "paste");
     m.append_section(None, &keys_section);
+    if info.key.is_some() || info.library.is_some() {
+        let lib = gio::Menu::new();
+        if info.library.is_some() {
+            lib.append(Some("Make a Copy"), Some("keylib.own-copy"));
+        } else {
+            lib.append(Some("Add to Library"), Some("keylib.add-to-library"));
+        }
+        if info.pinned {
+            lib.append(Some("Unpin"), Some("keylib.unpin"));
+        } else {
+            lib.append(Some("Pin to Every Page"), Some("keylib.pin"));
+        }
+        m.append_section(None, &lib);
+    }
     let style = gio::Menu::new();
     item(&style, "Copy Style", "copy-style");
     item(&style, "Paste Style", "paste-style");
     m.append_section(Some("Colours, image and label only"), &style);
-    let clear = gio::Menu::new();
-    item(&clear, "Clear Key", "clear");
-    m.append_section(None, &clear);
+    // A pin covers this page's own key: Unpin removes it.
+    if !info.pinned {
+        let clear = gio::Menu::new();
+        item(&clear, "Clear Key", "clear");
+        m.append_section(None, &clear);
+    }
     m
+}
+
+/// What the key menu's library items do to key `n` (`keylib.pin`, ...).
+fn key_library_actions(state: &State, n: u8) -> gio::SimpleActionGroup {
+    let group = gio::SimpleActionGroup::new();
+    let add = |name: &str, f: fn(&State, u8)| {
+        let a = gio::SimpleAction::new(name, None);
+        let state = state.clone();
+        a.connect_activate(move |_, _| f(&state, n));
+        group.add_action(&a);
+    };
+    add("add-to-library", |s, n| {
+        s.edit(|e| {
+            e.add_key_to_library(n);
+        })
+    });
+    add("own-copy", |s, n| s.edit(|e| e.own_copy_key(n)));
+    add("pin", |s, n| s.edit(|e| e.pin_key(n)));
+    add("unpin", |s, n| s.edit(|e| e.unpin_key(n)));
+    group
 }
 
 /// What the dial menu does to dial `n` (`dial.copy`, `dial.paste`, ...).
@@ -1955,7 +2017,35 @@ mod tests {
 
     #[test]
     fn key_menu_labels_have_no_ellipsis() {
-        crate::ui::assert_menu_labels(&key_menu());
+        let info = |pinned, library| ulanzi_core::model::KeyInfo {
+            key: Some(Default::default()),
+            pinned,
+            library,
+        };
+        crate::ui::assert_menu_labels(&key_menu(&info(false, None)));
+        crate::ui::assert_menu_labels(&key_menu(&info(true, Some(uuid::Uuid::nil()))));
+    }
+
+    #[test]
+    fn key_menu_follows_the_key() {
+        let own = ulanzi_core::model::KeyInfo {
+            key: Some(Default::default()),
+            pinned: false,
+            library: None,
+        };
+        let l = labels(&key_menu(&own));
+        assert!(l.contains(&"Add to Library".into()) && l.contains(&"Pin to Every Page".into()));
+        assert!(l.contains(&"Clear Key".into()));
+        let pinned_link = ulanzi_core::model::KeyInfo {
+            pinned: true,
+            library: Some(uuid::Uuid::nil()),
+            ..own.clone()
+        };
+        let l = labels(&key_menu(&pinned_link));
+        assert!(l.contains(&"Make a Copy".into()) && l.contains(&"Unpin".into()));
+        assert!(!l.contains(&"Clear Key".into()), "Unpin removes a pin");
+        let empty = ulanzi_core::model::KeyInfo { key: None, ..own };
+        assert!(!labels(&key_menu(&empty)).contains(&"Pin to Every Page".into()));
     }
 
     #[test]

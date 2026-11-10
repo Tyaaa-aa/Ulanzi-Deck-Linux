@@ -316,9 +316,13 @@ impl AppState {
             self.notify(Change::Macros);
         }
         self.notify(Change::Profile);
-        // An undo can take away the library dial picked in the tray.
+        // An undo can take away the library dial or key picked in the tray.
         let picked = *self.selected_library.borrow();
-        if picked.is_some_and(|id| self.editor.borrow().profile().library_dial(id).is_none()) {
+        let gone = |id| {
+            let e = self.editor.borrow();
+            e.profile().library_dial(id).is_none() && e.profile().library_key(id).is_none()
+        };
+        if picked.is_some_and(gone) {
             *self.selected_library.borrow_mut() = None;
             self.notify(Change::Selection);
         }
@@ -371,7 +375,7 @@ impl AppState {
         self.notify(Change::Selection);
     }
 
-    /// Pick library dial `id` (in the Library tray) instead of any slot.
+    /// Pick library dial or key `id` (in the Library tray) instead of any slot.
     pub fn select_library(&self, id: Uuid) {
         self.selection.borrow_mut().clear();
         *self.selected_library.borrow_mut() = Some(id);

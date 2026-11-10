@@ -15,7 +15,7 @@ use crate::ui::inspector::{
 };
 
 /// "Used on 1 page", "Used on N pages" or "Not placed".
-fn used_on(pages: usize) -> String {
+pub(super) fn used_on(pages: usize) -> String {
     match pages {
         0 => "Not placed".into(),
         1 => "Used on 1 page".into(),
@@ -69,6 +69,11 @@ pub fn usage_line(u: Usage) -> String {
 /// What deleting a library dial in use empties or unpins; `None` when nothing uses it (no need to
 /// ask).
 pub fn delete_body(u: Usage) -> Option<String> {
+    delete_body_for(u, "dial")
+}
+
+/// [`delete_body`] for a library `what` ("dial" or "key").
+pub fn delete_body_for(u: Usage, what: &str) -> Option<String> {
     let (and_pinned, and_pin) = if u.pinned {
         (" and pinned", " and the pin removed")
     } else {
@@ -78,10 +83,10 @@ pub fn delete_body(u: Usage) -> Option<String> {
         (false, 0) => None,
         (true, 0) => Some("It's pinned. The pin will be removed.".into()),
         (_, 1) => Some(format!(
-            "It's used on 1 page{and_pinned}. That dial will be empty{and_pin}."
+            "It's used on 1 page{and_pinned}. That {what} will be empty{and_pin}."
         )),
         (_, n) => Some(format!(
-            "It's used on {n} pages{and_pinned}. Those dials will be empty{and_pin}."
+            "It's used on {n} pages{and_pinned}. Those {what}s will be empty{and_pin}."
         )),
     }
 }
@@ -109,7 +114,7 @@ fn shown_name(n: u8, dial: &Dial) -> String {
 }
 
 /// Title, subtitle and an optional button at the top right; returns the title label too.
-fn header(title: &str, sub: &str, button: Option<gtk::Button>) -> (gtk::Box, gtk::Label) {
+pub(super) fn header(title: &str, sub: &str, button: Option<gtk::Button>) -> (gtk::Box, gtk::Label) {
     let titles = title_block(title, sub);
     titles.set_hexpand(true);
     let label = titles
@@ -126,7 +131,7 @@ fn header(title: &str, sub: &str, button: Option<gtk::Button>) -> (gtk::Box, gtk
 }
 
 /// The Name row; `rename` gets the text as it is typed.
-fn name_row(
+pub(super) fn name_row(
     placeholder: &str,
     name: &str,
     title: &gtk::Label,
@@ -192,7 +197,7 @@ fn zones(ctx: &C, path: &str, dial: &Dial, set: SetZone) -> adw::PreferencesGrou
 }
 
 /// A dim, wrapping line of text.
-fn note(text: &str) -> gtk::Label {
+pub(super) fn note(text: &str) -> gtk::Label {
     gtk::Label::builder()
         .label(text)
         .xalign(0.0)
