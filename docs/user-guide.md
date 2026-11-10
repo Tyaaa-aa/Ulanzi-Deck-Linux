@@ -67,6 +67,23 @@ Select a key to open its editor. The editor has four sections:
 When Held and Look are collapsed until opened, and stay open as you move between keys. **Clear Key**
 removes everything from the key.
 
+### Key library and pinned keys
+
+Keys join the same opt-in library as dials (see [Library tray](#library-tray)).
+
+- **Add to Library** (right-click menu, or the button under the key's title) moves the key into the
+  profile's key library, named after its label, or its action when the label shows a live value. It
+  stays linked on this page. A linked key shows a link badge, and editing it changes every key that
+  uses it. **Make a Copy** turns it back into this page's own key.
+- **Pin to Every Page** shows the key at its position on every page, folders included. Each page keeps
+  its own key underneath, and **Unpin** shows it again; a page that had no key there is empty again.
+  A pinned key has a pin badge, and editing it changes the pin. **Clear Key** is not offered on a
+  pinned key: unpin it instead. Adding keys skips pinned positions, and swapping a pinned key moves
+  its pin, with every page's own keys swapping underneath.
+- When this page has its own, different key under a pin, the editor says so under the buttons.
+- Copy and paste keep a link within the profile; pasting into another profile makes an own copy.
+  Pasting onto a pinned position replaces the pin, which stays pinned.
+
 ### Live state
 
 With **Show Live State** enabled (under Look), a key reflects the state of what it controls. A
@@ -281,8 +298,15 @@ The library is opt-in, like macros. A dial belongs to its page until you add it 
 
 ### Library tray
 
-The **Library** button in the header, next to Macros, opens the tray under the deck. It lists the
-library dials with their name and where they are used (pinned, a number of pages, or not placed).
+The **Library** button in the header, next to Macros, opens the tray under the deck. **Keys** and
+**Dials** switch between the two libraries; it opens on Dials when a dial is selected, else on Keys.
+Each tile shows the item's name and where it is used (pinned, a number of pages, or not placed).
+
+- Drag a library key onto a key on the deck to place it as a linked key, or drag a key from the deck
+  into the tray to add it. Select a library key to rename or delete it; to change its look or action,
+  edit any key that uses it. **Add a Key**, the last tile, says how keys are added. Right-click a
+  library key for **Copy**, **Paste** and **Delete from Library**; drag keys onto each other to
+  reorder them.
 
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.

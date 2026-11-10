@@ -5,6 +5,21 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Added
+
+- **Key library**, opt-in and in the same Library tray (a **Keys** tab next to **Dials**): **Add to
+  Library** makes a key shared by every page that uses it, **Make a Copy** gives a page its own copy
+  again. Drag library keys onto the deck to place them, drag deck keys into the tray to add them, drag
+  tiles to reorder, right-click for Copy, Paste and Delete. Library keys have their own name.
+- **Pin to Every Page** for keys, folders included; **Unpin** shows each page's own key again.
+- Keys show link and pin badges; the key menu and editor offer the library and pin actions.
+
+### Changed
+
+- Profiles that use the key library or pinned keys need Ulanzi Deck 2.6 or newer.
+- The note that a pin hides this page's own dial or small button shows only when that item differs
+  from the pin.
+
 ## [2.5.0] - 2026-11-10
 
 ### Added
