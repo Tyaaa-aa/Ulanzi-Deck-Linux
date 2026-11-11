@@ -320,11 +320,13 @@ you open it and again from **?**.
   picked tile; Ctrl+C, Ctrl+V and Delete do the same.
 - Copied library items paste onto the deck side by side, as links in the same profile and as own
   copies in another. Pasted in the tray, of this profile or another one, they become new library items
-  after the picked tile, numbered when the name is taken ("Lamp 2").
+  after the picked tile, numbered when the name is taken ("Lamp 2"). With nothing picked on the deck
+  or in the tray, Ctrl+V adds them at the end of the library. Their pictures come along to the other
+  profile.
 - Deleting library keys or dials that are in use asks what happens to the keys or dials using them (the
   count is shown): keep them as their own copies, or delete them too. One Undo brings it all back.
-- A search box appears once a library fills more than one page. It finds items by name, label or what
-  they do.
+- A search box appears once a library fills more than one page. It finds items by anything in them:
+  name, label, what they do, the plugin or macro they use, and sound, picture and app names.
 
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.

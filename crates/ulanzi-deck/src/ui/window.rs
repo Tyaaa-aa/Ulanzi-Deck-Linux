@@ -499,7 +499,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
         });
     }
 
-    install_actions(&window, state, panel.back_to_key.clone());
+    install_actions(&window, state, panel.back_to_key.clone(), canvas.tray.clone());
     Window { window, inner_split }
 }
 
@@ -511,7 +511,12 @@ fn selected_dial(state: &State) -> Option<u8> {
     }
 }
 
-fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: Rc<dyn Fn() -> bool>) {
+fn install_actions(
+    window: &adw::ApplicationWindow,
+    state: &State,
+    back_to_key: Rc<dyn Fn() -> bool>,
+    tray: Rc<crate::ui::library_tray::Tray>,
+) {
     let action = |name: &str, f: Box<dyn Fn()>| {
         let a = gio::SimpleAction::new(name, None);
         a.connect_activate(move |_, _| f());
@@ -563,7 +568,21 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
             }
             let at = s.selection.borrow().keys().first().copied();
             if let Some(at) = at {
-                s.edit(|e| e.paste_keys(at));
+                return s.edit(|e| e.paste_keys(at));
+            }
+            // Nothing picked: library tiles go back into the library as new items.
+            if tray.paste_new() {
+                return;
+            }
+            let copied = {
+                let e = s.editor.borrow();
+                e.has_keys_clip() || e.has_dial_clip()
+            };
+            if copied {
+                crate::ui::toast(
+                    &s,
+                    "Pick a key or dial to paste onto, or a library tile to paste after.",
+                );
             }
         }),
     );

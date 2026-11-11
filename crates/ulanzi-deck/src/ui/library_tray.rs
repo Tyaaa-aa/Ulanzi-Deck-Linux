@@ -7,7 +7,7 @@ use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use ulanzi_core::model::{Action, LibraryDial, LibraryKey, Usage};
+use ulanzi_core::model::{Action, LibraryDial, LibraryKey, MacroLibrary, Usage};
 use uuid::Uuid;
 
 use crate::state::{Change, LibraryKind, State};
@@ -88,29 +88,57 @@ impl Entry {
         }
     }
 
-    /// Whether the search `query` (lowercase) finds it: by name, label, or what it does.
-    fn matches(&self, query: &str) -> bool {
-        let (texts, actions): (Vec<&str>, Vec<Option<&Action>>) = match self {
-            Entry::Key(k) => (
-                vec![&k.name, &k.key.look.label.text],
-                vec![k.key.tap.as_ref(), k.key.hold.as_ref()],
-            ),
-            Entry::Dial(d) => (
-                vec![&d.dial.name],
-                vec![
-                    d.dial.press.as_ref(),
-                    d.dial.left.as_ref(),
-                    d.dial.right.as_ref(),
-                    d.dial.hold.as_ref(),
-                ],
-            ),
+    /// Whether the search `query` (lowercase) finds it: by any text in it (name, labels, file and
+    /// picture names, commands, plugin settings), or by what its actions are called, the plugins
+    /// they come from and the macros they run.
+    fn matches(&self, query: &str, plugins: &crate::plugins::Plugins, macros: &MacroLibrary) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let value = match self {
+            Entry::Key(k) => serde_json::to_value(k),
+            Entry::Dial(d) => serde_json::to_value(d),
         };
-        let found = |t: &str| t.to_lowercase().contains(query);
-        texts.into_iter().any(found)
-            || actions.into_iter().flatten().any(|a| {
-                found(&ulanzi_core::catalog::describe(a))
-                    || ulanzi_core::catalog::spec_for(a).is_some_and(|s| found(s.title))
-            })
+        let mut words = Vec::new();
+        if let Ok(v) = value {
+            search_words(&v, plugins, macros, &mut words);
+        }
+        words.iter().any(|w| w.to_lowercase().contains(query))
+    }
+}
+
+/// Every text in `v`, and for each action in it (a cycle's steps too) its title, its summary,
+/// its plugin's name and its macro's name.
+fn search_words(
+    v: &serde_json::Value,
+    plugins: &crate::plugins::Plugins,
+    macros: &MacroLibrary,
+    out: &mut Vec<String>,
+) {
+    match v {
+        serde_json::Value::String(t) => out.push(t.clone()),
+        serde_json::Value::Array(a) => a.iter().for_each(|v| search_words(v, plugins, macros, out)),
+        serde_json::Value::Object(m) => {
+            if m.get("type").is_some_and(|t| t.is_string())
+                && let Ok(a) = serde_json::from_value::<Action>(v.clone())
+            {
+                out.push(plugins.describe(&a));
+                if let Some(spec) = ulanzi_core::catalog::spec_for(&a) {
+                    out.push(spec.title.to_string());
+                }
+                match &a {
+                    Action::Plugin { plugin, .. } => out.push(plugins.plugin_name(plugin)),
+                    Action::Macro { id, own } => {
+                        if let Some(m) = own.as_deref().or_else(|| macros.get(*id)) {
+                            out.push(m.name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            m.values().for_each(|v| search_words(v, plugins, macros, out));
+        }
+        _ => {}
     }
 }
 
@@ -822,7 +850,12 @@ impl Tray {
         // Search once there is more than a page, and while a search is typed.
         let query = self.query.borrow().clone();
         self.search.set_visible(now.len() > PER_PAGE || !query.is_empty());
-        let now: Vec<(Entry, Usage)> = now.into_iter().filter(|(l, _)| l.matches(&query)).collect();
+        let now: Vec<(Entry, Usage)> = {
+            let (plugins, e) = (self.state.plugins.borrow(), self.state.editor.borrow());
+            now.into_iter()
+                .filter(|(l, _)| l.matches(&query, &plugins, e.library()))
+                .collect()
+        };
         if *self.drawn.borrow() == now && !self.grids.borrow().is_empty() {
             return;
         }
@@ -966,22 +999,14 @@ impl Tray {
             Entry::Dial(_) => Tab::Dials,
             Entry::Key(_) => Tab::Keys,
         };
+        // Ctrl-click adds or takes out one item, Shift-click picks a run of them (held keys read
+        // as on the deck).
         {
             let state = self.state.clone();
-            button.connect_clicked(move |_| state.select_library(id));
-        }
-        // Ctrl-click adds or takes out one item, Shift-click picks a run of them.
-        {
-            let state = self.state.clone();
-            let click = gtk::GestureClick::builder().button(1).build();
-            click.set_propagation_phase(gtk::PropagationPhase::Capture);
-            click.connect_pressed(move |g, _, _, _| {
-                let mods = g.current_event_state();
-                if mods.contains(gdk::ModifierType::CONTROL_MASK) {
-                    g.set_state(gtk::EventSequenceState::Claimed);
-                    state.toggle_library(id);
-                } else if mods.contains(gdk::ModifierType::SHIFT_MASK) {
-                    g.set_state(gtk::EventSequenceState::Claimed);
+            button.connect_clicked(move |b| match canvas::select_op(canvas::modifiers(b)) {
+                canvas::SelectOp::Only => state.select_library(id),
+                canvas::SelectOp::Toggle => state.toggle_library(id),
+                canvas::SelectOp::Range => {
                     let order: Vec<Uuid> = {
                         let e = state.editor.borrow();
                         match kind {
@@ -992,7 +1017,6 @@ impl Tray {
                     state.extend_library(id, &order);
                 }
             });
-            button.add_controller(click);
         }
         // Drag it onto the deck to place it there.
         let source = gtk::DragSource::builder().actions(gdk::DragAction::COPY).build();
@@ -1193,6 +1217,52 @@ impl Tray {
             t.state.select_library(id);
         });
         button
+    }
+
+    /// Ctrl+V with nothing picked on the deck or here, after copying library tiles: they go in
+    /// at the end of their library, which opens on them, picked. False when what was copied did
+    /// not come from the library.
+    pub fn paste_new(&self) -> bool {
+        let (keys, from_library) = {
+            let e = self.state.editor.borrow();
+            (e.has_keys_clip(), e.clip_from_library())
+        };
+        let tab = if keys { Tab::Keys } else { Tab::Dials };
+        if !from_library || (tab == Tab::Dials && !self.with_dials()) {
+            return false;
+        }
+        let mut new = Vec::new();
+        self.state.edit(|e| {
+            new = match tab {
+                Tab::Keys => e.paste_into_key_library(None),
+                Tab::Dials => e.paste_into_dial_library(None),
+            }
+        });
+        let Some(&first) = new.first() else {
+            return true;
+        };
+        // The new items show, whatever was searched for.
+        if !self.query.borrow().is_empty() {
+            self.query.borrow_mut().clear();
+            self.search.set_text("");
+            self.drawn.borrow_mut().clear();
+            self.items.borrow_mut().clear();
+        }
+        self.open(tab);
+        self.refresh();
+        let items = {
+            let e = self.state.editor.borrow();
+            match tab {
+                Tab::Keys => e.profile().key_library.len(),
+                Tab::Dials => e.profile().dial_library.len(),
+            }
+        };
+        self.go((items - new.len()) / PER_PAGE);
+        self.state.select_library(first);
+        for id in &new[1..] {
+            self.state.toggle_library(*id);
+        }
+        true
     }
 
     /// Ring the picked library items.
@@ -1447,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn search_shows_past_one_page_and_finds_by_name_label_or_action() {
+    fn search_shows_past_one_page_and_finds_by_anything_in_a_key() {
         crate::ui::with_gtk(|| {
             let (state, t) = tray_with(ulanzi_core::model::Model::D200X);
             t.open(Tab::Keys);
@@ -1456,6 +1526,23 @@ mod tests {
             state.edit(|e| {
                 e.rename_library_key(ids[0], "Lamp");
                 e.set_library_key(ids[1], |k| k.tap = Some(Action::NextPage));
+                e.set_library_key(ids[2], |k| {
+                    k.tap = Some(Action::PlaySound {
+                        path: "/home/me/sounds/Scream.ogg".into(),
+                        device: None,
+                        volume: 100,
+                    });
+                    k.hold = Some(Action::Plugin {
+                        plugin: "obs".into(),
+                        action: "scene".into(),
+                        params: toml::Table::new(),
+                    });
+                });
+                e.set_library_key(ids[3], |k| {
+                    k.look.source = ulanzi_core::model::ImageSource::Image {
+                        path: "icons/cat.png".into(),
+                    }
+                });
             });
             t.refresh();
             assert!(!t.search.is_visible(), "one page");
@@ -1472,10 +1559,43 @@ mod tests {
             t.drawn.borrow_mut().clear();
             t.refresh();
             assert_eq!(t.items.borrow()[0].id, ids[1]);
+            // A sound file, a plugin, a picture.
+            for (q, id) in [("scream", ids[2]), ("obs", ids[2]), ("cat.png", ids[3])] {
+                *t.query.borrow_mut() = q.into();
+                t.drawn.borrow_mut().clear();
+                t.refresh();
+                assert_eq!((t.count(), t.items.borrow()[0].id), (1, id), "{q}");
+            }
             *t.query.borrow_mut() = "nothing like it".into();
             t.drawn.borrow_mut().clear();
             t.refresh();
             assert_eq!(t.count(), 0);
+        });
+    }
+
+    #[test]
+    fn paste_with_nothing_picked_adds_library_tiles_back_to_the_library() {
+        crate::ui::with_gtk(|| {
+            let (state, t) = tray_with(ulanzi_core::model::Model::D200X);
+            let id = state.editor.borrow_mut().new_library_key();
+            state.select_library(id);
+            assert!(copy_picked(&state));
+            state.select(|s| s.clear());
+            assert!(t.paste_new());
+            let lib: Vec<Uuid> = state
+                .editor
+                .borrow()
+                .profile()
+                .key_library
+                .iter()
+                .map(|l| l.id)
+                .collect();
+            assert_eq!(lib.len(), 2);
+            assert!(t.is_open());
+            assert_eq!(state.library_selection(), vec![lib[1]]);
+            // Keys copied from the deck are not the library's to take.
+            state.editor.borrow_mut().copy_keys(&[0]);
+            assert!(!t.paste_new());
         });
     }
 

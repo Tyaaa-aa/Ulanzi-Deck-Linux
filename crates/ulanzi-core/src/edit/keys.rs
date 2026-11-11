@@ -342,6 +342,7 @@ impl Editor {
             self.clipboard = Some(Clip::Keys {
                 items,
                 profile: self.profile.id,
+                library: true,
             });
         }
     }

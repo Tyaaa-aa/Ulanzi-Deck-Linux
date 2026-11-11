@@ -484,3 +484,40 @@ fn library_keys_copy_into_another_profile_and_delete_together() {
     assert!(e.undo());
     assert_eq!(e.profile().key_library.len(), 2);
 }
+
+#[test]
+fn copied_pictures_come_along_to_another_profile() {
+    let mut k = labelled("Scream", Action::NextPage);
+    k.look.source = ImageSource::Image {
+        path: "icons/aa.png".into(),
+    };
+    k.look.states.push(LookState {
+        when: When {
+            value: "{x}".into(),
+            is: vec!["on".into()],
+            not: vec![],
+        },
+        look: LookOverride {
+            source: Some(ImageSource::Image {
+                path: "icons/bb.gif".into(),
+            }),
+            ..LookOverride::default()
+        },
+    });
+    let mut p = Profile::new_default("K", Model::D200X);
+    p.pages[0].keys.insert(1, k);
+    let mut e = Editor::new(p);
+    let id = e.add_key_to_library(1).expect("added");
+    e.copy_library_keys(&[id]);
+    let clip = e.take_clipboard();
+    assert_eq!(clip.images(), vec!["icons/aa.png", "icons/bb.gif"]);
+
+    let d = tempfile::tempdir().expect("dir");
+    let (from, to) = (d.path().join("a"), d.path().join("b"));
+    std::fs::create_dir_all(from.join("icons")).expect("dir");
+    std::fs::write(from.join("icons/aa.png"), b"png").expect("write");
+    std::fs::write(from.join("icons/bb.gif"), b"gif").expect("write");
+    clip.bring_images(&from, &to);
+    assert_eq!(std::fs::read(to.join("icons/aa.png")).expect("copied"), b"png");
+    assert_eq!(std::fs::read(to.join("icons/bb.gif")).expect("copied"), b"gif");
+}

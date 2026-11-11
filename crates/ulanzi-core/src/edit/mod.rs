@@ -183,6 +183,8 @@ enum Clip {
     Keys {
         items: Vec<ClipKey>,
         profile: uuid::Uuid,
+        /// Copied from library tiles, not from the deck.
+        library: bool,
     },
     Style(KeyLook),
     /// Dials as they show, with their links kept, and the profile they came from. Library dials
@@ -190,6 +192,7 @@ enum Clip {
     Dials {
         dials: Vec<Dial>,
         profile: uuid::Uuid,
+        library: bool,
     },
 }
 
@@ -207,6 +210,66 @@ struct ClipKey {
 /// [`Editor::take_clipboard`]).
 #[derive(Debug, Clone, Default)]
 pub struct Clipboard(Option<Clip>);
+
+impl Clipboard {
+    /// Pictures the copied keys show, as paths inside their profile's folder.
+    pub fn images(&self) -> Vec<String> {
+        let value = match &self.0 {
+            Some(Clip::Keys { items, .. }) => {
+                serde_json::to_value(items.iter().flat_map(|c| [&c.raw, &c.key]).collect::<Vec<_>>())
+            }
+            Some(Clip::Style(look)) => serde_json::to_value(look),
+            _ => return Vec::new(),
+        };
+        let mut paths = Vec::new();
+        if let Ok(v) = value {
+            image_paths(&v, &mut paths);
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// Copy the pictures the copied keys show from profile folder `from` into `to`, so they
+    /// still show there once pasted. Pictures are named by their content, so one already there
+    /// is the same picture.
+    pub fn bring_images(&self, from: &std::path::Path, to: &std::path::Path) {
+        if from == to {
+            return;
+        }
+        for rel in self.images() {
+            let (src, dest) = (from.join(&rel), to.join(&rel));
+            if dest.exists() || !src.is_file() {
+                continue;
+            }
+            if let Some(dir) = dest.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if let Err(e) = std::fs::copy(&src, &dest) {
+                tracing::warn!("could not copy {}: {e}", src.display());
+            }
+        }
+    }
+}
+
+/// Every `{ kind = "image", path }` in `v`: a key keeps pictures in its look, its state looks and
+/// its cycle steps.
+fn image_paths(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(m) => {
+            if m.get("kind").and_then(|k| k.as_str()) == Some("image")
+                && let Some(p) = m.get("path").and_then(|p| p.as_str())
+                && !p.contains("..")
+                && !std::path::Path::new(p).is_absolute()
+            {
+                out.push(p.to_string());
+            }
+            m.values().for_each(|v| image_paths(v, out));
+        }
+        serde_json::Value::Array(a) => a.iter().for_each(|v| image_paths(v, out)),
+        _ => {}
+    }
+}
 
 /// `base`, or `base 2`, `base 3`... when `taken` has it already.
 fn unique_name<'a>(base: &str, taken: impl Iterator<Item = &'a str> + Clone) -> String {
@@ -709,12 +772,16 @@ impl Editor {
                 })
             })
             .collect();
-        self.clipboard = Some(Clip::Keys { items, profile: p.id });
+        self.clipboard = Some(Clip::Keys {
+            items,
+            profile: p.id,
+            library: false,
+        });
     }
 
     /// Paste copied keys starting at `at`, keeping their spacing; keys past the last slot are dropped.
     pub fn paste_keys(&mut self, at: u8) {
-        let Some(Clip::Keys { items, profile }) = self.clipboard.clone() else {
+        let Some(Clip::Keys { items, profile, .. }) = self.clipboard.clone() else {
             return;
         };
         // A link stays a link in the profile it was copied from while its library key is there.
@@ -766,6 +833,15 @@ impl Editor {
 
     pub fn has_keys_clip(&self) -> bool {
         matches!(self.clipboard, Some(Clip::Keys { .. }))
+    }
+
+    /// Whether what was copied came from library tiles (keys or dials), so it pastes back into
+    /// the library when nothing is picked to paste onto.
+    pub fn clip_from_library(&self) -> bool {
+        matches!(
+            self.clipboard,
+            Some(Clip::Keys { library: true, .. }) | Some(Clip::Dials { library: true, .. })
+        )
     }
 
     /// Take what was copied, to hand to the next profile's editor with

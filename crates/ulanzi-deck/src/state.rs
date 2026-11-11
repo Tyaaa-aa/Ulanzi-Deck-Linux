@@ -457,6 +457,13 @@ impl AppState {
         let library = self.editor.borrow().library().clone();
         // What was copied in one profile pastes in the next.
         let clip = self.editor.borrow_mut().take_clipboard();
+        // Copied pictures live in the old profile's folder; the next profile needs its own copy.
+        if let Ok(store) = ulanzi_core::store::Store::xdg() {
+            clip.bring_images(
+                &store.profile_dir(self.profile_id()),
+                &store.profile_dir(profile.id),
+            );
+        }
         let mut editor = Editor::new(profile);
         editor.set_clipboard(clip);
         editor.set_library(library);

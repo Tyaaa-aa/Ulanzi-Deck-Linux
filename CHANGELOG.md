@@ -24,7 +24,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   key identical to a library key links to it instead of adding a duplicate.
 - Several library items can be picked in the tray (Ctrl-click, Shift-click, Ctrl+A) and copied, pasted
   or deleted together, from the right-click menu or with Ctrl+C, Ctrl+V and Delete.
-- Search in the Library tray once a library has more than one page.
+- Search in the Library tray once a library has more than one page. It matches anything in an item:
+  names, labels, action titles, plugin and macro names, file and picture names, commands and plugin
+  settings.
+- Ctrl+V with nothing picked adds copied library items at the end of the library.
 
 ### Changed
 
@@ -37,7 +40,7 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Paste in the Library tray adds the copied items as new library items after the picked one (named
   "<name> 2" when taken) instead of replacing the picked dial.
 - The clipboard is kept when switching profiles, so keys, dials and library items copy into another
-  profile.
+  profile. Pictures used by copied keys are copied into the other profile's folder.
 
 ## [2.5.0] - 2026-11-10
 

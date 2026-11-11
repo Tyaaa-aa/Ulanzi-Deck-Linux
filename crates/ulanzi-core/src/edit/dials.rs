@@ -319,6 +319,7 @@ impl Editor {
                 ..info.dial
             }],
             profile: self.profile.id,
+            library: false,
         });
     }
 
@@ -326,7 +327,7 @@ impl Editor {
     /// dropped. A link stays a link in the profile it was copied from while its library dial is
     /// there; anywhere else it pastes as an own copy.
     pub fn paste_dial(&mut self, n: u8) {
-        let Some(Clip::Dials { dials, profile }) = self.clipboard.clone() else {
+        let Some(Clip::Dials { dials, profile, .. }) = self.clipboard.clone() else {
             return;
         };
         let same = profile == self.profile.id;
@@ -374,6 +375,7 @@ impl Editor {
             self.clipboard = Some(Clip::Dials {
                 dials,
                 profile: self.profile.id,
+                library: true,
             });
         }
     }

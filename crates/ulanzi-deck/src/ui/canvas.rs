@@ -179,7 +179,7 @@ fn drag_key(k: &KeyWidget, n: u8) {
     k.button.add_controller(source);
 }
 
-fn modifiers(w: &impl IsA<gtk::Widget>) -> gdk::ModifierType {
+pub(crate) fn modifiers(w: &impl IsA<gtk::Widget>) -> gdk::ModifierType {
     w.display()
         .default_seat()
         .and_then(|s| s.keyboard())
