@@ -188,6 +188,36 @@ impl Profile {
                 .sum::<usize>()
     }
 
+    /// The page's own key `n` when a pin hides it: `None` unpinned, and `None` when the page's key
+    /// works the same as the pin (both link the same library key, or both are alike).
+    pub fn covered_key(&self, page: usize, n: u8) -> Option<Key> {
+        let pin = self.pinned.keys.get(&n)?;
+        let own = self.pages.get(page)?.keys.get(&n)?;
+        let resolve = |k: &Key| match k.library {
+            Some(id) => self.library_key(id).map(|l| l.key.clone()),
+            None => Some(k.clone()),
+        };
+        let mine = resolve(own)?;
+        (pin.library.is_none() || pin.library != own.library)
+            .then_some(mine)
+            .filter(|m| Some(m) != resolve(pin).as_ref())
+    }
+
+    /// The page's own dial `n` when a pin hides it, as [`Profile::covered_key`]; blank dials too
+    /// count as nothing hidden.
+    pub fn covered_dial(&self, page: usize, n: u8) -> Option<Dial> {
+        let pin = self.pinned.dials.get(&n)?;
+        let own = self.pages.get(page)?.dials.get(n as usize)?;
+        let resolve = |d: &Dial| match d.library {
+            Some(id) => self.library_dial(id).map(|l| l.dial.clone()),
+            None => Some(d.clone()),
+        };
+        let mine = resolve(own).filter(|d| !d.is_empty())?;
+        (pin.library.is_none() || pin.library != own.library)
+            .then_some(mine)
+            .filter(|m| Some(m) != resolve(pin).as_ref())
+    }
+
     pub fn library_dial(&self, id: Uuid) -> Option<&LibraryDial> {
         self.dial_library.iter().find(|d| d.id == id)
     }

@@ -66,17 +66,18 @@ pub fn usage_line(u: Usage) -> String {
     }
 }
 
-/// The question when deleting a library `what` ("dial" or "key") that `uses` controls use:
-/// (body, label of the button that deletes them too). `None` when nothing uses it.
-pub fn delete_question(uses: usize, what: &str) -> Option<(String, String)> {
+/// The question when deleting `items` library `what`s ("dial" or "key") that `uses` controls
+/// use: (body, label of the button that deletes them too). `None` when nothing uses them.
+pub fn delete_question(uses: usize, what: &str, items: usize) -> Option<(String, String)> {
+    let it = if items == 1 { "it" } else { "them" };
     match uses {
         0 => None,
         1 => Some((
-            format!("1 {what} uses it. Keep that {what} as it is, or delete it too?"),
+            format!("1 {what} uses {it}. Keep that {what} as it is, or delete it too?"),
             format!("Delete the {}", title_case(what)),
         )),
         n => Some((
-            format!("{n} {what}s use it. Keep those {what}s as they are, or delete them too?"),
+            format!("{n} {what}s use {it}. Keep those {what}s as they are, or delete them too?"),
             format!("Delete All {n} {}s", title_case(what)),
         )),
     }
@@ -89,12 +90,12 @@ fn title_case(what: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Delete a library item named `name`, asking first (over `parent`) when `uses` controls use it:
-/// `keep` leaves them as copies of their own, `all` deletes them too.
+/// Delete library items, asking first (over `parent`) when `uses` controls use them: `keep`
+/// leaves those as copies of their own, `all` deletes them too. `names` are the items' names.
 pub(crate) fn ask_delete(
     state: &State,
     parent: &impl IsA<gtk::Widget>,
-    name: &str,
+    names: &[String],
     what: &str,
     uses: usize,
     keep: impl Fn(&mut Editor) + 'static,
@@ -108,12 +109,16 @@ pub(crate) fn ask_delete(
             state.select(|s| s.clear());
         }
     };
-    let Some((body, delete_all)) = delete_question(uses, what) else {
+    let Some((body, delete_all)) = delete_question(uses, what, names.len()) else {
         done(&all);
         return;
     };
+    let subject = match names {
+        [name] => format!("“{name}”"),
+        _ => format!("{} {}s", names.len(), title_case(what)),
+    };
     let alert = adw::AlertDialog::builder()
-        .heading(format!("Delete “{name}” From the Library?"))
+        .heading(format!("Delete {subject} From the Library?"))
         .body(body)
         .default_response("cancel")
         .close_response("cancel")
@@ -351,14 +356,8 @@ pub(super) fn dial_view(ctx: &C, content: &gtk::Box, d: u8) -> View {
         let info = e.dial_info(d);
         let usage = info.library.map(|id| e.profile().dial_usage(id));
         let p = e.profile();
-        let own = p.pages.get(e.page()).map(|pg| &pg.dials[d as usize]);
-        // Only when unpinning would show something else; a link shows its library dial.
-        let covered = own
-            .filter(|o| !o.is_empty() && Some(*o) != p.pinned.dials.get(&d))
-            .and_then(|o| match o.library {
-                Some(id) => p.library_dial(id).map(|l| l.dial.clone()),
-                None => Some(o.clone()),
-            });
+        // Only when unpinning would show something else.
+        let covered = p.covered_dial(e.page(), d);
         (info, usage, p.dial_library.is_empty(), covered)
     };
     // A pin covers the page's dials even when blank: it keeps its Unpin.
@@ -686,7 +685,7 @@ pub(super) fn library_view(ctx: &C, content: &gtk::Box, id: Uuid) -> View {
     delete.add_css_class("destructive-action");
     {
         let state = state.clone();
-        delete.connect_activated(move |row| delete_library_dial(&state, id, row));
+        delete.connect_activated(move |row| delete_library_dials(&state, vec![id], row));
     }
     let list = gtk::ListBox::builder()
         .selection_mode(gtk::SelectionMode::None)
@@ -697,22 +696,29 @@ pub(super) fn library_view(ctx: &C, content: &gtk::Box, id: Uuid) -> View {
     view
 }
 
-/// Delete library dial `id`, asking first (over `parent`) what happens to the dials using it.
-pub(crate) fn delete_library_dial(state: &State, id: Uuid, parent: &impl IsA<gtk::Widget>) {
-    let (name, uses) = {
+/// Delete library dials `ids`, asking first (over `parent`) what happens to the dials using them.
+pub(crate) fn delete_library_dials(state: &State, ids: Vec<Uuid>, parent: &impl IsA<gtk::Widget>) {
+    let (names, uses) = {
         let e = state.editor.borrow();
         let p = e.profile();
-        let Some(lib) = p.library_dial(id) else { return };
-        (shown_name(0, &lib.dial), p.dial_uses(id))
+        let names: Vec<String> = ids
+            .iter()
+            .filter_map(|id| p.library_dial(*id).map(|l| shown_name(0, &l.dial)))
+            .collect();
+        (names, ids.iter().map(|id| p.dial_uses(*id)).sum())
     };
+    if names.is_empty() {
+        return;
+    }
+    let keep = ids.clone();
     ask_delete(
         state,
         parent,
-        &name,
+        &names,
         "dial",
         uses,
-        move |e| e.delete_library_dial_keep_uses(id),
-        move |e| e.delete_library_dial(id),
+        move |e| e.delete_library_dials_keep_uses(&keep),
+        move |e| e.delete_library_dials(&ids),
     );
 }
 
@@ -831,18 +837,19 @@ mod tests {
         assert_eq!(usage_line(u(2, false)), "Used on 2 pages");
         assert_eq!(usage_line(u(0, true)), "Pinned");
         assert_eq!(usage_line(u(1, true)), "Used on 1 page · Pinned");
-        assert_eq!(delete_question(0, "key"), None);
+        assert_eq!(delete_question(0, "key", 1), None);
         assert_eq!(
-            delete_question(1, "key"),
+            delete_question(1, "key", 1),
             Some((
                 "1 key uses it. Keep that key as it is, or delete it too?".into(),
                 "Delete the Key".into()
             ))
         );
         assert_eq!(
-            delete_question(4, "dial").map(|q| q.1).as_deref(),
+            delete_question(4, "dial", 2).map(|q| q.1).as_deref(),
             Some("Delete All 4 Dials")
         );
+        assert!(delete_question(4, "dial", 2).is_some_and(|q| q.0.starts_with("4 dials use them.")));
     }
 
     fn state() -> crate::state::State {

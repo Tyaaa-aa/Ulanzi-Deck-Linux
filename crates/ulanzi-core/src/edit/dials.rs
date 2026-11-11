@@ -250,33 +250,50 @@ impl Editor {
         });
     }
 
-    /// Delete library dial `id`; the page dials linked to it become blank, and a pin linked to it
-    /// is removed so each page shows its own dial again.
     /// Take library dial `id` out of the library but keep every dial that uses it, each as its own
     /// copy, a pin too.
     pub fn delete_library_dial_keep_uses(&mut self, id: Uuid) {
-        let Some(lib) = self.profile.library_dial(id).map(|l| l.dial.clone()) else {
+        self.delete_library_dials_keep_uses(&[id]);
+    }
+
+    /// [`Editor::delete_library_dial_keep_uses`] for each of `ids`, as one undo step.
+    pub fn delete_library_dials_keep_uses(&mut self, ids: &[Uuid]) {
+        let libs: Vec<(Uuid, Dial)> = ids
+            .iter()
+            .filter_map(|id| self.profile.library_dial(*id).map(|l| (*id, l.dial.clone())))
+            .collect();
+        if libs.is_empty() {
             return;
-        };
+        }
         self.edit(|p, _| {
-            p.dial_library.retain(|l| l.id != id);
+            p.dial_library.retain(|l| !ids.contains(&l.id));
             let dials = p
                 .pinned
                 .dials
                 .values_mut()
                 .chain(p.pages.iter_mut().flat_map(|pg| pg.dials.iter_mut()));
-            for d in dials.filter(|d| d.library == Some(id)) {
-                *d = lib.clone();
+            for d in dials {
+                if let Some((_, lib)) = libs.iter().find(|(id, _)| d.library == Some(*id)) {
+                    *d = lib.clone();
+                }
             }
         });
     }
 
+    /// Delete library dial `id`; the page dials linked to it become blank, and a pin linked to it
+    /// is removed so each page shows its own dial again.
     pub fn delete_library_dial(&mut self, id: Uuid) {
+        self.delete_library_dials(&[id]);
+    }
+
+    /// [`Editor::delete_library_dial`] for each of `ids`, as one undo step.
+    pub fn delete_library_dials(&mut self, ids: &[Uuid]) {
+        let gone = |d: &Dial| d.library.is_some_and(|id| ids.contains(&id));
         self.edit(|p, _| {
-            p.dial_library.retain(|l| l.id != id);
-            p.pinned.dials.retain(|_, d| d.library != Some(id));
+            p.dial_library.retain(|l| !ids.contains(&l.id));
+            p.pinned.dials.retain(|_, d| !gone(d));
             for d in p.pages.iter_mut().flat_map(|pg| pg.dials.iter_mut()) {
-                if d.library == Some(id) {
+                if gone(d) {
                     *d = Dial::default();
                 }
             }
@@ -296,78 +313,107 @@ impl Editor {
             return;
         }
         let info = self.dial_info(n);
-        self.clipboard = Some(Clip::Dial {
-            dial: Dial {
+        self.clipboard = Some(Clip::Dials {
+            dials: vec![Dial {
                 library: info.library,
                 ..info.dial
-            },
+            }],
             profile: self.profile.id,
         });
     }
 
-    /// Paste at `n` (over a pin when pinned). A link stays a link in the profile it was copied from
-    /// while its library dial is there; anywhere else it pastes as an own copy.
+    /// Paste at `n` and the dials after it (over a pin when pinned); dials past the last are
+    /// dropped. A link stays a link in the profile it was copied from while its library dial is
+    /// there; anywhere else it pastes as an own copy.
     pub fn paste_dial(&mut self, n: u8) {
-        let Some(Clip::Dial { dial, profile }) = self.clipboard.clone() else {
+        let Some(Clip::Dials { dials, profile }) = self.clipboard.clone() else {
             return;
         };
-        if !self.dial_free(n) {
+        let same = profile == self.profile.id;
+        let dials: Vec<(u8, Dial)> = dials
+            .into_iter()
+            .zip(n..DIALS)
+            .filter(|(_, at)| self.dial_free(*at))
+            .map(|(dial, at)| {
+                let dial = match dial.library {
+                    Some(id) if same && self.profile.library_dial(id).is_some() => linked(id),
+                    _ => Dial {
+                        library: None,
+                        ..dial
+                    },
+                };
+                (at, dial)
+            })
+            .collect();
+        if dials.is_empty() {
             return;
         }
-        let dial = match dial.library {
-            Some(id) if profile == self.profile.id && self.profile.library_dial(id).is_some() => linked(id),
-            _ => Dial {
-                library: None,
-                ..dial
-            },
-        };
         self.edit(|p, page| {
-            if let Some(spot) = dial_spot(p, page, n) {
-                *spot = dial;
+            for (at, dial) in dials {
+                if let Some(spot) = dial_spot(p, page, at) {
+                    *spot = dial;
+                }
             }
         });
     }
 
-    /// Copy library dial `id` (from the Library tray); it pastes as a link in this profile.
-    pub fn copy_library_dial(&mut self, id: Uuid) {
-        let Some(lib) = self.profile.library_dial(id) else {
-            return;
-        };
-        self.clipboard = Some(Clip::Dial {
-            dial: Dial {
-                library: Some(id),
-                ..lib.dial.clone()
-            },
-            profile: self.profile.id,
-        });
-    }
-
-    /// Paste over library dial `id`: it takes the copied dial's contents and keeps its id, so its
-    /// links show the pasted dial. A nameless dial keeps the old name.
-    pub fn paste_library_dial(&mut self, id: Uuid) {
-        let Some(Clip::Dial { dial, .. }) = self.clipboard.clone() else {
-            return;
-        };
-        let Some(old) = self.profile.library_dial(id) else {
-            return;
-        };
-        if dial.library == Some(id) {
-            return;
+    /// Copy library dials `ids` (from the Library tray), in library order; they paste as links in
+    /// this profile.
+    pub fn copy_library_dials(&mut self, ids: &[Uuid]) {
+        let dials: Vec<Dial> = self
+            .profile
+            .dial_library
+            .iter()
+            .filter(|l| ids.contains(&l.id))
+            .map(|l| Dial {
+                library: Some(l.id),
+                ..l.dial.clone()
+            })
+            .collect();
+        if !dials.is_empty() {
+            self.clipboard = Some(Clip::Dials {
+                dials,
+                profile: self.profile.id,
+            });
         }
-        let name = match dial.name.trim() {
-            "" => old.dial.name.clone(),
-            n => n.to_string(),
+    }
+
+    /// Paste the copied dials into the library as new library dials, after library dial `after`
+    /// (else at the end). A name the library has already gets a number. Returns the new dials.
+    pub fn paste_into_dial_library(&mut self, after: Option<Uuid>) -> Vec<Uuid> {
+        let Some(Clip::Dials { dials, .. }) = self.clipboard.clone() else {
+            return Vec::new();
         };
-        self.set_library_dial(id, |d| {
-            *d = Dial {
-                library: None,
-                name,
-                ..dial
+        let at = after
+            .and_then(|id| self.profile.dial_library.iter().position(|l| l.id == id))
+            .map_or(self.profile.dial_library.len(), |i| i + 1);
+        let mut ids = Vec::new();
+        self.edit(|p, _| {
+            for (i, dial) in dials.into_iter().enumerate() {
+                let base = match dial.name.trim() {
+                    "" => "Dial".to_string(),
+                    n => n.to_string(),
+                };
+                let name = super::unique_name(&base, p.dial_library.iter().map(|l| l.dial.name.as_str()));
+                let id = Uuid::new_v4();
+                p.dial_library.insert(
+                    at + i,
+                    LibraryDial {
+                        id,
+                        dial: Dial {
+                            library: None,
+                            name,
+                            ..dial
+                        },
+                    },
+                );
+                ids.push(id);
             }
         });
+        ids
     }
 
     pub fn has_dial_clip(&self) -> bool {
-        matches!(self.clipboard, Some(Clip::Dial { .. }))
+        matches!(self.clipboard, Some(Clip::Dials { .. }))
     }
 }

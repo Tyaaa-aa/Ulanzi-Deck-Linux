@@ -250,6 +250,25 @@ pub(crate) fn assert_menu_labels(model: &impl gtk::gio::prelude::IsA<gtk::gio::M
     }
 }
 
+/// Every label of a menu, its sections' included, in order. Needs no display.
+#[cfg(test)]
+pub(crate) fn menu_labels(m: &gtk::gio::Menu) -> Vec<String> {
+    use gtk::gio::prelude::*;
+    let mut out = Vec::new();
+    for i in 0..m.n_items() {
+        if let Some(l) = m
+            .item_attribute_value(i, "label", None)
+            .and_then(|v| v.str().map(str::to_owned))
+        {
+            out.push(l);
+        }
+        if let Some(sub) = m.item_link(i, "section").and_downcast::<gtk::gio::Menu>() {
+            out.extend(menu_labels(&sub));
+        }
+    }
+    out
+}
+
 /// A plugin's full-colour logo, `size` px: its `icon` file from `assets/`, a theme icon it names,
 /// else the add-on icon.
 pub fn plugin_logo(state: &State, plugin: &str, size: i32) -> gtk::Image {

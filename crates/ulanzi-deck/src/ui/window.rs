@@ -532,13 +532,18 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
     action(
         "select-all",
         Box::new(move || {
-            s.select(|sel| sel.select_all_keys());
+            if !crate::ui::library_tray::select_all(&s) {
+                s.select(|sel| sel.select_all_keys());
+            }
         }),
     );
     let s = state.clone();
     action(
         "copy",
         Box::new(move || {
+            if crate::ui::library_tray::copy_picked(&s) {
+                return;
+            }
             if let Some(n) = selected_dial(&s) {
                 return s.editor.borrow_mut().copy_dial(n);
             }
@@ -550,6 +555,9 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
     action(
         "paste",
         Box::new(move || {
+            if crate::ui::library_tray::paste_picked(&s) {
+                return;
+            }
             if let Some(n) = selected_dial(&s) {
                 return s.edit(|e| e.paste_dial(n));
             }
@@ -576,10 +584,13 @@ fn install_actions(window: &adw::ApplicationWindow, state: &State, back_to_key: 
             s.edit(|e| e.paste_style(&keys));
         }),
     );
-    let s = state.clone();
+    let (s, w) = (state.clone(), window.clone());
     action(
         "clear",
         Box::new(move || {
+            if crate::ui::library_tray::delete_picked(&s, &w) {
+                return;
+            }
             // As the menu: a pin has nothing of this page's to clear, so say how it goes.
             if let Some(n) = selected_dial(&s) {
                 if s.editor.borrow().dial_info(n).pinned {

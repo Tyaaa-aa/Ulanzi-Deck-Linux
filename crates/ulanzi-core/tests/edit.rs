@@ -1063,21 +1063,26 @@ fn library_dials_copy_and_paste() {
     let a = e.add_dial_to_library(0).expect("added");
     let b = e.new_library_dial();
     // Copied from the tray, it pastes onto the deck as a link.
-    e.copy_library_dial(a);
+    e.copy_library_dials(&[a]);
     e.paste_dial(1);
     assert_eq!(e.dial_info(1).library, Some(a));
-    // Pasted onto another library dial: that one takes the contents and keeps its id.
-    e.paste_library_dial(b);
-    let lib = e.profile().library_dial(b).expect("still there");
-    assert_eq!(lib.dial.press, Some(Action::NextPage));
-    assert_eq!(lib.dial.name, "Volume");
-    assert_eq!(lib.dial.library, None);
+    // Pasted into the library: a new library dial after `a`, with a numbered name.
+    let new = e.paste_into_dial_library(Some(a));
+    assert_eq!(new.len(), 1);
+    let lib = &e.profile().dial_library;
+    assert_eq!(lib.iter().map(|l| l.id).collect::<Vec<_>>(), vec![a, new[0], b]);
+    assert_eq!(lib[1].dial.name, "Volume 2");
+    assert_eq!(lib[1].dial.press, Some(Action::NextPage));
+    assert_eq!(lib[1].dial.library, None);
     assert!(e.undo());
-    assert_eq!(e.profile().library_dial(b).expect("b").dial.press, None);
-    // Pasting a dial onto the library dial it links to changes nothing.
-    let before = e.profile().clone();
-    e.paste_library_dial(a);
-    assert_eq!(e.profile(), &before);
+    assert_eq!(e.profile().dial_library.len(), 2);
+    // Two dials copied paste onto the deck side by side; one past the last is dropped.
+    e.copy_library_dials(&[b, a]);
+    e.paste_dial(1);
+    assert_eq!(e.dial_info(1).library, Some(a), "library order");
+    assert_eq!(e.dial_info(2).library, Some(b));
+    e.paste_dial(2);
+    assert_eq!(e.dial_info(2).library, Some(a));
 }
 
 #[test]

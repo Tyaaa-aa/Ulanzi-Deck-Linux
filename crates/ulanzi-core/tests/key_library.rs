@@ -288,14 +288,15 @@ fn library_keys_copy_paste_move_rename_and_delete() {
     let a = e.add_key_to_library(0).expect("added");
     let b = e.new_library_key();
     assert_eq!(e.profile().library_key(b).expect("b").name, "New Key");
-    e.copy_library_key(a);
-    e.paste_library_key(b);
-    assert_eq!(e.profile().library_key(b).expect("b").key.look.label.text, "Mute");
+    e.copy_library_keys(&[a]);
+    // Pasted in the library: a copy named after the original, numbered.
+    let copy = e.paste_into_key_library(None);
+    let lib = e.profile().library_key(copy[0]).expect("copy");
     assert_eq!(
-        e.profile().library_key(b).expect("b").name,
-        "New Key",
-        "keeps its name"
+        (lib.name.as_str(), lib.key.look.label.text.as_str()),
+        ("Mute 2", "Mute")
     );
+    assert!(e.undo());
     e.rename_library_key(b, "  Other ");
     e.rename_library_key(b, " ");
     assert_eq!(e.profile().library_key(b).expect("b").name, "Other");
@@ -383,4 +384,103 @@ fn deleting_a_library_key_can_keep_its_keys() {
     assert_eq!((own.library, own.look.label.text.as_str()), (None, "Mute"));
     assert_eq!(e.profile().pinned.keys[&4].library, None);
     assert_eq!(label(&e, 1, 4).as_deref(), Some("Mute"));
+}
+
+#[test]
+fn a_pin_hides_the_page_key_only_when_it_differs() {
+    let mut e = two_pages();
+    // Unpinned: nothing is hidden, however the key looks.
+    assert_eq!(e.profile().covered_key(0, 0), None);
+    let mut p = e.profile().clone();
+    p.pinned.keys.insert(0, labelled("Home", Action::PrevPage));
+    assert_eq!(
+        p.covered_key(0, 0).map(|k| k.look.label.text),
+        Some("Mute".into())
+    );
+    // The same key pinned hides nothing.
+    p.pinned.keys.insert(0, labelled("Mute", Action::NextPage));
+    assert_eq!(p.covered_key(0, 0), None);
+    // Both linking one library key hide nothing, nor a pin over an empty spot.
+    let id = Uuid::new_v4();
+    p.key_library.push(LibraryKey {
+        id,
+        name: "Lamp".into(),
+        key: labelled("Lamp", Action::NextPage),
+    });
+    p.pinned.keys.insert(0, link(id));
+    p.pages[0].keys.insert(0, link(id));
+    assert_eq!(p.covered_key(0, 0), None);
+    assert_eq!(p.covered_key(1, 0), None);
+    e = Editor::new(p);
+    assert!(e.profile().pinned.keys.contains_key(&0));
+}
+
+#[test]
+fn several_keys_go_into_the_library_in_one_step_without_duplicates() {
+    let mut e = two_pages();
+    let mut p = e.profile().clone();
+    p.pages[0].keys.insert(1, labelled("Lamp", Action::PrevPage));
+    p.pages[0].keys.insert(2, labelled("Lamp", Action::PrevPage));
+    p.pages[0].keys.insert(3, labelled("Fan", Action::NextPage));
+    e = Editor::new(p);
+    e.add_key_to_library(3);
+    let added = e.add_keys_to_library(&[0, 1, 2, 3, 4]);
+    // Key 2 matches key 1 added a moment before; key 3 was linked; key 4 is empty.
+    assert_eq!(
+        added,
+        ulanzi_core::edit::AddedKeys {
+            new: 2,
+            matched: 1,
+            already: 1
+        }
+    );
+    let lib = &e.profile().key_library;
+    assert_eq!(lib.len(), 3);
+    let k = &e.profile().pages[0].keys;
+    assert_eq!(k[&1].library, k[&2].library);
+    assert!(k[&0].library.is_some());
+    assert_eq!(label(&e, 0, 2), Some("Lamp".into()));
+    e.undo();
+    assert_eq!(e.profile().key_library.len(), 1);
+    assert_eq!(
+        added.message().as_deref(),
+        Some("Added 3 keys to your library. 1 matched a library key and links to it. 1 was in it already.")
+    );
+}
+
+#[test]
+fn library_keys_copy_into_another_profile_and_delete_together() {
+    let mut e = two_pages();
+    let a = e.add_key_to_library(0).expect("added");
+    let b = e.new_library_key();
+    e.place_key(5, b);
+    e.copy_library_keys(&[a, b]);
+    // Another profile: the clipboard comes along and pastes as own keys, or new library keys.
+    let clip = e.take_clipboard();
+    let mut other = Editor::new(Profile::new_default("O", Model::D200X));
+    other.set_clipboard(clip);
+    other.paste_keys(2);
+    let k = &other.profile().pages[0].keys;
+    assert_eq!((k[&2].library, k[&2].look.label.text.as_str()), (None, "Mute"));
+    assert!(k.contains_key(&3), "side by side");
+    let ids = other.paste_into_key_library(None);
+    let names: Vec<_> = other
+        .profile()
+        .key_library
+        .iter()
+        .map(|l| l.name.clone())
+        .collect();
+    assert_eq!(names, vec!["Mute", "New Key"]);
+    assert_eq!(ids.len(), 2);
+    // Back home: both deleted in one step, the keys that used them kept as own copies.
+    e.set_clipboard(other.take_clipboard());
+    e.delete_library_keys_keep_uses(&[a, b]);
+    assert!(e.profile().key_library.is_empty());
+    assert_eq!(label(&e, 0, 0), Some("Mute".into()));
+    assert!(e.profile().pages[0].keys.contains_key(&5));
+    assert!(e.undo());
+    e.delete_library_keys(&[a, b]);
+    assert!(e.profile().pages[0].keys.is_empty());
+    assert!(e.undo());
+    assert_eq!(e.profile().key_library.len(), 2);
 }

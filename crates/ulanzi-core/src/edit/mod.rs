@@ -3,6 +3,7 @@
 
 mod dials;
 mod keys;
+pub use keys::AddedKeys;
 mod selection;
 
 pub use selection::{Selection, Slot};
@@ -180,15 +181,43 @@ enum Clip {
     /// Keys relative to the first copied index: as set up (a link kept) and as they work, and the
     /// profile they came from.
     Keys {
-        items: Vec<(u8, Key, Key)>,
+        items: Vec<ClipKey>,
         profile: uuid::Uuid,
     },
     Style(KeyLook),
-    /// A dial as it shows, with its link kept, and the profile it came from.
-    Dial {
-        dial: Dial,
+    /// Dials as they show, with their links kept, and the profile they came from. Library dials
+    /// keep their name in it.
+    Dials {
+        dials: Vec<Dial>,
         profile: uuid::Uuid,
     },
+}
+
+/// A copied key: where it sat after the first, as set up (a link kept), as it works, and its
+/// library name when it came from the library.
+#[derive(Debug, Clone)]
+struct ClipKey {
+    at: u8,
+    raw: Key,
+    key: Key,
+    name: Option<String>,
+}
+
+/// What was copied, carried from one profile's editor to the next (see
+/// [`Editor::take_clipboard`]).
+#[derive(Debug, Clone, Default)]
+pub struct Clipboard(Option<Clip>);
+
+/// `base`, or `base 2`, `base 3`... when `taken` has it already.
+fn unique_name<'a>(base: &str, taken: impl Iterator<Item = &'a str> + Clone) -> String {
+    let free = |n: &str| !taken.clone().any(|t| t == n);
+    if free(base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|i| format!("{base} {i}"))
+        .find(|n| free(n))
+        .unwrap_or_default()
 }
 
 /// One undo step: the profile, and the library when the step changed it.
@@ -668,7 +697,16 @@ impl Editor {
             .iter()
             .filter_map(|i| {
                 let raw = p.pinned.keys.get(i).or_else(|| p.pages[self.page].keys.get(i))?;
-                Some((i - first, raw.clone(), p.key_at(self.page, *i)?))
+                let name = raw
+                    .library
+                    .and_then(|id| p.library_key(id))
+                    .map(|l| l.name.clone());
+                Some(ClipKey {
+                    at: i - first,
+                    raw: raw.clone(),
+                    key: p.key_at(self.page, *i)?,
+                    name,
+                })
             })
             .collect();
         self.clipboard = Some(Clip::Keys { items, profile: p.id });
@@ -682,7 +720,10 @@ impl Editor {
         // A link stays a link in the profile it was copied from while its library key is there.
         let same = profile == self.profile.id;
         self.edit(|p, page| {
-            for (offset, raw, key) in items {
+            for ClipKey {
+                at: offset, raw, key, ..
+            } in items
+            {
                 let i = at + offset;
                 if taken(p, page, Slot::Key(i)) {
                     continue;
@@ -725,6 +766,16 @@ impl Editor {
 
     pub fn has_keys_clip(&self) -> bool {
         matches!(self.clipboard, Some(Clip::Keys { .. }))
+    }
+
+    /// Take what was copied, to hand to the next profile's editor with
+    /// [`Editor::set_clipboard`]: copy in one profile, paste in another.
+    pub fn take_clipboard(&mut self) -> Clipboard {
+        Clipboard(self.clipboard.take())
+    }
+
+    pub fn set_clipboard(&mut self, clip: Clipboard) {
+        self.clipboard = clip.0;
     }
 
     /// Clear the page's own keys. A pinned key is left alone: Unpin removes it.

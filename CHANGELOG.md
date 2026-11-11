@@ -20,6 +20,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Deleting a library key or dial in use offers to keep the keys or dials using it as their own copies,
   with how many there are.
 - Under a pin, the editor shows the page's own key, dial or small button (**Hidden by the Pin**).
+- **Add N Keys to Library** for several selected keys. Keys already in the library are skipped, and a
+  key identical to a library key links to it instead of adding a duplicate.
+- Several library items can be picked in the tray (Ctrl-click, Shift-click, Ctrl+A) and copied, pasted
+  or deleted together, from the right-click menu or with Ctrl+C, Ctrl+V and Delete.
+- Search in the Library tray once a library has more than one page.
 
 ### Changed
 
@@ -29,6 +34,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Switching pages keeps the selected key or dial.
 - Delete on a pinned key or dial says to unpin it first.
 - A D200 profile has no Dials tab in the Library tray.
+- Paste in the Library tray adds the copied items as new library items after the picked one (named
+  "<name> 2" when taken) instead of replacing the picked dial.
+- The clipboard is kept when switching profiles, so keys, dials and library items copy into another
+  profile.
 
 ## [2.5.0] - 2026-11-10
 

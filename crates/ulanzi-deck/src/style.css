@@ -443,6 +443,11 @@ row.drop-target {
   min-height: 26px;
 }
 
+.tray-search {
+  min-height: 26px;
+  min-width: 180px;
+}
+
 .tray-dial.drop-target {
   outline-color: alpha(@accent_bg_color, 0.7);
   outline-style: dashed;

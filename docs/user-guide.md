@@ -80,12 +80,16 @@ Keys join the same opt-in library as dials (see [Library tray](#library-tray)).
   A pinned key has a pin badge, and editing it changes the pin. **Clear Key** is not offered on a
   pinned key, and Delete says to unpin it first. Adding keys skips pinned positions, and swapping a
   pinned key moves its pin, with every page's own keys swapping underneath.
-- Select several keys and right-click one of them to pin or unpin them all at once.
-- When this page has its own, different key under a pin, the editor shows it under **Hidden by the
-  Pin**, with its picture and what it does. It can't be edited until you unpin.
+- Select several keys and right-click one of them to add them all to the library, or to pin or unpin
+  them all at once. Keys already in the library are skipped, and a key just like a library key links
+  to that one instead of adding a duplicate; a message says what happened.
+- When a pinned position hides this page's own, different key, the editor shows it under **Hidden by
+  the Pin**, with its picture and what it does. It can't be edited until you unpin. Nothing shows when
+  the page's key is the same as the pin.
 - Switching pages keeps the selected key or dial, so the editor shows what the new page has there.
 - Copy and paste keep a link within the profile; pasting into another profile makes an own copy.
-  Pasting onto a pinned position replaces the pin, which stays pinned.
+  Pasting onto a pinned position replaces the pin, which stays pinned. What you copy stays copied when
+  you switch profiles.
 
 ### Live state
 
@@ -310,10 +314,17 @@ you open it and again from **?**.
 - Select a library key to edit it in the full key editor, with its name: every key that uses it
   changes. **New Key**, the last tile, creates a blank library key and opens it there.
 - Drag a library key onto a key on the deck to place it as a linked key, or drag a key from the deck
-  into the tray to add it. Right-click a library key for **Copy**, **Paste** and **Delete from
-  Library**; drag keys onto each other to reorder them.
-- Deleting a library key or dial that is in use asks what happens to the keys or dials using it (the
-  count is shown): keep them as their own copies, or delete them too.
+  into the tray to add it. Drag keys onto each other to reorder them.
+- Ctrl-click tiles to pick several, Shift-click to pick a run of them, and Ctrl+A (with a tile picked)
+  to pick them all. Right-click for **Copy**, **Paste** and **Delete from Library**, which act on every
+  picked tile; Ctrl+C, Ctrl+V and Delete do the same.
+- Copied library items paste onto the deck side by side, as links in the same profile and as own
+  copies in another. Pasted in the tray, of this profile or another one, they become new library items
+  after the picked tile, numbered when the name is taken ("Lamp 2").
+- Deleting library keys or dials that are in use asks what happens to the keys or dials using them (the
+  count is shown): keep them as their own copies, or delete them too. One Undo brings it all back.
+- A search box appears once a library fills more than one page. It finds items by name, label or what
+  they do.
 
 - Select a dial in the tray to edit it. Drag one onto a dial on the deck to place it as a linked dial.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.
@@ -321,9 +332,8 @@ you open it and again from **?**.
   **Add to Library** does. Bring it back onto another dial before letting go to swap them instead.
 - Drag a library dial onto another one in the tray to move it there. Hold it over an arrow button to
   turn the page.
-- Right-click a library dial for **Copy**, **Paste** and **Delete from Library**. A copied library dial
-  pastes onto the deck as a linked dial. Pasting onto a library dial replaces what it does everywhere it
-  is used.
+- A copied library dial pastes onto the deck as a linked dial; several fill the dials from the one
+  selected onward.
 - **New Dial**, the last tile, creates an empty library dial.
 - **Delete from Library** in a library dial's inspector removes it from the library. Pages that used it get an empty
   dial, and a pin that used it is removed so each page shows its own dial again. Undo brings it all back.

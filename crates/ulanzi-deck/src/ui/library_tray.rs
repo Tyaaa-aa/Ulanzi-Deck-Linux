@@ -7,7 +7,7 @@ use std::rc::{Rc, Weak};
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use ulanzi_core::model::{LibraryDial, LibraryKey, Usage};
+use ulanzi_core::model::{Action, LibraryDial, LibraryKey, Usage};
 use uuid::Uuid;
 
 use crate::state::{Change, LibraryKind, State};
@@ -87,6 +87,31 @@ impl Entry {
             Entry::Key(k) => k.id,
         }
     }
+
+    /// Whether the search `query` (lowercase) finds it: by name, label, or what it does.
+    fn matches(&self, query: &str) -> bool {
+        let (texts, actions): (Vec<&str>, Vec<Option<&Action>>) = match self {
+            Entry::Key(k) => (
+                vec![&k.name, &k.key.look.label.text],
+                vec![k.key.tap.as_ref(), k.key.hold.as_ref()],
+            ),
+            Entry::Dial(d) => (
+                vec![&d.dial.name],
+                vec![
+                    d.dial.press.as_ref(),
+                    d.dial.left.as_ref(),
+                    d.dial.right.as_ref(),
+                    d.dial.hold.as_ref(),
+                ],
+            ),
+        };
+        let found = |t: &str| t.to_lowercase().contains(query);
+        texts.into_iter().any(found)
+            || actions.into_iter().flatten().any(|a| {
+                found(&ulanzi_core::catalog::describe(a))
+                    || ulanzi_core::catalog::spec_for(a).is_some_and(|s| found(s.title))
+            })
+    }
 }
 
 type OnToggle = Box<dyn Fn(bool)>;
@@ -134,6 +159,9 @@ pub struct Tray {
     switch: gtk::Box,
     tab_pages: Cell<[usize; 2]>,
     help: gtk::Button,
+    /// Shown once the library fills more than one page; `query` is what it holds, lowercase.
+    search: gtk::SearchEntry,
+    query: RefCell<String>,
     /// Sits under the page in the same area, so it eases in and out with the height.
     pager: gtk::Box,
     with_pager: Cell<bool>,
@@ -196,8 +224,15 @@ impl Tray {
             .tooltip_text("Close Library")
             .valign(gtk::Align::Center)
             .build();
+        let search = gtk::SearchEntry::builder()
+            .placeholder_text("Search")
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        search.add_css_class("tray-search");
         let header = gtk::Box::builder().spacing(6).margin_bottom(6).build();
         header.append(&switch);
+        header.append(&search);
         // Keeps ? and close at the end with the switch hidden.
         header.append(&gtk::Box::builder().hexpand(true).build());
         header.append(&help);
@@ -266,6 +301,8 @@ impl Tray {
             switch,
             tab_pages: Cell::new([0, 0]),
             help,
+            search,
+            query: RefCell::default(),
             pager,
             with_pager: Cell::new(false),
             dots,
@@ -303,6 +340,19 @@ impl Tray {
                 }
             });
         }
+        {
+            let me = Rc::downgrade(&tray);
+            tray.search.connect_search_changed(move |e| {
+                if let Some(t) = me.upgrade() {
+                    *t.query.borrow_mut() = e.text().trim().to_lowercase();
+                    t.state.tray_page.set(0);
+                    // Laid out again, so "No keys match" names the new text.
+                    t.drawn.borrow_mut().clear();
+                    t.items.borrow_mut().clear();
+                    t.refresh();
+                }
+            });
+        }
         tray.accept_deck_dials();
         tray.wire();
         tray
@@ -330,6 +380,9 @@ impl Tray {
             Tab::Keys => KEY_HINT,
             Tab::Dials => HINT,
         }));
+        // A search is for one tab.
+        self.query.borrow_mut().clear();
+        self.search.set_text("");
         // The other tab's tiles go, even when both tabs list nothing.
         self.drawn.borrow_mut().clear();
         self.items.borrow_mut().clear();
@@ -348,13 +401,9 @@ impl Tray {
         self.state.model() == ulanzi_core::model::Model::D200X
     }
 
-    /// The items the shown tab lists.
+    /// The items the shown tab lists, found by the search.
     fn count(&self) -> usize {
-        let e = self.state.editor.borrow();
-        match self.tab.get() {
-            Tab::Keys => e.profile().key_library.len(),
-            Tab::Dials => e.profile().dial_library.len(),
-        }
+        self.drawn.borrow().len()
     }
 
     /// The deck with the tray under it.
@@ -770,6 +819,10 @@ impl Tray {
                     .collect(),
             }
         };
+        // Search once there is more than a page, and while a search is typed.
+        let query = self.query.borrow().clone();
+        self.search.set_visible(now.len() > PER_PAGE || !query.is_empty());
+        let now: Vec<(Entry, Usage)> = now.into_iter().filter(|(l, _)| l.matches(&query)).collect();
         if *self.drawn.borrow() == now && !self.grids.borrow().is_empty() {
             return;
         }
@@ -793,6 +846,8 @@ impl Tray {
         for g in self.grids.take() {
             self.pages.remove_overlay(&g);
         }
+        // The pager counts these.
+        *self.drawn.borrow_mut() = now.to_vec();
         self.items.borrow_mut().clear();
         let (library, usage): (Vec<Entry>, Vec<Usage>) = now.iter().cloned().unzip();
         let pages = layout(library.len(), 0).pages;
@@ -807,10 +862,26 @@ impl Tray {
             let mut cells: Vec<gtk::Widget> = (start..end)
                 .map(|i| self.lib_item(&library[i], usage[i]).upcast())
                 .collect();
-            cells.push(match self.tab.get() {
-                Tab::Dials => self.new_item().upcast(),
-                Tab::Keys => self.add_key_item().upcast(),
-            });
+            let searching = !self.query.borrow().is_empty();
+            if !searching {
+                cells.push(match self.tab.get() {
+                    Tab::Dials => self.new_item().upcast(),
+                    Tab::Keys => self.add_key_item().upcast(),
+                });
+            } else if library.is_empty() {
+                let what = if self.tab.get() == Tab::Keys {
+                    "keys"
+                } else {
+                    "dials"
+                };
+                let none = gtk::Label::builder()
+                    .label(format!("No {what} match “{}”.", self.search.text().trim()))
+                    .css_classes(["dim-label"])
+                    .margin_top(12)
+                    .margin_bottom(12)
+                    .build();
+                grid.attach(&none, 0, 0, PER_ROW as i32, 1);
+            }
             // Blanks keep six columns on a short page.
             while cells.len() < PER_ROW {
                 cells.push(gtk::Box::builder().hexpand(true).build().upcast());
@@ -898,6 +969,30 @@ impl Tray {
         {
             let state = self.state.clone();
             button.connect_clicked(move |_| state.select_library(id));
+        }
+        // Ctrl-click adds or takes out one item, Shift-click picks a run of them.
+        {
+            let state = self.state.clone();
+            let click = gtk::GestureClick::builder().button(1).build();
+            click.set_propagation_phase(gtk::PropagationPhase::Capture);
+            click.connect_pressed(move |g, _, _, _| {
+                let mods = g.current_event_state();
+                if mods.contains(gdk::ModifierType::CONTROL_MASK) {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    state.toggle_library(id);
+                } else if mods.contains(gdk::ModifierType::SHIFT_MASK) {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    let order: Vec<Uuid> = {
+                        let e = state.editor.borrow();
+                        match kind {
+                            Tab::Keys => e.profile().key_library.iter().map(|l| l.id).collect(),
+                            Tab::Dials => e.profile().dial_library.iter().map(|l| l.id).collect(),
+                        }
+                    };
+                    state.extend_library(id, &order);
+                }
+            });
+            button.add_controller(click);
         }
         // Drag it onto the deck to place it there.
         let source = gtk::DragSource::builder().actions(gdk::DragAction::COPY).build();
@@ -998,7 +1093,8 @@ impl Tray {
         button.add_controller(target);
     }
 
-    /// Right-click a library item: Copy, Paste (greyed out with nothing copied) and Delete.
+    /// Right-click a library item: Copy, Paste (greyed out with nothing copied) and Delete, for
+    /// every picked item when it is one of them.
     fn tile_menu(&self, button: &gtk::Button, id: Uuid, kind: Tab) {
         let actions = gio::SimpleActionGroup::new();
         let add = |name: &str, f: TileAction| {
@@ -1011,33 +1107,24 @@ impl Tray {
             });
             actions.add_action(&a);
         };
-        match kind {
-            Tab::Dials => {
-                add(
-                    "copy",
-                    Box::new(move |s, _| s.editor.borrow_mut().copy_library_dial(id)),
-                );
-                add(
-                    "paste",
-                    Box::new(move |s, _| s.edit(|e| e.paste_library_dial(id))),
-                );
-                add(
-                    "delete",
-                    Box::new(move |s, b| crate::ui::dial_inspector::delete_library_dial(s, id, b)),
-                );
-            }
-            Tab::Keys => {
-                add(
-                    "copy",
-                    Box::new(move |s, _| s.editor.borrow_mut().copy_library_key(id)),
-                );
-                add("paste", Box::new(move |s, _| s.edit(|e| e.paste_library_key(id))));
-                add(
-                    "delete",
-                    Box::new(move |s, b| crate::ui::key_library::delete_library_key(s, id, b)),
-                );
-            }
-        }
+        add(
+            "copy",
+            Box::new(|s, _| {
+                copy_picked(s);
+            }),
+        );
+        add(
+            "paste",
+            Box::new(|s, _| {
+                paste_picked(s);
+            }),
+        );
+        add(
+            "delete",
+            Box::new(|s, b| {
+                delete_picked(s, b);
+            }),
+        );
         button.insert_action_group("tile", Some(&actions));
         let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         pop.set_has_arrow(true);
@@ -1046,12 +1133,17 @@ impl Tray {
         let state = self.state.clone();
         right.connect_pressed(move |g, _, x, y| {
             g.set_state(gtk::EventSequenceState::Claimed);
-            state.select_library(id);
+            // Keep a multi-pick that holds this item.
+            if !state.library_selection().contains(&id) {
+                state.select_library(id);
+            }
             let can_paste = match kind {
                 Tab::Dials => state.editor.borrow().has_dial_clip(),
                 Tab::Keys => state.editor.borrow().has_keys_clip(),
             };
-            pop.set_menu_model(Some(&tile_menu(can_paste)));
+            let count = picked(&state).map_or(1, |(_, ids)| ids.len());
+            let what = if kind == Tab::Keys { "Key" } else { "Dial" };
+            pop.set_menu_model(Some(&tile_menu(can_paste, count, what)));
             pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             pop.popup();
         });
@@ -1103,28 +1195,150 @@ impl Tray {
         button
     }
 
-    /// Ring the picked library dial.
+    /// Ring the picked library items.
     fn show_picked(&self) {
-        let picked = *self.state.selected_library.borrow();
+        let picked = self.state.library_selection();
         for item in self.items.borrow().iter() {
-            canvas::set_class(&item.disc, "selected", picked == Some(item.id));
+            canvas::set_class(&item.disc, "selected", picked.contains(&item.id));
         }
     }
 }
 
-/// A library dial's right-click menu; Paste is greyed out without a copied dial.
-fn tile_menu(can_paste: bool) -> gio::Menu {
+/// Which tab library item `id` belongs to.
+fn kind_of(state: &State, id: Uuid) -> Option<Tab> {
+    let e = state.editor.borrow();
+    let p = e.profile();
+    if p.library_key(id).is_some() {
+        Some(Tab::Keys)
+    } else if p.library_dial(id).is_some() {
+        Some(Tab::Dials)
+    } else {
+        None
+    }
+}
+
+/// The picked library items and their tab; `None` when no library item is picked.
+fn picked(state: &State) -> Option<(Tab, Vec<Uuid>)> {
+    let ids = state.library_selection();
+    let kind = kind_of(state, *ids.last()?)?;
+    let ids = ids
+        .into_iter()
+        .filter(|id| kind_of(state, *id) == Some(kind))
+        .collect();
+    Some((kind, ids))
+}
+
+/// Ctrl+C with library items picked: copy them. False when none is picked.
+pub fn copy_picked(state: &State) -> bool {
+    let Some((kind, ids)) = picked(state) else {
+        return false;
+    };
+    let mut e = state.editor.borrow_mut();
+    match kind {
+        Tab::Keys => e.copy_library_keys(&ids),
+        Tab::Dials => e.copy_library_dials(&ids),
+    }
+    true
+}
+
+/// Ctrl+V with library items picked: what was copied goes into that library as new items after
+/// the one shown, and those are picked. False when no library item is picked.
+pub fn paste_picked(state: &State) -> bool {
+    let Some((kind, _)) = picked(state) else {
+        return false;
+    };
+    let after = *state.selected_library.borrow();
+    let can = match kind {
+        Tab::Keys => state.editor.borrow().has_keys_clip(),
+        Tab::Dials => state.editor.borrow().has_dial_clip(),
+    };
+    if !can {
+        let what = if kind == Tab::Keys { "keys" } else { "dials" };
+        crate::ui::toast(
+            state,
+            &format!("Copy {what} first, from the deck or the library."),
+        );
+        return true;
+    }
+    let mut new = Vec::new();
+    state.edit(|e| {
+        new = match kind {
+            Tab::Keys => e.paste_into_key_library(after),
+            Tab::Dials => e.paste_into_dial_library(after),
+        }
+    });
+    if let Some(first) = new.first() {
+        state.select_library(*first);
+        for id in &new[1..] {
+            state.toggle_library(*id);
+        }
+    }
+    true
+}
+
+/// Delete with library items picked: ask, then delete them. False when none is picked.
+pub fn delete_picked(state: &State, parent: &impl IsA<gtk::Widget>) -> bool {
+    let Some((kind, ids)) = picked(state) else {
+        return false;
+    };
+    match kind {
+        Tab::Keys => crate::ui::key_library::delete_library_keys(state, ids, parent),
+        Tab::Dials => crate::ui::dial_inspector::delete_library_dials(state, ids, parent),
+    }
+    true
+}
+
+/// Ctrl+A with a library item picked: pick every item of its library. False when none is picked.
+pub fn select_all(state: &State) -> bool {
+    let Some((kind, _)) = picked(state) else {
+        return false;
+    };
+    let ids: Vec<Uuid> = {
+        let e = state.editor.borrow();
+        match kind {
+            Tab::Keys => e.profile().key_library.iter().map(|l| l.id).collect(),
+            Tab::Dials => e.profile().dial_library.iter().map(|l| l.id).collect(),
+        }
+    };
+    if let (Some(first), Some(last)) = (ids.first(), ids.last()) {
+        state.select_library(*first);
+        state.extend_library(*last, &ids);
+    }
+    true
+}
+
+/// A library item's right-click menu for `count` picked items of `what` ("Key" or "Dial");
+/// Paste is greyed out with nothing to paste.
+fn tile_menu(can_paste: bool, count: usize, what: &str) -> gio::Menu {
+    // Shown with the window shortcuts that do the same.
+    let item = |section: &gio::Menu, label: &str, action: &str, shortcut: &str| {
+        let it = gio::MenuItem::new(Some(label), Some(action));
+        if let Some(accel) = crate::ui::key_routing::accel_for(shortcut) {
+            it.set_attribute_value("accel", Some(&accel.to_variant()));
+        }
+        section.append_item(&it);
+    };
+    let many = |verb: &str| match count {
+        1 => verb.to_string(),
+        n => format!("{verb} {n} {what}s"),
+    };
     let m = gio::Menu::new();
     let clip = gio::Menu::new();
-    clip.append(Some("Copy"), Some("tile.copy"));
+    item(&clip, &many("Copy"), "tile.copy", "copy");
     // An action nobody installs leaves the item insensitive.
-    clip.append(
-        Some("Paste"),
-        Some(if can_paste { "tile.paste" } else { "tile.no-paste" }),
+    item(
+        &clip,
+        "Paste",
+        if can_paste { "tile.paste" } else { "tile.no-paste" },
+        "paste",
     );
     m.append_section(None, &clip);
     let gone = gio::Menu::new();
-    gone.append(Some("Delete from Library"), Some("tile.delete"));
+    let delete = match count {
+        1 => "Delete from Library".to_string(),
+        n => format!("Delete {n} {what}s from Library"),
+    };
+    item(&gone, &delete, "tile.delete", "clear");
     m.append_section(None, &gone);
     m
 }
@@ -1220,9 +1434,90 @@ mod tests {
                 .and_then(|v| v.get::<String>())
                 .expect("action")
         };
-        assert_eq!(action(&tile_menu(true), 0, 1), "tile.paste");
-        assert_eq!(action(&tile_menu(false), 0, 1), "tile.no-paste");
-        assert_eq!(action(&tile_menu(false), 1, 0), "tile.delete");
+        assert_eq!(action(&tile_menu(true, 1, "Key"), 0, 1), "tile.paste");
+        assert_eq!(action(&tile_menu(false, 1, "Key"), 0, 1), "tile.no-paste");
+        assert_eq!(action(&tile_menu(false, 1, "Key"), 1, 0), "tile.delete");
+        crate::ui::assert_menu_labels(&tile_menu(true, 3, "Key"));
+        let labels = crate::ui::menu_labels(&tile_menu(true, 3, "Key"));
+        assert!(labels.contains(&"Copy 3 Keys".into()), "{labels:?}");
+        assert!(
+            labels.contains(&"Delete 3 Keys from Library".into()),
+            "{labels:?}"
+        );
+    }
+
+    #[test]
+    fn search_shows_past_one_page_and_finds_by_name_label_or_action() {
+        crate::ui::with_gtk(|| {
+            let (state, t) = tray_with(ulanzi_core::model::Model::D200X);
+            t.open(Tab::Keys);
+            let mut ids = Vec::new();
+            state.edit(|e| ids = (0..PER_PAGE).map(|_| e.new_library_key()).collect());
+            state.edit(|e| {
+                e.rename_library_key(ids[0], "Lamp");
+                e.set_library_key(ids[1], |k| k.tap = Some(Action::NextPage));
+            });
+            t.refresh();
+            assert!(!t.search.is_visible(), "one page");
+            state.edit(|e| {
+                e.new_library_key();
+            });
+            t.refresh();
+            assert!(t.search.is_visible());
+            t.search.set_text("lamp");
+            *t.query.borrow_mut() = "lamp".into();
+            t.refresh();
+            assert_eq!(t.count(), 1);
+            *t.query.borrow_mut() = "next page".into();
+            t.drawn.borrow_mut().clear();
+            t.refresh();
+            assert_eq!(t.items.borrow()[0].id, ids[1]);
+            *t.query.borrow_mut() = "nothing like it".into();
+            t.drawn.borrow_mut().clear();
+            t.refresh();
+            assert_eq!(t.count(), 0);
+        });
+    }
+
+    #[test]
+    fn library_items_pick_copy_paste_and_delete_together() {
+        crate::ui::with_gtk(|| {
+            let (state, _t) = tray_with(ulanzi_core::model::Model::D200X);
+            let mut ids = Vec::new();
+            state.edit(|e| ids = (0..4).map(|_| e.new_library_key()).collect());
+            state.select_library(ids[0]);
+            state.extend_library(ids[2], &ids);
+            assert_eq!(state.library_selection(), ids[..3].to_vec());
+            state.toggle_library(ids[1]);
+            assert_eq!(state.library_selection(), vec![ids[0], ids[2]]);
+            assert!(copy_picked(&state));
+            assert!(paste_picked(&state));
+            // Two new keys after the one shown, picked.
+            let lib: Vec<Uuid> = state
+                .editor
+                .borrow()
+                .profile()
+                .key_library
+                .iter()
+                .map(|l| l.id)
+                .collect();
+            assert_eq!(lib.len(), 6);
+            assert_eq!(state.library_selection(), lib[3..5].to_vec());
+            // Nothing in use: deleted without asking, in one undo step.
+            let w = gtk::Window::new();
+            assert!(delete_picked(&state, &w));
+            assert_eq!(state.editor.borrow().profile().key_library.len(), 4);
+            assert!(state.library_selection().is_empty());
+            state.undo();
+            assert_eq!(state.editor.borrow().profile().key_library.len(), 6);
+            assert!(!select_all(&state), "Ctrl+A needs a library pick");
+            state.select_library(ids[3]);
+            assert!(select_all(&state));
+            assert_eq!(state.library_selection().len(), 6);
+            // A deck pick is not a library pick.
+            state.select(|s| s.click(ulanzi_core::edit::Slot::Key(0)));
+            assert!(!copy_picked(&state));
+        });
     }
 
     #[test]

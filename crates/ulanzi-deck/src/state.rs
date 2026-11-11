@@ -114,8 +114,10 @@ pub struct AppState {
     pub picker_memory: RefCell<crate::action_list::Memory>,
     /// Plugin pickers' answers for naming the ids item rows show, kept a few seconds.
     pub item_labels: RefCell<crate::plugins::LabelCache<LabelWaiter>>,
-    /// The library dial picked in the Library tray; picking a slot clears it.
+    /// The library dial or key picked in the Library tray; picking a slot clears it.
     pub selected_library: RefCell<Option<Uuid>>,
+    /// Every library item picked in the tray with Ctrl or Shift; see [`AppState::library_selection`].
+    library_marks: RefCell<Vec<Uuid>>,
     /// The Library tray's page, kept while the app runs.
     pub tray_page: Cell<usize>,
     /// The Library tray is open (deck dials can be dragged into it).
@@ -185,6 +187,7 @@ impl AppState {
             picker_memory: RefCell::default(),
             item_labels: RefCell::default(),
             selected_library: RefCell::new(None),
+            library_marks: RefCell::new(Vec::new()),
             tray_page: Cell::new(0),
             tray_open: Cell::new(false),
             carried_dial: Cell::new(None),
@@ -390,13 +393,72 @@ impl AppState {
     pub fn select_library(&self, id: Uuid) {
         self.selection.borrow_mut().clear();
         *self.selected_library.borrow_mut() = Some(id);
+        *self.library_marks.borrow_mut() = vec![id];
+        self.notify(Change::Selection);
+    }
+
+    /// The library items picked in the tray, in picking order; the last is the one the editor
+    /// shows. Empty when a slot is picked instead.
+    pub fn library_selection(&self) -> Vec<Uuid> {
+        let Some(picked) = *self.selected_library.borrow() else {
+            return Vec::new();
+        };
+        let marks = self.library_marks.borrow();
+        if !marks.contains(&picked) {
+            return vec![picked];
+        }
+        // An undo or a delete can take some away.
+        let e = self.editor.borrow();
+        let p = e.profile();
+        marks
+            .iter()
+            .copied()
+            .filter(|id| p.library_key(*id).is_some() || p.library_dial(*id).is_some())
+            .collect()
+    }
+
+    /// Ctrl-click on library item `id`: add it to the picked items, or take it out.
+    pub fn toggle_library(&self, id: Uuid) {
+        let mut marks = self.library_selection();
+        if let Some(i) = marks.iter().position(|m| *m == id) {
+            marks.remove(i);
+        } else {
+            marks.push(id);
+        }
+        self.selection.borrow_mut().clear();
+        *self.selected_library.borrow_mut() = marks.last().copied();
+        *self.library_marks.borrow_mut() = marks;
+        self.notify(Change::Selection);
+    }
+
+    /// Shift-click on library item `id`: pick every item from the last picked one to it, in
+    /// `order` (the library's order).
+    pub fn extend_library(&self, id: Uuid, order: &[Uuid]) {
+        let from = (*self.selected_library.borrow()).and_then(|p| order.iter().position(|o| *o == p));
+        let (Some(from), Some(to)) = (from, order.iter().position(|o| *o == id)) else {
+            return self.select_library(id);
+        };
+        let mut marks: Vec<Uuid> = if from <= to {
+            order[from..=to].to_vec()
+        } else {
+            order[to..=from].iter().rev().copied().collect()
+        };
+        // The clicked one is shown in the editor.
+        marks.retain(|m| *m != id);
+        marks.push(id);
+        self.selection.borrow_mut().clear();
+        *self.selected_library.borrow_mut() = Some(id);
+        *self.library_marks.borrow_mut() = marks;
         self.notify(Change::Selection);
     }
 
     pub fn load_profile(&self, profile: Profile) {
         let page = self.editor.borrow().page();
         let library = self.editor.borrow().library().clone();
+        // What was copied in one profile pastes in the next.
+        let clip = self.editor.borrow_mut().take_clipboard();
         let mut editor = Editor::new(profile);
+        editor.set_clipboard(clip);
         editor.set_library(library);
         editor.set_page(page);
         *self.editor.borrow_mut() = editor;

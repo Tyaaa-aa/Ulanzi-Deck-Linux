@@ -4,7 +4,7 @@
 
 use uuid::Uuid;
 
-use super::{Clip, Editor, KEYS, LIBRARY_KEY, Slot, key_spot};
+use super::{Clip, ClipKey, Editor, KEYS, LIBRARY_KEY, Slot, key_spot};
 use crate::model::*;
 
 /// Remove the pin at `n` (see [`Editor::unpin_key`]).
@@ -15,6 +15,48 @@ fn unpin(p: &mut Profile, page: usize, n: u8) {
     let copied = p.pages.iter().any(|pg| pg.keys.get(&n) == Some(&pin));
     if !copied {
         p.pages[page].keys.entry(n).or_insert(pin);
+    }
+}
+
+/// What [`Editor::add_keys_to_library`] did: keys added as new library keys, keys linked to a
+/// library key just like them, and keys that were in the library already.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AddedKeys {
+    pub new: usize,
+    pub matched: usize,
+    pub already: usize,
+}
+
+impl AddedKeys {
+    /// What a toast says about it; `None` when one key was simply added.
+    pub fn message(&self) -> Option<String> {
+        let keys = |n: usize| {
+            if n == 1 {
+                "1 key".to_string()
+            } else {
+                format!("{n} keys")
+            }
+        };
+        let was = |n: usize| if n == 1 { "was" } else { "were" };
+        let done = self.new + self.matched;
+        if done == 1 && self.matched == 0 && self.already == 0 {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if done > 0 {
+            parts.push(format!("Added {} to your library.", keys(done)));
+        }
+        if self.matched > 0 {
+            let links = if self.matched == 1 { "links" } else { "link" };
+            parts.push(format!(
+                "{} matched a library key and {links} to it.",
+                self.matched
+            ));
+        }
+        if self.already > 0 {
+            parts.push(format!("{} {} in it already.", self.already, was(self.already)));
+        }
+        (!parts.is_empty()).then(|| parts.join(" "))
     }
 }
 
@@ -57,24 +99,53 @@ impl Editor {
     /// Move what shows at `n` into the library, named after its label or action, and link it
     /// there. Returns the library key, also when it was linked already; `None` for no key.
     pub fn add_key_to_library(&mut self, n: u8) -> Option<Uuid> {
-        if !self.key_free(n) {
-            return None;
+        self.add_keys_to_library(&[n]);
+        self.key_info(n).library
+    }
+
+    /// [`Editor::add_key_to_library`] for each of `keys`, as one undo step. Keys already linked
+    /// and empty keys are left alone; a key just like one in the library links to that one.
+    pub fn add_keys_to_library(&mut self, keys: &[u8]) -> AddedKeys {
+        let mut added = AddedKeys::default();
+        let mut todo: Vec<u8> = Vec::new();
+        for &n in keys {
+            if !self.key_free(n) || todo.contains(&n) {
+                continue;
+            }
+            let info = self.key_info(n);
+            if info.library.is_some() {
+                added.already += 1;
+            } else if info.key.is_some() {
+                todo.push(n);
+            }
         }
-        let info = self.key_info(n);
-        if let Some(id) = info.library {
-            return self.profile.library_key(id).map(|l| l.id);
+        if todo.is_empty() {
+            return added;
         }
-        info.key.as_ref()?;
-        let id = Uuid::new_v4();
         self.edit(|p, page| {
-            let Some(spot) = key_spot(p, page, n) else {
-                return;
-            };
-            let key = std::mem::replace(spot, linked(id));
-            let name = key.suggested_name();
-            p.key_library.push(LibraryKey { id, name, key });
+            for n in todo {
+                let Some(key) = key_spot(p, page, n).map(|s| s.clone()) else {
+                    continue;
+                };
+                let id = match p.key_library.iter().find(|l| l.key == key) {
+                    Some(l) => {
+                        added.matched += 1;
+                        l.id
+                    }
+                    None => {
+                        added.new += 1;
+                        let id = Uuid::new_v4();
+                        let name = key.suggested_name();
+                        p.key_library.push(LibraryKey { id, name, key });
+                        id
+                    }
+                };
+                if let Some(spot) = key_spot(p, page, n) {
+                    *spot = linked(id);
+                }
+            }
         });
-        Some(id)
+        added
     }
 
     /// Link library key `id` at `n`. A pin there stays a pin.
@@ -202,60 +273,102 @@ impl Editor {
         });
     }
 
-    /// Delete library key `id`; keys linked to it are removed, and a pin linked to it too, so each
-    /// page shows its own key again.
     /// Take library key `id` out of the library but keep every key that uses it, each as its own
     /// copy, a pin too.
     pub fn delete_library_key_keep_uses(&mut self, id: Uuid) {
-        let Some(lib) = self.profile.library_key(id).map(|l| l.key.clone()) else {
+        self.delete_library_keys_keep_uses(&[id]);
+    }
+
+    /// [`Editor::delete_library_key_keep_uses`] for each of `ids`, as one undo step.
+    pub fn delete_library_keys_keep_uses(&mut self, ids: &[Uuid]) {
+        let libs: Vec<(Uuid, Key)> = ids
+            .iter()
+            .filter_map(|id| self.profile.library_key(*id).map(|l| (*id, l.key.clone())))
+            .collect();
+        if libs.is_empty() {
             return;
-        };
+        }
         self.edit(|p, _| {
-            p.key_library.retain(|l| l.id != id);
+            p.key_library.retain(|l| !ids.contains(&l.id));
             let keys = p
                 .pinned
                 .keys
                 .values_mut()
                 .chain(p.pages.iter_mut().flat_map(|pg| pg.keys.values_mut()));
-            for k in keys.filter(|k| k.library == Some(id)) {
-                *k = lib.clone();
+            for k in keys {
+                if let Some((_, lib)) = libs.iter().find(|(id, _)| k.library == Some(*id)) {
+                    *k = lib.clone();
+                }
             }
         });
     }
 
+    /// Delete library key `id`; keys linked to it are removed, and a pin linked to it too, so each
+    /// page shows its own key again.
     pub fn delete_library_key(&mut self, id: Uuid) {
+        self.delete_library_keys(&[id]);
+    }
+
+    /// [`Editor::delete_library_key`] for each of `ids`, as one undo step: the keys linked to them
+    /// go too.
+    pub fn delete_library_keys(&mut self, ids: &[Uuid]) {
+        let gone = |k: &Key| k.library.is_some_and(|id| ids.contains(&id));
         self.edit(|p, _| {
-            p.key_library.retain(|l| l.id != id);
-            p.pinned.keys.retain(|_, k| k.library != Some(id));
+            p.key_library.retain(|l| !ids.contains(&l.id));
+            p.pinned.keys.retain(|_, k| !gone(k));
             for pg in &mut p.pages {
-                pg.keys.retain(|_, k| k.library != Some(id));
+                pg.keys.retain(|_, k| !gone(k));
             }
         });
     }
 
-    /// Copy library key `id` (from the Library tray); it pastes as a link in this profile.
-    pub fn copy_library_key(&mut self, id: Uuid) {
-        let Some(lib) = self.profile.library_key(id) else {
-            return;
-        };
-        self.clipboard = Some(Clip::Keys {
-            items: vec![(0, linked(id), lib.key.clone())],
-            profile: self.profile.id,
-        });
+    /// Copy library keys `ids` (from the Library tray), in library order; on the deck they paste
+    /// side by side, as links in this profile.
+    pub fn copy_library_keys(&mut self, ids: &[Uuid]) {
+        let items: Vec<ClipKey> = self
+            .profile
+            .key_library
+            .iter()
+            .filter(|l| ids.contains(&l.id))
+            .zip(0..)
+            .map(|(l, at)| ClipKey {
+                at,
+                raw: linked(l.id),
+                key: l.key.clone(),
+                name: Some(l.name.clone()),
+            })
+            .collect();
+        if !items.is_empty() {
+            self.clipboard = Some(Clip::Keys {
+                items,
+                profile: self.profile.id,
+            });
+        }
     }
 
-    /// Paste over library key `id`: it takes the first copied key's look and actions and keeps its
-    /// id and name, so its links show the pasted key.
-    pub fn paste_library_key(&mut self, id: Uuid) {
+    /// Paste the copied keys into the library as new library keys, after library key `after`
+    /// (else at the end). A name the library has already gets a number. Returns the new keys.
+    pub fn paste_into_key_library(&mut self, after: Option<Uuid>) -> Vec<Uuid> {
         let Some(Clip::Keys { items, .. }) = self.clipboard.clone() else {
-            return;
+            return Vec::new();
         };
-        let Some((_, raw, key)) = items.into_iter().next() else {
-            return;
-        };
-        if raw.library == Some(id) || self.profile.library_key(id).is_none() {
-            return;
-        }
-        self.set_library_key(id, |k| *k = Key { library: None, ..key });
+        let at = after
+            .and_then(|id| self.profile.key_library.iter().position(|l| l.id == id))
+            .map_or(self.profile.key_library.len(), |i| i + 1);
+        let mut ids = Vec::new();
+        self.edit(|p, _| {
+            for (i, item) in items.into_iter().enumerate() {
+                let key = Key {
+                    library: None,
+                    ..item.key
+                };
+                let base = item.name.unwrap_or_else(|| key.suggested_name());
+                let name = super::unique_name(&base, p.key_library.iter().map(|l| l.name.as_str()));
+                let id = Uuid::new_v4();
+                p.key_library.insert(at + i, LibraryKey { id, name, key });
+                ids.push(id);
+            }
+        });
+        ids
     }
 }

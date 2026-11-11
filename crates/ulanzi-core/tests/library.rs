@@ -410,3 +410,30 @@ fn a_newer_pinned_dial_and_page_small_button_load_and_save_back() {
     let again = parse_profile(&profile_to_toml(&p).expect("toml")).expect("loads");
     assert_eq!(again.foreign, p.foreign);
 }
+
+#[test]
+fn a_pin_hides_the_page_dial_only_when_it_differs() {
+    let (mut p, id) = base();
+    p.pages[0].dials[0] = Dial {
+        library: Some(id),
+        ..Default::default()
+    };
+    assert_eq!(p.covered_dial(0, 0), None, "unpinned");
+    p.pinned.dials.insert(
+        0,
+        Dial {
+            library: Some(id),
+            ..Default::default()
+        },
+    );
+    assert_eq!(p.covered_dial(0, 0), None, "same library dial");
+    p.pinned.dials.insert(
+        0,
+        Dial {
+            name: "Zoom".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(p.covered_dial(0, 0).map(|d| d.name), Some("Volume".into()));
+    assert_eq!(p.covered_dial(0, 1), None, "blank page dial");
+}

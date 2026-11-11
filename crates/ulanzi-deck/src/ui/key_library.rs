@@ -52,14 +52,8 @@ pub(super) fn library_row(ctx: &C, k: u8) -> Option<gtk::Box> {
         let e = ctx.state.editor.borrow();
         let p = e.profile();
         let info = e.key_info(k);
-        // Only when unpinning would show something else; a link shows its library key.
-        let own = p.pages.get(e.page()).and_then(|pg| pg.keys.get(&k));
-        let covered = own
-            .filter(|o| Some(*o) != p.pinned.keys.get(&k))
-            .and_then(|o| match o.library {
-                Some(id) => p.library_key(id).map(|l| l.key.clone()),
-                None => Some(o.clone()),
-            });
+        // Only when unpinning would show something else.
+        let covered = p.covered_key(e.page(), k);
         (info, covered)
     };
     let buttons = library_buttons(&info);
@@ -135,26 +129,33 @@ pub(super) fn delete_button(state: &State) -> Option<gtk::Widget> {
         .css_classes(["destructive-action", "pill"])
         .build();
     let state = state.clone();
-    delete.connect_clicked(move |b| delete_library_key(&state, id, b));
+    delete.connect_clicked(move |b| delete_library_keys(&state, vec![id], b));
     Some(delete.upcast())
 }
 
-/// Delete library key `id`, asking first (over `parent`) what happens to the keys using it.
-pub(crate) fn delete_library_key(state: &State, id: Uuid, parent: &impl IsA<gtk::Widget>) {
-    let (name, uses) = {
+/// Delete library keys `ids`, asking first (over `parent`) what happens to the keys using them.
+pub(crate) fn delete_library_keys(state: &State, ids: Vec<Uuid>, parent: &impl IsA<gtk::Widget>) {
+    let (names, uses) = {
         let e = state.editor.borrow();
         let p = e.profile();
-        let Some(lib) = p.library_key(id) else { return };
-        (lib.name.clone(), p.key_uses(id))
+        let names: Vec<String> = ids
+            .iter()
+            .filter_map(|id| p.library_key(*id).map(|l| l.name.clone()))
+            .collect();
+        (names, ids.iter().map(|id| p.key_uses(*id)).sum())
     };
+    if names.is_empty() {
+        return;
+    }
+    let keep = ids.clone();
     ask_delete(
         state,
         parent,
-        &name,
+        &names,
         "key",
         uses,
-        move |e| e.delete_library_key_keep_uses(id),
-        move |e| e.delete_library_key(id),
+        move |e| e.delete_library_keys_keep_uses(&keep),
+        move |e| e.delete_library_keys(&ids),
     );
 }
 
