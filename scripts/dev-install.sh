@@ -1,8 +1,30 @@
 #!/bin/sh
 # Build a release and install it for the current user, for testing. Starts and enables nothing.
+#
+#   scripts/dev-install.sh [--note "What this build is for, in plain words."]
+#
+# The build is marked as a dev build: the app shows a DEV chip by its title, and hovering it shows
+# the note, branch, commit, uncommitted files and build time. Without --note, the note says so.
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo"
+
+note="${DEV_NOTE:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --note) note="$2"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$note" ] || note="No note was given for this build."
+ULANZI_DEV_NOTE="$note"
+ULANZI_DEV_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+ULANZI_DEV_COMMIT=$(git rev-parse --short HEAD)
+ULANZI_DEV_SUBJECT=$(git log -1 --format=%s)
+ULANZI_DEV_DIRTY=$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')
+ULANZI_DEV_BUILT=$(date '+%Y-%m-%d %H:%M')
+export ULANZI_DEV_NOTE ULANZI_DEV_BRANCH ULANZI_DEV_COMMIT ULANZI_DEV_SUBJECT ULANZI_DEV_DIRTY ULANZI_DEV_BUILT
+
 cargo build --release --bins
 
 bin="$HOME/.local/bin"

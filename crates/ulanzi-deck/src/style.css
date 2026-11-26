@@ -187,6 +187,17 @@
   background-color: @error_color;
 }
 
+/* DEV chip next to the sidebar title (dev builds only) */
+.dev-chip {
+  border-radius: 99px;
+  padding: 1px 8px;
+  font-size: smaller;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: @warning_fg_color;
+  background-color: @warning_bg_color;
+}
+
 /* Sidebar */
 .sidebar-heading {
   font-weight: 700;

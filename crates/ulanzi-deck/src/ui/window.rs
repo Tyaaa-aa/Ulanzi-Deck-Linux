@@ -237,6 +237,65 @@ fn window_title(state: &State, title: &adw::WindowTitle) {
     ));
 }
 
+/// The sidebar title, with a DEV chip on dev builds. Hovering the chip says what the build is and
+/// whether the service runs the same one.
+fn side_title(state: &State) -> gtk::Widget {
+    let title = adw::WindowTitle::new("Ulanzi Deck", "");
+    let Some(app_build) = ulanzi_core::dev_build!() else {
+        return title.upcast();
+    };
+    let chip = gtk::Label::builder()
+        .label(app_build.chip())
+        .css_classes(["dev-chip"])
+        .valign(gtk::Align::Center)
+        .has_tooltip(true)
+        .build();
+    // What the service said about its build: None until it answers.
+    let service: Rc<std::cell::RefCell<Option<Option<ulanzi_core::dev_build::DevBuild>>>> = Rc::default();
+    {
+        let (state, service) = (state.clone(), service.clone());
+        chip.connect_query_tooltip(move |_, _, _, _, tip| {
+            let version = state.service_version.borrow().clone();
+            let connected = matches!(*state.status.borrow(), Status::Device { .. });
+            let svc = service.borrow();
+            let line = ulanzi_core::dev_build::service_line(
+                &app_build,
+                svc.as_ref().map(Option::as_ref).filter(|_| connected),
+                version.as_deref().filter(|_| connected),
+            );
+            tip.set_text(Some(&format!(
+                "Dev build after {}\n\n{}\n\n{line}",
+                env!("CARGO_PKG_VERSION"),
+                app_build.describe()
+            )));
+            true
+        });
+    }
+    // Ask the service again whenever the connection changes (it may have been restarted).
+    let ask = {
+        let (state, service) = (state.clone(), service.clone());
+        move || {
+            let Some(c) = state.client.borrow().clone() else {
+                return;
+            };
+            let service = service.clone();
+            runtime::run(async move { c.dev_build().await }, move |b| {
+                *service.borrow_mut() = b;
+            });
+        }
+    };
+    ask();
+    state.on(move |c| {
+        if c == Change::Status {
+            ask();
+        }
+    });
+    let row = gtk::Box::builder().spacing(8).halign(gtk::Align::Center).build();
+    row.append(&title);
+    row.append(&chip);
+    row.upcast()
+}
+
 pub fn build(app: &adw::Application, state: &State) -> Window {
     crate::ui::color_popover::use_state(state);
     let window = adw::ApplicationWindow::builder()
@@ -250,7 +309,7 @@ pub fn build(app: &adw::Application, state: &State) -> Window {
 
     // Sidebar.
     let side_header = adw::HeaderBar::builder()
-        .title_widget(&adw::WindowTitle::new("Ulanzi Deck", ""))
+        .title_widget(&side_title(state))
         .show_end_title_buttons(false)
         .build();
     let side_view = adw::ToolbarView::new();

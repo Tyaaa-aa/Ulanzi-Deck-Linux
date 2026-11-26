@@ -262,6 +262,13 @@ impl Client {
         })
     }
 
+    /// The service's dev build: `Some(None)` for a release, `None` if it could not say (an older
+    /// service without the call).
+    pub async fn dev_build(&self) -> Option<Option<ulanzi_core::dev_build::DevBuild>> {
+        let s: String = self.inner.proxy.call("DevBuild", &()).await.ok()?;
+        Some(ulanzi_core::dev_build::DevBuild::decode(&s))
+    }
+
     pub async fn profiles(&self) -> Result<Vec<(Uuid, String)>> {
         let list: Vec<(String, String)> = self.inner.proxy.call("ListProfiles", &()).await?;
         Ok(list

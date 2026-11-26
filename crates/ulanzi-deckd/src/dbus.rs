@@ -317,6 +317,11 @@ pub async fn reload(tx: &mpsc::Sender<DeckMsg>, store: &Store) {
 
 #[interface(name = "io.github.tyaaa_aa.UlanziDeck1")]
 impl DeckService {
+    /// This service's dev build details (see `ulanzi_core::dev_build`); empty in a release build.
+    async fn dev_build(&self) -> String {
+        ulanzi_core::dev_build!().map(|b| b.encode()).unwrap_or_default()
+    }
+
     /// Handshake: API version and current state.
     async fn hello(
         &self,
