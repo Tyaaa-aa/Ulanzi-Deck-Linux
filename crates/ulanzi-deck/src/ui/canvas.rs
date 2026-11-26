@@ -1,5 +1,6 @@
-//! The device drawing: 13 keys, the wide screen, two small buttons and three dials, each showing
-//! exactly what the deck shows. Click to select (Ctrl/Shift for several keys).
+//! The device drawing: 13 keys, the wide screen, two small buttons and three dials (the last two
+//! only on a D200X), each showing exactly what the deck shows. Click to select (Ctrl/Shift for
+//! several keys).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -1547,7 +1548,7 @@ pub fn build(state: &State) -> Canvas {
             dots.clone(),
             faces.clone(),
         );
-        let (spots, smalls) = (spots.clone(), smalls.clone());
+        let (spots, smalls, dial_row) = (spots.clone(), smalls.clone(), dial_row.clone());
         move |c: Change| match c {
             Change::Profile
             | Change::Page
@@ -1563,6 +1564,14 @@ pub fn build(state: &State) -> Canvas {
                 let preview = state.preview.borrow().clone();
                 let sel = state.selection.borrow().clone();
                 let e = state.editor.borrow();
+                // A D200 without the dial base has no small buttons and no dials: draw only the
+                // keys and the wide screen. The row stays (empty), so the Library tray still knows
+                // where the deck ends.
+                let with_dials = e.profile().model == ulanzi_core::model::Model::D200X;
+                for s in smalls.iter() {
+                    s.column.set_visible(with_dials);
+                }
+                dial_row.set_visible(with_dials);
                 let moving = e.profile().shown_page(e.page()).map_or(0, |p| p.moving_keys());
                 let moving = moving_note(moving);
                 note.set_visible(moving.is_some());
