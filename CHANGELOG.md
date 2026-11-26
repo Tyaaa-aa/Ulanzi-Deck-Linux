@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-26
+
 ### Added
 
 - **Key library**, opt-in and in the same Library tray (a **Keys** tab next to **Dials**): **Add to
@@ -28,6 +30,17 @@ and the project uses [Semantic Versioning](https://semver.org).
   names, labels, action titles, plugin and macro names, file and picture names, commands and plugin
   settings.
 - Ctrl+V with nothing picked adds copied library items at the end of the library.
+- Dragging a tile out of the Library tray onto the deck: the tray drops to a strip under the deck so
+  every key is in reach, keeps the whole rows that fit, and springs back on drop. Drop on the strip or
+  press Escape to cancel.
+- Holding a dragged key or library tile over a page in the sidebar opens that page (0.5 s, then 0.25 s
+  for the next page until the pointer leaves the Pages list). Deck keys move to another page this way,
+  swapping with the key they land on; a pinned key moved to another page is no longer pinned.
+- Reordering in the Library tray: drop on a tile's picture to swap the two, or between two tiles to
+  put it there. The tiles either side move apart and a mark shows the gap; a dashed ring shows a swap.
+  Tiles slide to their new places.
+- Holding a tile at the Library tray's left or right edge turns the page, with a short rest between
+  turns.
 
 ### Changed
 
@@ -41,6 +54,14 @@ and the project uses [Semantic Versioning](https://semver.org).
   "<name> 2" when taken) instead of replacing the picked dial.
 - The clipboard is kept when switching profiles, so keys, dials and library items copy into another
   profile. Pictures used by copied keys are copied into the other profile's folder.
+- Holding a tile over the tray's ‹ › buttons no longer turns the page; the tray's edges do.
+- The dial hint while dragging an action says plainly which part of the dial does what, and shows only
+  for actions.
+
+### Fixed
+
+- D200: the deck's own clock no longer shows for a moment over a custom wide-screen widget when the
+  wide screen is pressed (#5).
 
 ## [2.5.0] - 2026-11-10
 
@@ -359,6 +380,8 @@ A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python)
   diagnostics.
 - Packages: Arch, .deb, .rpm, AppImage and a tarball with an installer.
 
+[2.6.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.2.0...v2.3.0

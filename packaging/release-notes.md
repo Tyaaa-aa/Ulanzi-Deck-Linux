@@ -1,28 +1,31 @@
-Feature update to 2.4.0: a dial library, pinned dials and small buttons, and drag to swap dials.
+Feature update to 2.5.0: the key library and pinned keys, drag and drop between pages, and a D200 fix.
 
-This is the first of two parts. The library holds dials in 2.5.0; keys come to the same library in the next release.
+This is the second part of the library: keys join dials in the same Library tray.
 
 ### Added
 
-- **Dial library** (opt-in): **Add to Library** shares a dial between pages, so editing it changes every page that uses it. **Make a Copy** gives a page its own copy again.
-- **Library tray** under the deck (**Library** button in the header): place library dials by dragging them onto the deck, add deck dials by dragging them into the tray, reorder by dragging, right-click for Copy, Paste and Delete. A short guide shows on first open.
-- **Pin to Every Page** for dials and small buttons. Each page keeps its own underneath and **Unpin** shows it again.
-- Drag a dial onto another to swap them. Dials have names, a right-click menu, and Ctrl+C / Ctrl+V / Delete.
-- The drawn deck shows dial turns with an arc in the turn direction and presses with a lit ring.
-- Export and import can include the dial library.
-- A banner asks for a restart when the app and the service run different versions.
+- **Key library** (opt-in), in a **Keys** tab of the Library tray: **Add to Library** shares a key between pages, so editing it changes every page that uses it. **Make a Copy** gives a page its own copy again. Library keys are edited in the full key editor from the tray, and **New Key** makes a blank one.
+- **Pin to Every Page** for keys, folders included. Each page keeps its own key underneath and **Unpin** shows it again. Several selected keys can be added, pinned or unpinned at once.
+- Library tray: pick several tiles (Ctrl-click, Shift-click, Ctrl+A) and copy, paste or delete them together, also into another profile. Search once a library has more than one page.
+- While a tile is carried from the tray to the deck, the tray drops to a strip under the deck so every key is in reach.
+- Holding a dragged key or library tile over a page in the sidebar opens that page. Deck keys move between pages this way; a pinned key moved to another page is no longer pinned.
+- Library reordering: drop on a tile to swap the two, or between two tiles to insert there. Holding a tile at the tray's left or right edge turns the page.
 
 ### Changed
 
-- Small buttons belong to each page. Existing small buttons, and dials that were the same on every page, load as pinned, so nothing changes until you unpin them. A backup named **before-pinning-dials** is made first (**Preferences → Backups**).
-- Profiles that use the library or pins need 2.5.0 or newer.
-- **Use This Dial on Every Page** is replaced by pinning.
+- Profiles that use the key library or pinned keys need 2.6.0 or newer.
+- The clipboard is kept across profiles; pictures used by copied keys come along.
+- Holding a tile over the tray's ‹ › buttons no longer turns the page.
+
+### Fixed
+
+- D200: the deck's own clock no longer shows briefly over a custom wide-screen widget when the wide screen is pressed (#5).
 
 Full list in the [changelog](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/blob/main/CHANGELOG.md).
 
 ### Reporting problems
 
-The library is new, so please report anything that looks wrong: in the app via the main menu → **About Ulanzi Deck** → **Report an Issue**, or directly on [GitHub Issues](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues/new/choose). Output of `ulanzictl diagnostics` helps.
+Please report anything that looks wrong in the key library or the new drag and drop: in the app via the main menu → **About Ulanzi Deck** → **Report an Issue**, or directly on [GitHub Issues](https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/issues/new/choose). Output of `ulanzictl diagnostics` helps.
 
 ### Installation
 

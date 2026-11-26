@@ -49,6 +49,13 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.6.0" date="2026-11-26">
+      <description>
+        <p>Key library and pinned keys in the same Library tray, drag and drop between pages, and a
+        smoother Library tray: swap or insert tiles, turn pages at its edges. Fixes the D200 clock
+        showing over a custom wide-screen widget.</p>
+      </description>
+    </release>
     <release version="2.5.0" date="2026-11-10">
       <description>
         <p>Dial library: dials shared across pages, a Library tray under the deck, pinned dials and

@@ -154,7 +154,9 @@ To turn the default Pulse off, use **Preferences → Key Effects**. Keys with th
   assign it, or press Escape to return to the editor.
 - Ctrl+click selects several keys, so you can change them together.
 - Right-click a key to copy, paste or clear it, or to copy only its style. Drag a key onto another
-  to swap them.
+  to swap them. To move a key to another page, hold it over that page in the sidebar until the page
+  opens (half a second, then a quarter for the next one), and drop it there; it swaps with the key it
+  lands on. A pinned key moved to another page is no longer pinned.
 - Ctrl+Z and Ctrl+Shift+Z undo and redo any change.
 
 A key with a **⚠** badge cannot run as configured, for example because the application is not
@@ -314,7 +316,12 @@ you open it and again from **?**.
 - Select a library key to edit it in the full key editor, with its name: every key that uses it
   changes. **New Key**, the last tile, creates a blank library key and opens it there.
 - Drag a library key onto a key on the deck to place it as a linked key, or drag a key from the deck
-  into the tray to add it. Drag keys onto each other to reorder them.
+  into the tray to add it. As a tile is carried up out of the tray, the tray drops out of the way so
+  the whole deck is in reach; drop it back on the tray, or press Escape, to cancel. Hold it over a
+  page in the sidebar to place it on that page.
+- To reorder tiles, drop a tile on another tile's picture to swap the two (a dashed ring shows the
+  swap), or between two tiles to put it there (they move apart, with a mark in the gap). Hold a tile
+  at the tray's left or right edge, or just past it, to turn the page.
 - Ctrl-click tiles to pick several, Shift-click to pick a run of them, and Ctrl+A (with a tile picked)
   to pick them all. Right-click for **Copy**, **Paste** and **Delete from Library**, which act on every
   picked tile; Ctrl+C, Ctrl+V and Delete do the same.
@@ -332,8 +339,8 @@ you open it and again from **?**.
   Dropping it on a pinned position replaces the pin, which stays pinned; Undo reverses this.
 - Drag a dial from the deck out of the dial row into the open tray to add it to the library, as
   **Add to Library** does. Bring it back onto another dial before letting go to swap them instead.
-- Drag a library dial onto another one in the tray to move it there. Hold it over an arrow button to
-  turn the page.
+- Library dials reorder like keys: on a picture to swap, between two to go there, at an edge to turn
+  the page.
 - A copied library dial pastes onto the deck as a linked dial; several fill the dials from the one
   selected onward.
 - **New Dial**, the last tile, creates an empty library dial.
@@ -414,7 +421,8 @@ application name. To turn this off, disable **Show Volume Changes** in Preferenc
   backup is made before a profile is deleted. Drag profiles
   to reorder them, or double-click to rename.
 - A profile can have several **pages**. Switch pages with the **‹ ›** buttons on the deck or with
-  the Next Page and Previous Page actions.
+  the Next Page and Previous Page actions. While dragging a key or a library tile, hold it over a page
+  in the sidebar to open that page.
 - A **folder** is a page opened from a key with **Open Folder** and closed with **Back**.
 
 ## Auto-switch
