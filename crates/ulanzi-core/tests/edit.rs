@@ -176,6 +176,92 @@ fn move_to_page_uses_free_slots() {
 }
 
 #[test]
+fn swap_from_another_page() {
+    let mut e = editor_with_keys();
+    let p2 = e.add_page("Two");
+    e.set_page(p2);
+    e.set_field(&[4], Field::LabelText("there".into()));
+    // Key 0 of page 1 carried onto key 4 of page 2: they trade places.
+    assert!(e.swap_from_page(0, 0, 4));
+    assert_eq!(key(&e, 4).look.foreground, rgb(255, 0, 0));
+    assert_eq!(
+        e.profile().pages[0]
+            .keys
+            .get(&0)
+            .map(|k| k.look.label.text.as_str()),
+        Some("there")
+    );
+    // Onto an empty spot: the old spot is left empty.
+    assert!(e.swap_from_page(0, 1, 7));
+    assert!(!e.profile().pages[0].keys.contains_key(&1));
+    assert_eq!(key(&e, 7).look.foreground, rgb(0, 255, 0));
+    // One undo step each.
+    e.undo();
+    assert!(e.profile().pages[0].keys.contains_key(&1));
+    // A pinned key lands as an ordinary key, and the pin is gone.
+    e.set_page(0);
+    e.pin_key(2);
+    e.set_page(p2);
+    assert!(e.swap_from_page(0, 2, 9));
+    assert!(!e.profile().pinned.keys.contains_key(&2));
+    assert_eq!(key(&e, 9).look.foreground, rgb(0, 0, 255));
+    // Moved, not copied: the copy pinning left on page 1 goes too.
+    assert!(!e.profile().pages[0].keys.contains_key(&2));
+    // Onto a pinned key: refused.
+    e.set_page(0);
+    e.pin_key(0);
+    e.set_page(p2);
+    assert!(!e.swap_from_page(0, 4, 0));
+}
+
+#[test]
+fn a_pinned_key_carried_onto_a_key_sends_that_key_to_the_pin_spot() {
+    let mut e = editor_with_keys();
+    let p2 = e.add_page("Two");
+    e.pin_key(2);
+    e.set_page(p2);
+    e.set_field(&[3], Field::LabelText("there".into()));
+    // Page 1's key 2 was only the pinned one, so the key that was at 3 goes there.
+    assert!(e.swap_from_page(0, 2, 3));
+    assert_eq!(
+        e.profile().pages[0]
+            .keys
+            .get(&2)
+            .map(|k| k.look.label.text.as_str()),
+        Some("there")
+    );
+    assert_eq!(key(&e, 3).look.foreground, rgb(0, 0, 255));
+    assert!(e.profile().pinned.keys.is_empty());
+    e.undo();
+    assert!(e.profile().pinned.keys.contains_key(&2));
+}
+
+#[test]
+fn a_pinned_key_with_own_keys_under_it_on_both_pages_has_nowhere_to_swap() {
+    let mut e = editor_with_keys();
+    let p2 = e.add_page("Two");
+    let mut p = e.profile().clone();
+    let pin = Key {
+        tap: Some(Action::SleepNow),
+        ..Key::default()
+    };
+    p.pinned.keys.insert(0, pin);
+    let own = Key {
+        tap: Some(Action::PrevPage),
+        ..Key::default()
+    };
+    p.pages[p2].keys.insert(0, own.clone());
+    p.pages[p2].keys.insert(3, own);
+    let mut e = Editor::new(p);
+    e.set_page(p2);
+    // Page 1's own key 0 and page 2's own key 0 are both under the pin: refused.
+    assert!(!e.swap_from_page(0, 0, 3));
+    // An empty spot is fine.
+    assert!(e.swap_from_page(0, 0, 8));
+    assert_eq!(key(&e, 8).tap, Some(Action::SleepNow));
+}
+
+#[test]
 fn remove_last_page_refused() {
     let mut e = editor_with_keys();
     assert!(!e.remove_page(0));
@@ -1264,6 +1350,18 @@ fn library_dials_move() {
     let before = order(&e);
     e.move_library_dial(ids[0], 0);
     assert_eq!(order(&e), before);
+    assert!(e.undo());
+    assert_eq!(order(&e), ids);
+}
+
+#[test]
+fn library_items_swap_without_moving_the_ones_between() {
+    let mut e = Editor::new(Profile::new_default("L", Model::D200X));
+    let ids: Vec<_> = (0..4).map(|_| e.new_library_dial()).collect();
+    let order = |e: &Editor| e.profile().dial_library.iter().map(|l| l.id).collect::<Vec<_>>();
+    e.swap_library_dial(ids[0], ids[3]);
+    assert_eq!(order(&e), [ids[3], ids[1], ids[2], ids[0]]);
+    e.swap_library_dial(ids[1], ids[1]);
     assert!(e.undo());
     assert_eq!(order(&e), ids);
 }

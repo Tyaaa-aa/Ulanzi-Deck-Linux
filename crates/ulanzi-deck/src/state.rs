@@ -126,6 +126,8 @@ pub struct AppState {
     pub carried_dial: Cell<Option<u8>>,
     /// What kind of library item is being dragged from the tray, so only its kind lights up.
     pub library_drag: Cell<Option<LibraryKind>>,
+    /// The deck key being dragged: its page and number, so it can be dropped on another page.
+    pub carried_key: Cell<Option<(usize, u8)>>,
     listeners: RefCell<Vec<Listener>>,
 }
 
@@ -192,6 +194,7 @@ impl AppState {
             tray_open: Cell::new(false),
             carried_dial: Cell::new(None),
             library_drag: Cell::new(None),
+            carried_key: Cell::new(None),
             listeners: RefCell::new(Vec::new()),
         })
     }
@@ -365,6 +368,12 @@ impl AppState {
     pub fn set_live(&self, live: LiveKeys) {
         *self.live.borrow_mut() = live;
         self.notify(Change::Live);
+    }
+
+    /// Something is being dragged that can be dropped on another page, so holding it over a
+    /// page in the sidebar switches to that page.
+    pub fn carrying_to_page(&self) -> bool {
+        self.library_drag.get().is_some() || self.carried_key.get().is_some()
     }
 
     /// Show a page here and on the deck.

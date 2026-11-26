@@ -240,7 +240,7 @@ ulanzictl probe …                talk to the deck directly (stop the service f
 
 | Variable | Effect |
 |---|---|
-| `ULANZI_LOG` | Log filter for the service, e.g. `debug` or `ulanzi_deckd::plugins=debug` |
+| `ULANZI_LOG` | Log filter for the service and the app, e.g. `debug`, `ulanzi_deckd::plugins=debug`, or `dnd=debug` (the app's Library drag and drop) |
 | `ULANZI_DEMO=1` | The service uses a simulated deck and does not access hardware (screenshots, tests) |
 | `ULANZI_BIN` | `scripts/sandbox.sh`: directory of the binaries to run |
 | `ULANZI_RELEASES_URL` | Where to ask for the latest release, for testing |
@@ -265,6 +265,7 @@ development files for GTK 4.16 or later and libadwaita 1.6 or later, and pkg-con
 # Debian/Ubuntu: sudo apt install libgtk-4-dev libadwaita-1-dev pkg-config
 cargo build --release
 scripts/dev-install.sh       # install into ~/.local (binaries, unit, D-Bus file, menu entry)
+scripts/dev-install.sh --note "What this build is for"   # the note shows on the app's DEV chip
 scripts/dev-uninstall.sh
 ```
 
@@ -276,7 +277,13 @@ scripts/test.sh            # format, clippy (warnings are errors), every test, f
 scripts/test.sh --quick    # without the end-to-end part
 scripts/sandbox.sh --demo  # the app with a simulated deck and temporary profiles
 scripts/sandbox.sh --showcase   # the real deck with temporary profiles (pauses your service)
+# A scripted drag through the Library tray: frames and a PASS/FAIL log in DIR
+scripts/sandbox.sh --demo --showcase -- --screenshot DIR/final.png --open library-tray --drag-test DIR
 ```
+
+A dev install marks its build: the app shows a **DEV** chip by its title, and hovering it shows the
+note, branch, commit, uncommitted files, build time and whether the service runs the same build.
+Release builds have no chip.
 
 Tests never modify your configuration. The deck actor is tested against a mock transport with a
 paused clock. Plugins are tested in the plugins repository, in the real plugin host against mock OBS

@@ -751,6 +751,74 @@ impl Editor {
         });
     }
 
+    /// Swap key `a` on page `from` with key `b` on the shown page (a key carried to another page).
+    /// A pinned key carried to another page lands there as an ordinary key: the pin is gone, so
+    /// every page shows its own key at `a` again. Whatever was at `b` goes to `a` on page `from`,
+    /// or, if that page has its own key there, to `a` on this page.
+    /// False, and nothing changes, when it cannot: onto a pinned key, onto a key with nowhere to
+    /// go, or with a key a newer version left there.
+    pub fn swap_from_page(&mut self, from: usize, a: u8, b: u8) -> bool {
+        let to = self.page;
+        if from == to {
+            if a == b {
+                return true;
+            }
+            let before = self.profile.clone();
+            self.swap(a, b);
+            return self.profile != before;
+        }
+        let p = &self.profile;
+        if from >= p.pages.len()
+            || a >= KEYS
+            || b >= KEYS
+            || p.pinned.keys.contains_key(&b)
+            || taken(p, from, Slot::Key(a))
+            || taken(p, to, Slot::Key(b))
+        {
+            return false;
+        }
+        if !p.pinned.keys.contains_key(&a) {
+            self.edit(|p, to| {
+                let ka = p.pages[from].keys.remove(&a);
+                let kb = p.pages[to].keys.remove(&b);
+                if let Some(k) = ka {
+                    p.pages[to].keys.insert(b, k);
+                }
+                if let Some(k) = kb {
+                    p.pages[from].keys.insert(a, k);
+                }
+            });
+            return true;
+        }
+        // A pinned key moves out: the pin goes, and so do the copies of it that pinning left
+        // (a page's own key just like it); the pages' own keys at `a` show again.
+        let pin = p.pinned.keys[&a].clone();
+        let own = |page: usize| p.pages[page].keys.get(&a).is_some_and(|k| *k != pin);
+        let displaced = p.pages[to].keys.contains_key(&b);
+        let home = if !displaced || !own(from) {
+            from
+        } else if a != b && !own(to) {
+            to
+        } else {
+            return false;
+        };
+        self.edit(|p, to| {
+            let Some(pin) = p.pinned.keys.remove(&a) else {
+                return;
+            };
+            for pg in &mut p.pages {
+                if pg.keys.get(&a) == Some(&pin) {
+                    pg.keys.remove(&a);
+                }
+            }
+            if let Some(k) = p.pages[to].keys.remove(&b) {
+                p.pages[home].keys.insert(a, k);
+            }
+            p.pages[to].keys.insert(b, pin);
+        });
+        true
+    }
+
     pub fn copy_keys(&mut self, keys: &[u8]) {
         let Some(&first) = keys.iter().min() else {
             return;

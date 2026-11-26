@@ -160,8 +160,9 @@ fn accept_drops(
     w.add_controller(target);
 }
 
-/// Make key `n` draggable (to swap it with another key).
-fn drag_key(k: &KeyWidget, n: u8) {
+/// Make key `n` draggable (to swap it with another key, on this page or, held over a page in the
+/// sidebar, on another).
+fn drag_key(k: &KeyWidget, n: u8, state: &State) {
     let source = gtk::DragSource::builder().actions(gdk::DragAction::MOVE).build();
     source.connect_prepare(move |_, _, _| {
         Some(gdk::ContentProvider::for_value(
@@ -170,11 +171,17 @@ fn drag_key(k: &KeyWidget, n: u8) {
     });
     {
         let picture = k.picture.clone();
+        let state = state.clone();
         source.connect_drag_begin(move |src, _| {
             if let Some(p) = picture.paintable() {
                 src.set_icon(Some(&p), 30, 30);
             }
+            state.carried_key.set(Some((state.editor.borrow().page(), n)));
         });
+    }
+    {
+        let state = state.clone();
+        source.connect_drag_end(move |_, _, _| state.carried_key.set(None));
     }
     k.button.add_controller(source);
 }
@@ -525,6 +532,9 @@ fn moving_note(keys: usize) -> Option<String> {
 }
 
 const HINT: &str = "Right-click a key to copy or paste it. The ‹ › buttons flip pages on the deck.";
+/// Under the deck while an action is dragged from the list.
+const ACTION_DRAG_HINT: &str =
+    "Drop on a key, or on a dial: left side = turn left, middle = press, right side = turn right";
 
 /// The three drop zones of a dial: left third, middle, right third (as [`hit_zone`]).
 fn draw_dial_zones(cr: &gtk::cairo::Context, w: f64, h: f64, hover: Option<DialZone>) {
@@ -1154,7 +1164,7 @@ pub fn build(state: &State) -> Canvas {
     // Drag and drop.
     for (n, k) in keys.iter().enumerate() {
         let n = n as u8;
-        drag_key(k, n);
+        drag_key(k, n, state);
         let state = state.clone();
         accept_drops(
             &k.button,
@@ -1162,6 +1172,30 @@ pub fn build(state: &State) -> Canvas {
             Some(crate::state::LibraryKind::Key),
             |_| false,
             move |p, _| match p {
+                // Carried here from another page (held over it in the sidebar): they trade places.
+                Payload::Key(from)
+                    if state
+                        .carried_key
+                        .get()
+                        .is_some_and(|(page, k)| k == from && page != state.editor.borrow().page()) =>
+                {
+                    let (page, _) = state.carried_key.get().unwrap_or_default();
+                    let mut moved = false;
+                    state.edit(|e| moved = e.swap_from_page(page, from, n));
+                    if moved {
+                        state.select(|s| s.click(Slot::Key(n)));
+                    } else {
+                        let pinned_here = state.editor.borrow().key_info(n).pinned;
+                        crate::ui::toast(
+                            &state,
+                            if pinned_here {
+                                "That key is pinned to every page. Drop on another key, or unpin it first."
+                            } else {
+                                "The key there has nowhere to go: both pages have their own key under the pin. Drop on an empty spot instead."
+                            },
+                        );
+                    }
+                }
                 Payload::Key(from) if from != n => {
                     state.edit(|e| e.swap(from, n));
                     state.select(|s| s.click(Slot::Key(n)));
@@ -1227,8 +1261,8 @@ pub fn build(state: &State) -> Canvas {
             let (zone, area, dial, hint) = (zones[n].clone(), zone_areas[n].clone(), d.clone(), hint.clone());
             let state = state.clone();
             motion.connect_motion(move |_, x, _| {
-                // A whole dial lands as a whole: no zones.
-                if state.carried_dial.get().is_some() {
+                // Only an action lands on one part of a dial; a whole dial or a key has no zones.
+                if !state.dragging_action.get() || state.carried_dial.get().is_some() {
                     return;
                 }
                 let z = hit_zone(dial.width() as f64, x);
@@ -1236,18 +1270,29 @@ pub fn build(state: &State) -> Canvas {
                     zone.set(Some(z));
                     area.queue_draw();
                     hint.set_label(match z {
-                        DialZone::Left => "Drop here: runs when the dial turns left",
-                        DialZone::Press => "Drop here: runs when the dial is pressed",
-                        DialZone::Right => "Drop here: runs when the dial turns right",
+                        DialZone::Left => "Let go here to run this action when you turn the dial left",
+                        DialZone::Press => "Let go here to run this action when you press the dial",
+                        DialZone::Right => "Let go here to run this action when you turn the dial right",
                     });
                 }
             });
         }
         {
-            let (zone, area) = (zones[n].clone(), zone_areas[n].clone());
+            let (zone, area, hint, state) = (
+                zones[n].clone(),
+                zone_areas[n].clone(),
+                hint.clone(),
+                state.clone(),
+            );
             motion.connect_leave(move |_| {
                 zone.set(None);
                 area.queue_draw();
+                // Off the dial, the hint says what it said before.
+                hint.set_label(if state.dragging_action.get() {
+                    ACTION_DRAG_HINT
+                } else {
+                    HINT
+                });
             });
         }
         d.add_controller(motion);
@@ -1689,7 +1734,7 @@ pub fn build(state: &State) -> Canvas {
                     f.set_icons_visible(!state.dragging_action.get());
                 }
                 hint.set_label(if state.dragging_action.get() {
-                    "Drop on a key, or on a dial: left side = turn left, middle = press, right side = turn right"
+                    ACTION_DRAG_HINT
                 } else {
                     HINT
                 });

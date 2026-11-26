@@ -30,6 +30,9 @@ struct Shot {
     page: Option<usize>,
     /// Milliseconds between reaching the service and taking the shot (`--wait`, default 1200).
     wait: u64,
+    /// `--drag-test DIR`: run the scripted Library drag ([`ui::library_tray::drag_test`]) into DIR
+    /// before the shot.
+    drag_test: Option<PathBuf>,
 }
 
 /// The app's own icons when they are not in the system theme: next to the binary (tarball,
@@ -75,6 +78,7 @@ fn parse_args() -> Option<Shot> {
         open: get("--open"),
         page: get("--page").and_then(|p| p.parse().ok()),
         wait: get("--wait").and_then(|w| w.parse().ok()).unwrap_or(1200),
+        drag_test: get("--drag-test").map(PathBuf::from),
     })
 }
 
@@ -485,6 +489,26 @@ fn main() -> glib::ExitCode {
                     ui::icon_picker::open_at(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 _ => {}
+            }
+            if let Some(dir) = shot.drag_test.clone() {
+                glib::timeout_add_local_once(Duration::from_millis(shot.wait), move || {
+                    let snap: std::rc::Rc<dyn Fn(&std::path::Path)> = {
+                        let window = window.clone();
+                        std::rc::Rc::new(move |p| {
+                            // Now and then a snapshot comes back empty; the next frame's does not.
+                            if save_screenshot(window.upcast_ref(), p).is_err() {
+                                let (window, p) = (window.clone(), p.to_path_buf());
+                                glib::timeout_add_local_once(Duration::from_millis(20), move || {
+                                    if let Err(e) = save_screenshot(window.upcast_ref(), &p) {
+                                        eprintln!("screenshot failed: {e}");
+                                    }
+                                });
+                            }
+                        })
+                    };
+                    ui::library_tray::drag_test::run(dir, snap, Box::new(move || app.quit()));
+                });
+                return;
             }
             glib::timeout_add_local_once(Duration::from_millis(shot.wait), move || {
                 let (min, nat, _, _) = window.measure(gtk::Orientation::Horizontal, -1);

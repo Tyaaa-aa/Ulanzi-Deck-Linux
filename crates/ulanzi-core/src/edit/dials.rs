@@ -250,6 +250,21 @@ impl Editor {
         });
     }
 
+    /// Library dials `a` and `b` trade places; the ones between stay where they are.
+    pub fn swap_library_dial(&mut self, a: Uuid, b: Uuid) {
+        let lib = &self.profile.dial_library;
+        let (Some(i), Some(j)) = (
+            lib.iter().position(|l| l.id == a),
+            lib.iter().position(|l| l.id == b),
+        ) else {
+            return;
+        };
+        if i == j {
+            return;
+        }
+        self.edit(|p, _| p.dial_library.swap(i, j));
+    }
+
     /// Take library dial `id` out of the library but keep every dial that uses it, each as its own
     /// copy, a pin too.
     pub fn delete_library_dial_keep_uses(&mut self, id: Uuid) {

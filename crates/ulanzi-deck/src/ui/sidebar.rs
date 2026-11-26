@@ -2,6 +2,7 @@
 
 use adw::prelude::*;
 use gtk::glib;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use ulanzi_core::Color;
@@ -440,11 +441,18 @@ fn profile_row(
     row
 }
 
-fn page_row(n: usize, name: &str, keys: usize) -> gtk::ListBoxRow {
+/// How long a dragged key or dial is held over a page before the deck switches to it.
+const HOVER_SWITCH_MS: u32 = 500;
+/// After the first switch, other pages switch faster until the pointer leaves the Pages list.
+const HOVER_SWITCH_AGAIN_MS: u32 = 250;
+
+/// A page row, and the bar that fills while something dragged is held over it.
+fn page_row(n: usize, name: &str, keys: usize) -> (gtk::ListBoxRow, gtk::ProgressBar) {
     let b = gtk::Box::builder()
         .spacing(12)
         .margin_top(6)
-        .margin_bottom(6)
+        // The bar under it makes up the rest, so rows keep their height.
+        .margin_bottom(3)
         .margin_start(6)
         .margin_end(6)
         .build();
@@ -468,7 +476,97 @@ fn page_row(n: usize, name: &str, keys: usize) -> gtk::ListBoxRow {
             .css_classes(["caption", "dim-label"])
             .build(),
     );
-    gtk::ListBoxRow::builder().child(&b).build()
+    let bar = gtk::ProgressBar::builder()
+        .css_classes(["page-hover-bar"])
+        .opacity(0.0)
+        .can_target(false)
+        .build();
+    let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    outer.append(&b);
+    outer.append(&bar);
+    (gtk::ListBoxRow::builder().child(&outer).build(), bar)
+}
+
+/// Hold a dragged key or dial over page `index` for a moment and the deck switches to it, so it
+/// can be dropped there. The bar fills meanwhile; moving off the row stops it. `armed` is set by
+/// the first switch: later ones take half as long, until the pointer leaves the Pages list.
+fn switch_on_hover(
+    state: &State,
+    row: &gtk::ListBoxRow,
+    bar: &gtk::ProgressBar,
+    index: usize,
+    armed: &Rc<std::cell::Cell<bool>>,
+) {
+    let motion = gtk::DropControllerMotion::new();
+    // The fill (only a picture: with animations off it jumps to full) and the timer that switches.
+    let anim: Rc<RefCell<Option<adw::TimedAnimation>>> = Rc::default();
+    let timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+    let stop = {
+        let (row, bar, anim, timer) = (row.clone(), bar.clone(), anim.clone(), timer.clone());
+        move || {
+            if let Some(t) = timer.take() {
+                t.remove();
+            }
+            if let Some(a) = anim.take() {
+                a.pause();
+            }
+            row.remove_css_class("hover-switch");
+            bar.set_opacity(0.0);
+            bar.set_fraction(0.0);
+        }
+    };
+    {
+        let (state, row, bar, stop, armed) = (
+            state.clone(),
+            row.clone(),
+            bar.clone(),
+            stop.clone(),
+            armed.clone(),
+        );
+        motion.connect_enter(move |_, _, _| {
+            stop();
+            if !state.carrying_to_page() {
+                armed.set(false);
+                return;
+            }
+            if index == state.editor.borrow().page() {
+                return;
+            }
+            let wait = if armed.get() {
+                HOVER_SWITCH_AGAIN_MS
+            } else {
+                HOVER_SWITCH_MS
+            };
+            row.add_css_class("hover-switch");
+            bar.set_opacity(1.0);
+            let target = {
+                let bar = bar.clone();
+                adw::CallbackAnimationTarget::new(move |v| bar.set_fraction(v))
+            };
+            let a = adw::TimedAnimation::builder()
+                .widget(&bar)
+                .value_from(0.0)
+                .value_to(1.0)
+                .duration(wait)
+                .easing(adw::Easing::Linear)
+                .target(&target)
+                .build();
+            a.play();
+            *anim.borrow_mut() = Some(a);
+            let (state, timer2, stop, armed) = (state.clone(), timer.clone(), stop.clone(), armed.clone());
+            let id = glib::timeout_add_local_once(std::time::Duration::from_millis(wait as u64), move || {
+                timer2.borrow_mut().take();
+                stop();
+                if state.carrying_to_page() && index != state.editor.borrow().page() {
+                    armed.set(true);
+                    state.go_to_page(index);
+                }
+            });
+            *timer.borrow_mut() = Some(id);
+        });
+    }
+    motion.connect_leave(move |_| stop());
+    row.add_controller(motion);
 }
 
 /// Build the sidebar content (inside a toolbar view supplied by the window).
@@ -486,6 +584,15 @@ pub fn build(state: &State) -> gtk::Box {
     let pages = gtk::ListBox::builder()
         .css_classes(["navigation-sidebar"])
         .build();
+    // Switching pages by holding a dragged key over them: quicker after the first, until the
+    // pointer leaves the list.
+    let hover_armed: Rc<std::cell::Cell<bool>> = Rc::default();
+    {
+        let motion = gtk::DropControllerMotion::new();
+        let armed = hover_armed.clone();
+        motion.connect_leave(move |_| armed.set(false));
+        pages.add_controller(motion);
+    }
 
     column.append(&auto_switch_row(state));
     {
@@ -579,7 +686,9 @@ pub fn build(state: &State) -> gtk::Box {
                     let row = profile_row(name, &sub, *id == current, &look, *id, &rule_apps(&state, *id));
                     attach_profile_menu(&state, &row, *id, name, i, list.len());
                     let st = state.clone();
-                    reorderable(&row, "profile", i, move |from, to| move_profile(&st, from, to));
+                    reorderable(&state, &row, "profile", i, move |from, to| {
+                        move_profile(&st, from, to)
+                    });
                     profiles.append(&row);
                     if *id == current {
                         profiles.select_row(Some(&row));
@@ -622,10 +731,11 @@ pub fn build(state: &State) -> gtk::Box {
                 let e = state.editor.borrow();
                 let count = e.profile().pages.len();
                 for (i, p) in e.profile().pages.iter().enumerate() {
-                    let row = page_row(i + 1, &p.name, p.keys.len());
+                    let (row, bar) = page_row(i + 1, &p.name, p.keys.len());
                     attach_page_menu(&state, &row, i, count, &p.name);
                     let st = state.clone();
-                    reorderable(&row, "page", i, move |from, to| move_page(&st, from, to));
+                    reorderable(&state, &row, "page", i, move |from, to| move_page(&st, from, to));
+                    switch_on_hover(&state, &row, &bar, i, &hover_armed);
                     pages.append(&row);
                     if i == e.page() {
                         pages.select_row(Some(&row));
@@ -940,6 +1050,7 @@ fn add_move_buttons(menu: &gtk::Box, index: usize, count: usize, on_move: impl F
 
 /// Let `row` be dragged onto another row of the same `kind` to move it there.
 fn reorderable(
+    state: &State,
     row: &gtk::ListBoxRow,
     kind: &'static str,
     index: usize,
@@ -964,8 +1075,12 @@ fn reorderable(
     row.add_controller(source);
     let target = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
     {
-        let row = row.clone();
+        let (row, state) = (row.clone(), state.clone());
         target.connect_enter(move |_, _, _| {
+            // A key or dial from the deck or the tray is not a row: it is never dropped here.
+            if state.carrying_to_page() || state.carried_dial.get().is_some() {
+                return gtk::gdk::DragAction::empty();
+            }
             row.add_css_class("drop-target");
             gtk::gdk::DragAction::MOVE
         });

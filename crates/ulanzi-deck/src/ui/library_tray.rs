@@ -12,6 +12,14 @@ use uuid::Uuid;
 
 use crate::state::{Change, LibraryKind, State};
 use crate::ui::canvas;
+use crate::ui::tile_drop::{self, Aim, Slot};
+
+pub mod drag_test;
+
+thread_local! {
+    /// The window's tray, for the scripted drag test ([`drag_test`]).
+    static LAST: RefCell<Weak<Tray>> = const { RefCell::new(Weak::new()) };
+}
 use crate::ui::dial_swap::DialRow;
 
 /// Dials per row, and rows per page at most.
@@ -25,6 +33,21 @@ const MARGIN: f64 = 12.0;
 const GAP: f64 = 16.0;
 const ROW_GAP: i32 = 8;
 const ANIM_MS: u32 = 250;
+/// The tray dropping to its peek strip while a tile is carried out, and springing back.
+const PEEK_DOWN_MS: u32 = 140;
+const PEEK_UP_MS: u32 = 180;
+/// A tile held at an edge of the tray turns the page after this. After a turn the edge rests
+/// `EDGE_PAUSE_MS` before it can turn again, so a held tile does not race through the pages.
+const EDGE_TURN_MS: u64 = 180;
+const EDGE_PAUSE_MS: u64 = 900;
+/// The edge's one orange pulse when it turns the page.
+const EDGE_FLASH_MS: u64 = 450;
+/// A held tile turns the page at the tray's outer edges: in its side padding, this far into the
+/// tiles' area, or up to `EDGE_OUT` past the tray's side (pushing past the edge counts).
+const EDGE_IN: f64 = 4.0;
+const EDGE_OUT: f64 = 48.0;
+/// Tiles sliding to their new places after a drop.
+const REORDER_MS: u32 = 260;
 
 const HINT: &str = "Drag a dial onto the deck to place it, or a dial from the deck down here to add it. \
 Click one to edit it, right-click to copy, paste or delete it. Click ? for the tour.";
@@ -149,6 +172,11 @@ type TileAction = Box<dyn Fn(&State, &gtk::Button)>;
 /// A library item's tile, kept so edits update it in place.
 struct Item {
     id: Uuid,
+    /// What the tile shows (picture, name, usage): this moves aside to open a gap, and hides
+    /// while a picture of it slides to its new place; the button around it stays put. Before
+    /// `button`, so it lets go first and the button is never finalized with it still held.
+    column: gtk::Box,
+    button: gtk::Button,
     disc: gtk::Box,
     /// A dial's face, or a key's picture.
     face: Option<canvas::DialFace>,
@@ -159,6 +187,8 @@ struct Item {
 }
 
 pub struct Tray {
+    /// Holds the tray's content, with the page-turn lights over its sides.
+    rim: gtk::Overlay,
     state: State,
     me: RefCell<Weak<Tray>>,
     /// Holds the deck and the tray, and places both.
@@ -202,6 +232,33 @@ pub struct Tray {
     /// How far open, 0 to 1.
     shown: Cell<f64>,
     grow: RefCell<Option<adw::TimedAnimation>>,
+    /// The top row; while a tile is carried onto the deck the tray drops to just this
+    /// (the peek strip), with `peek_hint` in it.
+    header: gtk::Box,
+    peek_hint: gtk::Label,
+    /// How far down to the peek strip, 0 to 1, and whether it is going there.
+    peek: Cell<f64>,
+    peeked: Cell<bool>,
+    /// The window watches where a carried tile is.
+    watching: Cell<bool>,
+    /// Glowing edges shown while a tile is dragged, to turn to the page before or after.
+    edges: [gtk::Box; 2],
+    edge_timer: RefCell<Option<glib::SourceId>>,
+    /// When an edge last turned the page, for the pause after it.
+    edge_turned: Cell<Option<std::time::Instant>>,
+    /// The side a carried tile is held at (-1 left, 1 right).
+    edge_at: Cell<Option<isize>>,
+    /// What letting go of the carried tile would do, as shown.
+    aim: Cell<Aim>,
+    /// The mark between two tiles where a carried tile would go.
+    gap_mark: gtk::Box,
+    /// The dashed ring round the picture a carried tile would swap with. Drawn over the tiles,
+    /// not on the tile, so the picture that slides the tile away never carries it.
+    swap_mark: gtk::Box,
+    /// Pictures of tiles sliding to their new places after a drop, over the pages.
+    ghosts: gtk::Fixed,
+    reorder_anim: RefCell<Option<adw::TimedAnimation>>,
+    peek_anim: RefCell<Option<adw::TimedAnimation>>,
     /// The page the grids are drawn at (between two while sliding) and the page area's height.
     offset: Cell<f64>,
     height: Cell<f64>,
@@ -260,6 +317,13 @@ impl Tray {
         search.add_css_class("tray-search");
         let header = gtk::Box::builder().spacing(6).margin_bottom(6).build();
         header.append(&switch);
+        let peek_hint = gtk::Label::builder()
+            .label("Drop here to cancel")
+            .css_classes(["tray-title"])
+            .margin_start(6)
+            .visible(false)
+            .build();
+        header.append(&peek_hint);
         header.append(&search);
         // Keeps ? and close at the end with the switch hidden.
         header.append(&gtk::Box::builder().hexpand(true).build());
@@ -269,6 +333,7 @@ impl Tray {
         let pages = gtk::Overlay::builder()
             .child(&sizer)
             .overflow(gtk::Overflow::Hidden)
+            .css_classes(["tray-pages"])
             .build();
 
         let round = |icon: &str, tip: &str| {
@@ -298,9 +363,11 @@ impl Tray {
         content.append(&header);
         content.append(&pages);
         pages.add_overlay(&pager);
+        // The page-turn lights sit over the tray's own sides.
+        let rim = gtk::Overlay::builder().child(&content).build();
         // Never scrolled: the frame only clips the tray while it grows and shrinks.
         let frame = gtk::ScrolledWindow::builder()
-            .child(&content)
+            .child(&rim)
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::External)
             .css_classes(["library-frame"])
@@ -309,6 +376,7 @@ impl Tray {
         stage.add_overlay(&frame);
 
         let tray = Rc::new(Tray {
+            rim,
             state: state.clone(),
             me: RefCell::default(),
             stage,
@@ -340,6 +408,50 @@ impl Tray {
             stale: Cell::new(true),
             shown: Cell::new(0.0),
             grow: RefCell::default(),
+            header,
+            peek_hint,
+            peek: Cell::new(0.0),
+            peeked: Cell::new(false),
+            watching: Cell::new(false),
+            edges: [-1isize, 1].map(|step| {
+                let edge = gtk::Box::builder()
+                    .css_classes(["tray-edge", if step < 0 { "prev" } else { "next" }])
+                    .overflow(gtk::Overflow::Hidden)
+                    .halign(if step < 0 {
+                        gtk::Align::Start
+                    } else {
+                        gtk::Align::End
+                    })
+                    .valign(gtk::Align::Fill)
+                    .visible(false)
+                    .can_target(false)
+                    .build();
+                // The orange pulse as the page turns, over the soft light.
+                edge.append(
+                    &gtk::Box::builder()
+                        .css_classes(["tray-edge-flash"])
+                        .hexpand(true)
+                        .vexpand(true)
+                        .build(),
+                );
+                edge
+            }),
+            edge_timer: RefCell::default(),
+            edge_turned: Cell::new(None),
+            edge_at: Cell::new(None),
+            aim: Cell::new(Aim::Nothing),
+            gap_mark: gtk::Box::builder()
+                .css_classes(["tray-gap-mark"])
+                .width_request(4)
+                .can_target(false)
+                .build(),
+            swap_mark: gtk::Box::builder()
+                .css_classes(["tray-swap-mark"])
+                .can_target(false)
+                .build(),
+            ghosts: gtk::Fixed::builder().can_target(false).build(),
+            reorder_anim: RefCell::default(),
+            peek_anim: RefCell::default(),
             offset: Cell::new(0.0),
             height: Cell::new(0.0),
             from: Cell::new((0.0, 0.0)),
@@ -383,7 +495,235 @@ impl Tray {
         }
         tray.accept_deck_dials();
         tray.wire();
+        tray.peek_when_carried_out();
+        tray.turn_at_edges();
+        tray.take_moved_tiles();
+        LAST.with(|l| *l.borrow_mut() = Rc::downgrade(&tray));
         tray
+    }
+
+    /// While a tile is dragged in the tray, holding it at a side where there is another page
+    /// turns to it: the side lights up softly under the tile, pulses orange once as the page
+    /// turns, and rests a moment before it turns again. Where the tile is comes from the
+    /// window's watch ([`Tray::peek_when_carried_out`]); the sides themselves take no pointer.
+    fn turn_at_edges(&self) {
+        for edge in &self.edges {
+            self.rim.add_overlay(edge);
+        }
+        self.pages.add_overlay(&self.ghosts);
+        self.ghosts.put(&self.gap_mark, 0.0, 0.0);
+        self.ghosts.put(&self.swap_mark, 0.0, 0.0);
+    }
+
+    /// Which outer edge of the tray `(x, y)` in `from` is at (-1 left, 1 right): the tray's side
+    /// padding, a few pixels into the tiles' area, or just past the tray's side, at the tray's
+    /// height.
+    fn edge_zone(&self, from: &impl IsA<gtk::Widget>, x: f64, y: f64) -> Option<isize> {
+        let pt = |w: &gtk::Widget, x: f64, y: f64, to: &gtk::Widget| {
+            w.compute_point(to, &gtk::graphene::Point::new(x as f32, y as f32))
+                .map(|p| (p.x() as f64, p.y() as f64))
+        };
+        let frame: &gtk::Widget = self.frame.upcast_ref();
+        let (px, py) = pt(from.upcast_ref(), x, y, frame)?;
+        if !self.frame.is_visible() || py < 0.0 || py > self.frame.height() as f64 {
+            return None;
+        }
+        // Where the tiles' area starts and ends across the tray.
+        let pages: &gtk::Widget = self.pages.upcast_ref();
+        let (left, _) = pt(pages, 0.0, 0.0, frame)?;
+        let (right, _) = pt(pages, self.pages.width() as f64, 0.0, frame)?;
+        let w = self.frame.width() as f64;
+        if px > -EDGE_OUT && px < left + EDGE_IN {
+            Some(-1)
+        } else if px > right - EDGE_IN && px < w + EDGE_OUT {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
+    /// [`Tray::edge_zone`] while a tile is carried, where there is a page to turn to.
+    fn edge_step(&self, from: &impl IsA<gtk::Widget>, x: f64, y: f64) -> Option<isize> {
+        self.moving.get()?;
+        let step = self.edge_zone(from, x, y)?;
+        self.edges[if step < 0 { 0 } else { 1 }]
+            .is_visible()
+            .then_some(step)
+    }
+
+    /// The carried tile is now held at side `step`, or at none.
+    fn edge_hover(&self, step: Option<isize>) {
+        if self.edge_at.replace(step) == step {
+            return;
+        }
+        self.stop_edge_timer();
+        for (edge, s) in self.edges.iter().zip([-1isize, 1]) {
+            if step == Some(s) {
+                edge.add_css_class("hover");
+            } else {
+                edge.remove_css_class("hover");
+            }
+        }
+        if let Some(step) = step {
+            self.show_aim(Aim::Nothing);
+            self.arm_edge(step, if step < 0 { 0 } else { 1 });
+        }
+    }
+
+    /// Turn the page `step` once the tile has been held long enough and the last turn's pause is
+    /// over; while the tile stays, arm again for the next one.
+    fn arm_edge(&self, step: isize, i: usize) {
+        self.stop_edge_timer();
+        let pause = self
+            .edge_turned
+            .get()
+            .map(|at| std::time::Duration::from_millis(EDGE_PAUSE_MS).saturating_sub(at.elapsed()))
+            .unwrap_or_default();
+        let wait = pause.max(std::time::Duration::from_millis(EDGE_TURN_MS));
+        let me = self.me.borrow().clone();
+        let id = glib::timeout_add_local_once(wait, move || {
+            let Some(t) = me.upgrade() else { return };
+            t.edge_timer.borrow_mut().take();
+            if !t.turn_by(step) {
+                return;
+            }
+            t.edge_turned.set(Some(std::time::Instant::now()));
+            let edge = t.edges[i].clone();
+            edge.remove_css_class("flash");
+            edge.add_css_class("flash");
+            glib::timeout_add_local_once(std::time::Duration::from_millis(EDGE_FLASH_MS), move || {
+                edge.remove_css_class("flash")
+            });
+            if t.edges[i].is_visible() && t.edge_at.get() == Some(step) {
+                t.arm_edge(step, i);
+            }
+        });
+        *self.edge_timer.borrow_mut() = Some(id);
+    }
+
+    fn stop_edge_timer(&self) {
+        if let Some(id) = self.edge_timer.borrow_mut().take() {
+            id.remove();
+        }
+    }
+
+    /// Turn one page back (-1) or on (1) while a tile is dragged; false when there is none.
+    fn turn_by(&self, step: isize) -> bool {
+        if self.moving.get().is_none() {
+            return false;
+        }
+        let page = self.state.tray_page.get();
+        let pages = layout(self.count(), page).pages;
+        let Some(to) = page.checked_add_signed(step).filter(|p| *p < pages) else {
+            return false;
+        };
+        self.go(to);
+        self.show_edges();
+        true
+    }
+
+    /// The glowing edges show while a tile is dragged, each only where there is a page to go to.
+    fn show_edges(&self) {
+        let dragging = self.moving.get().is_some();
+        let page = self.state.tray_page.get();
+        let pages = layout(self.count(), page).pages;
+        for (edge, show) in self.edges.iter().zip([page > 0, page + 1 < pages]) {
+            let show = dragging && show;
+            if !show {
+                edge.remove_css_class("hover");
+            }
+            edge.set_visible(show);
+        }
+        let held = self.edge_at.get();
+        if held.is_some_and(|s| !self.edges[if s < 0 { 0 } else { 1 }].is_visible()) || !dragging {
+            self.edge_at.set(None);
+        }
+        if !dragging {
+            self.stop_edge_timer();
+        }
+    }
+
+    /// A tile carried up out of the tray drops the tray to its peek strip, so the whole deck is in
+    /// reach; back over the strip, the tray rises again. The drag's end brings it back too.
+    fn peek_when_carried_out(&self) {
+        // Watched on the whole window, not the tray: a quick flick can leave the tray between two
+        // pointer events, so the tray never sees the pointer go.
+        let me = self.me.borrow().clone();
+        self.stage.connect_realize(move |stage| {
+            let Some(root) = stage.root() else { return };
+            let root: gtk::Widget = root.upcast();
+            // Once per window, however often the stage is realized.
+            let Some(t) = me.upgrade() else { return };
+            if t.watching.replace(true) {
+                return;
+            }
+            let motion = gtk::DropControllerMotion::new();
+            let follow = {
+                let (me, root) = (me.clone(), root.downgrade());
+                move |x: f64, y: f64| {
+                    let (Some(t), Some(root)) = (me.upgrade(), root.upgrade()) else {
+                        return;
+                    };
+                    if t.state.library_drag.get().is_none() {
+                        return;
+                    }
+                    let over_tray = root
+                        .compute_point(&t.frame, &gtk::graphene::Point::new(x as f32, y as f32))
+                        .is_some_and(|p| t.frame.contains(p.x() as f64, p.y() as f64));
+                    // Pushed just past the tray's side is still the tray: that edge turns pages.
+                    let beside = t.moving.get().is_some() && t.edge_zone(&root, x, y).is_some();
+                    t.set_peek(!(over_tray || beside));
+                    t.edge_hover(t.edge_step(&root, x, y));
+                }
+            };
+            {
+                let follow = follow.clone();
+                motion.connect_enter(move |_, x, y| follow(x, y));
+            }
+            motion.connect_motion(move |_, x, y| follow(x, y));
+            {
+                let me = me.clone();
+                motion.connect_leave(move |_| {
+                    // Not a peek: GTK reports this leave as a drop ends too, before the drag's
+                    // end; peeking here dropped the tray for a moment on every drop.
+                    if let Some(t) = me.upgrade() {
+                        tracing::debug!(target: "dnd", "window leave");
+                        t.edge_hover(None);
+                    }
+                });
+            }
+            root.add_controller(motion);
+        });
+    }
+
+    /// Drop to the peek strip (`true`) or rise back to the tray's height.
+    fn set_peek(&self, down: bool) {
+        if self.peeked.replace(down) == down {
+            return;
+        }
+        self.peek_hint.set_visible(down);
+        if let Some(a) = self.peek_anim.borrow().as_ref() {
+            a.pause();
+            a.set_value_from(self.peek.get());
+            a.set_value_to(if down { 1.0 } else { 0.0 });
+            // Down quickly; up with a little bounce.
+            a.set_duration(if down { PEEK_DOWN_MS } else { PEEK_UP_MS });
+            a.set_easing(if down {
+                adw::Easing::EaseOutCubic
+            } else {
+                adw::Easing::EaseOutBack
+            });
+            a.play();
+        }
+    }
+
+    /// The page dots and hints under the deck show as the tray goes. They stay hidden while a
+    /// tile is carried out: the tray keeps the room under the deck then.
+    fn fade_under_deck(&self) {
+        let covered = self.shown.get();
+        for w in &self.fade {
+            w.set_opacity(1.0 - covered.clamp(0.0, 1.0));
+        }
     }
 
     /// Show `tab`, on the page it was on.
@@ -539,6 +879,15 @@ impl Tray {
                     t.state.edit(|e| added = e.add_dial_to_library(n));
                     (Tab::Dials, added)
                 }
+                // Carried from another page: the number is that page's, not this one's.
+                Some(canvas::Payload::Key(_))
+                    if t.state
+                        .carried_key
+                        .get()
+                        .is_some_and(|(page, _)| page != t.state.editor.borrow().page()) =>
+                {
+                    return false;
+                }
                 Some(canvas::Payload::Key(n)) => {
                     let mut added = None;
                     t.state.edit(|e| added = e.add_key_to_library(n));
@@ -579,14 +928,24 @@ impl Tray {
             adw::CallbackAnimationTarget::new(move |v| {
                 if let Some(t) = me.upgrade() {
                     t.shown.set(v);
-                    for w in &t.fade {
-                        w.set_opacity(1.0 - v);
-                    }
+                    t.fade_under_deck();
                     t.stage.queue_allocate();
                 }
             })
         };
         let grow = eased(&self.stage, &grow_target);
+        let peek_target = {
+            let me = me.clone();
+            adw::CallbackAnimationTarget::new(move |v| {
+                if let Some(t) = me.upgrade() {
+                    // The bounce overshoots: never above the tray's own height.
+                    t.peek.set(v.clamp(0.0, 1.0));
+                    t.fade_under_deck();
+                    t.stage.queue_allocate();
+                }
+            })
+        };
+        *self.peek_anim.borrow_mut() = Some(eased(&self.stage, &peek_target));
         {
             let me = me.clone();
             grow.connect_done(move |_| {
@@ -618,19 +977,7 @@ impl Tray {
                     }
                 }
             };
-            {
-                let turn = turn.clone();
-                b.connect_clicked(move |_| turn());
-            }
-            // A tile held over an arrow turns the page, to reorder it onto another.
-            let hover = gtk::DropControllerMotion::new();
-            let me = me.clone();
-            hover.connect_enter(move |_, _, _| {
-                if me.upgrade().is_some_and(|t| t.moving.get().is_some()) {
-                    turn();
-                }
-            });
-            b.add_controller(hover);
+            b.connect_clicked(move |_| turn());
         }
         let st = self.state.clone();
         st.on(move |c| {
@@ -693,9 +1040,18 @@ impl Tray {
             s if s > 0.0 => s * self.content.measure(gtk::Orientation::Vertical, tw as i32).1 as f64,
             _ => 0.0,
         };
+        // A tile carried out: the whole deck shows where it sits, and the tray keeps the room
+        // left under it, in whole rows of tiles, down to just its top row.
+        let peek = self.peek.get();
+        if peek > 0.0 && th > 0.0 {
+            let room = body.map_or(th, |b| h - MARGIN - (b.y() as f64 + b.height() as f64 + GAP));
+            let fit = fit_tray(room, self.peek_height(), th, &self.row_bottoms(), self.pad());
+            th += (fit - th) * peek;
+        }
         let shift = match (body, self.keep.compute_bounds(&self.deck)) {
             (Some(b), Some(k)) if th > 0.0 => {
                 let bottom = b.y() as f64 + b.height() as f64;
+                // The deck only ever moves up out of the way.
                 let shift = (bottom + GAP - (h - MARGIN - th))
                     .min(k.y() as f64 - MARGIN)
                     .max(0.0);
@@ -716,6 +1072,36 @@ impl Tray {
             tw.round() as i32,
             th.round() as i32,
         ))
+    }
+
+    /// The tray's padding above its top row (kept under the last row shown, too).
+    fn pad(&self) -> f64 {
+        self.header
+            .compute_bounds(&self.content)
+            .map_or(12.0, |b| b.y() as f64)
+    }
+
+    /// The peek strip's height: the tray's top row with its padding.
+    fn peek_height(&self) -> f64 {
+        let row = self
+            .header
+            .compute_bounds(&self.content)
+            .map_or(40.0, |b| (b.y() + b.height()) as f64);
+        row + self.pad()
+    }
+
+    /// Where each row of tiles ends, from the tray's top, smallest first.
+    fn row_bottoms(&self) -> Vec<f64> {
+        let mut rows: Vec<f64> = self
+            .items
+            .borrow()
+            .iter()
+            .filter_map(|i| i.usage.compute_bounds(&self.content))
+            .map(|b| ((b.y() + b.height()) as f64).round())
+            .collect();
+        rows.sort_by(f64::total_cmp);
+        rows.dedup();
+        rows
     }
 
     /// Page `i` sits `i - offset` page widths from the left.
@@ -925,6 +1311,11 @@ impl Tray {
             self.pages.add_overlay(&grid);
             self.grids.borrow_mut().push(grid);
         }
+        // The sliding pictures stay over the tiles.
+        if self.ghosts.parent().is_some() {
+            self.pages.remove_overlay(&self.ghosts);
+        }
+        self.pages.add_overlay(&self.ghosts);
         self.show_picked();
         self.go(self.state.tray_page.get());
     }
@@ -1034,11 +1425,7 @@ impl Tray {
                 let icon = gtk::WidgetPaintable::new(Some(&disc));
                 src.set_icon(Some(&icon), disc.width() / 2, disc.height() / 2);
                 if let Some(t) = me.upgrade() {
-                    t.moving.set(Some(id));
-                    t.state.library_drag.set(Some(match kind {
-                        Tab::Keys => LibraryKind::Key,
-                        Tab::Dials => LibraryKind::Dial,
-                    }));
+                    t.carry_begin(id, kind);
                 }
             });
         }
@@ -1046,16 +1433,19 @@ impl Tray {
             let me = me.clone();
             source.connect_drag_end(move |_, _, _| {
                 if let Some(t) = me.upgrade() {
-                    t.moving.set(None);
-                    t.state.library_drag.set(None);
+                    t.carry_end();
                 }
             });
         }
         button.add_controller(source);
-        self.take_moved_tiles(&button, &disc, id, kind);
         self.tile_menu(&button, id, kind);
         let item = Item {
             id,
+            column: button
+                .child()
+                .and_downcast::<gtk::Box>()
+                .expect("a tile holds a column"),
+            button: button.clone(),
             disc,
             face,
             picture,
@@ -1068,53 +1458,411 @@ impl Tray {
         button
     }
 
-    /// Another tile dropped on this one (library item `id`) moves to its place; the rest shift.
-    fn take_moved_tiles(&self, button: &gtk::Button, disc: &gtk::Box, id: Uuid, kind: Tab) {
-        // Tiles are copied out; a deck dial carried in moves, so the tray behind takes that.
+    /// A library tile was picked up (a drag started on it).
+    fn carry_begin(&self, id: Uuid, kind: Tab) {
+        tracing::debug!(target: "dnd", "carry begin {id}");
+        self.moving.set(Some(id));
+        self.aim.set(Aim::Nothing);
+        self.pages.add_css_class("carrying");
+        self.show_edges();
+        self.state.library_drag.set(Some(match kind {
+            Tab::Keys => LibraryKind::Key,
+            Tab::Dials => LibraryKind::Dial,
+        }));
+        // The tile stays in place, faded, until it lands somewhere. Faded on the button, not on
+        // what it shows: the picture that slides it to its new place is taken from that.
+        if let Some(i) = self.items.borrow().iter().find(|i| i.id == id) {
+            i.button.add_css_class("carried");
+            i.button.set_opacity(0.35);
+        }
+    }
+
+    /// The carried tile was let go (dropped or not).
+    fn carry_end(&self) {
+        tracing::debug!(target: "dnd", "carry end");
+        if let Some(id) = self.moving.take()
+            && let Some(i) = self.items.borrow().iter().find(|i| i.id == id)
+        {
+            i.button.remove_css_class("carried");
+            i.button.set_opacity(1.0);
+        }
+        self.show_aim(Aim::Nothing);
+        self.pages.remove_css_class("carrying");
+        self.show_edges();
+        self.state.library_drag.set(None);
+        self.set_peek(false);
+    }
+
+    /// One drop target over the whole page area takes the carried tile: on a tile's picture the
+    /// two swap places, between two pictures it goes into that gap and the tiles after it shift
+    /// on. What is under the pointer comes from where the tiles are laid out
+    /// ([`tile_drop::aim_at`]), so tiles moving aside to open a gap never change it.
+    fn take_moved_tiles(&self) {
         let target = gtk::DropTarget::new(glib::Type::STRING, gdk::DragAction::COPY);
         let me = self.me.borrow().clone();
-        let other = move || {
-            me.upgrade()
-                .map(|t| (t.moving.get().filter(|from| *from != id), t))
-        };
         {
-            let (other, disc) = (other.clone(), disc.clone());
-            target.connect_enter(move |_, _, _| match other() {
-                Some((Some(_), _)) => {
-                    disc.add_css_class("drop-target");
-                    gdk::DragAction::COPY
+            let me = me.clone();
+            // Only this tray's own tiles; a deck key or dial goes on to the tray's own target.
+            target.connect_accept(move |_, _| me.upgrade().is_some_and(|t| t.moving.get().is_some()));
+        }
+        {
+            let me = me.clone();
+            target.connect_enter(move |_, x, y| {
+                if let Some(t) = me.upgrade() {
+                    t.hover_at(x, y);
                 }
-                _ => gdk::DragAction::empty(),
+                gdk::DragAction::COPY
             });
         }
         {
-            let disc = disc.clone();
-            target.connect_leave(move |_| disc.remove_css_class("drop-target"));
+            let me = me.clone();
+            target.connect_motion(move |_, x, y| {
+                if let Some(t) = me.upgrade() {
+                    t.hover_at(x, y);
+                }
+                gdk::DragAction::COPY
+            });
         }
         {
-            let disc = disc.clone();
-            target.connect_drop(move |_, _, _, _| {
-                disc.remove_css_class("drop-target");
-                let Some((Some(from), t)) = other() else {
-                    return false;
-                };
-                let to = {
-                    let e = t.state.editor.borrow();
+            let me = me.clone();
+            target.connect_leave(move |_| {
+                if let Some(t) = me.upgrade() {
+                    t.show_aim(Aim::Nothing);
+                }
+            });
+        }
+        target.connect_drop(move |_, _, x, y| me.upgrade().is_some_and(|t| t.drop_at(x, y)));
+        self.pages.add_controller(target);
+    }
+
+    /// The shown tiles on this page, where they are laid out in the page area.
+    fn slots(&self) -> Vec<Slot> {
+        let page = self.state.tray_page.get();
+        self.items
+            .borrow()
+            .iter()
+            .enumerate()
+            .skip(page * PER_PAGE)
+            .take(PER_PAGE)
+            .filter_map(|(k, i)| {
+                // The button never moves; the picture is in its middle (the column that moves
+                // aside is inside it, so the picture's own bounds can be off by that).
+                let b = i.button.compute_bounds(&self.pages)?;
+                let d = i.disc.compute_bounds(&i.button)?;
+                let mid = b.x() as f64 + b.width() as f64 / 2.0;
+                let half = d.width() as f64 / 2.0;
+                Some(Slot {
+                    index: k,
+                    row: (k % PER_PAGE) / PER_ROW,
+                    top: b.y() as f64,
+                    bottom: (b.y() + b.height()) as f64,
+                    pic_left: mid - half,
+                    pic_right: mid + half,
+                    pic_top: (b.y() + d.y()) as f64,
+                    pic_bottom: (b.y() + d.y() + d.height()) as f64,
+                })
+            })
+            .collect()
+    }
+
+    /// The carried tile is over `(x, y)` in the page area: show what letting go there would do.
+    fn hover_at(&self, x: f64, y: f64) -> Aim {
+        let aim = match self.moving.get() {
+            Some(id) if self.edge_step(&self.pages, x, y).is_none() => {
+                let carried = self.items.borrow().iter().position(|i| i.id == id);
+                tile_drop::aim_at(&self.slots(), x, y, carried, self.aim.get())
+            }
+            _ => Aim::Nothing,
+        };
+        self.show_aim(aim);
+        aim
+    }
+
+    /// Show `aim`: the swapped tile's picture outlined, or the gap's two tiles moved apart with a
+    /// mark between them.
+    fn show_aim(&self, aim: Aim) {
+        if self.aim.replace(aim) == aim {
+            return;
+        }
+        tracing::debug!(target: "dnd", "aim {aim:?}");
+        let slots = self.slots();
+        let (left, right) = tile_drop::gap_neighbours(&slots, aim);
+        for (k, item) in self.items.borrow().iter().enumerate() {
+            let swap = aim == Aim::Swap(k);
+            let classes = [
+                ("swap-target", swap),
+                ("scooch-left", left == Some(k)),
+                ("scooch-right", right == Some(k)),
+            ];
+            for (class, on) in classes {
+                if on {
+                    item.button.add_css_class(class);
+                } else {
+                    item.button.remove_css_class(class);
+                }
+            }
+        }
+        match aim {
+            Aim::Swap(k) => match slots.iter().find(|s| s.index == k) {
+                Some(s) => {
+                    const RING: f64 = 5.0;
+                    self.swap_mark.set_size_request(
+                        (s.pic_right - s.pic_left + 2.0 * RING).round() as i32,
+                        (s.pic_bottom - s.pic_top + 2.0 * RING).round() as i32,
+                    );
+                    self.ghosts
+                        .move_(&self.swap_mark, s.pic_left - RING, s.pic_top - RING);
+                    if self.tab.get() == Tab::Dials {
+                        self.swap_mark.add_css_class("round");
+                    } else {
+                        self.swap_mark.remove_css_class("round");
+                    }
+                    self.swap_mark.add_css_class("shown");
+                }
+                None => self.swap_mark.remove_css_class("shown"),
+            },
+            _ => self.swap_mark.remove_css_class("shown"),
+        }
+        match tile_drop::gap_mark(&slots, aim) {
+            Some((x, top, bottom)) => {
+                let w = self.gap_mark.width_request().max(1) as f64;
+                self.gap_mark
+                    .set_size_request(w as i32, (bottom - top).round() as i32);
+                self.ghosts.move_(&self.gap_mark, x - w / 2.0, top);
+                self.gap_mark.add_css_class("shown");
+            }
+            None => self.gap_mark.remove_css_class("shown"),
+        }
+    }
+
+    /// The carried tile was let go at `(x, y)` in the page area.
+    fn drop_at(&self, x: f64, y: f64) -> bool {
+        let aim = self.hover_at(x, y);
+        tracing::debug!(target: "dnd", "drop {aim:?}");
+        let (Some(from), kind) = (self.moving.get(), self.tab.get()) else {
+            return false;
+        };
+        let shown: Vec<Uuid> = self.items.borrow().iter().map(|i| i.id).collect();
+        let edit: Box<dyn FnOnce(&mut ulanzi_core::edit::Editor)> = match aim {
+            Aim::Nothing => {
+                self.show_aim(Aim::Nothing);
+                return false;
+            }
+            Aim::Swap(k) => {
+                let Some(&with) = shown.get(k) else { return false };
+                Box::new(move |e| match kind {
+                    Tab::Dials => e.swap_library_dial(from, with),
+                    Tab::Keys => e.swap_library_key(from, with),
+                })
+            }
+            Aim::Gap { before, .. } => {
+                let order: Vec<Uuid> = {
+                    let e = self.state.editor.borrow();
                     match kind {
-                        Tab::Dials => e.profile().dial_library.iter().position(|l| l.id == id),
-                        Tab::Keys => e.profile().key_library.iter().position(|l| l.id == id),
+                        Tab::Dials => e.profile().dial_library.iter().map(|l| l.id).collect(),
+                        Tab::Keys => e.profile().key_library.iter().map(|l| l.id).collect(),
                     }
                 };
-                if let Some(to) = to {
-                    t.state.edit(|e| match kind {
-                        Tab::Dials => e.move_library_dial(from, to),
-                        Tab::Keys => e.move_library_key(from, to),
-                    });
+                let Some(to) = insert_to(&order, &shown, from, before) else {
+                    self.show_aim(Aim::Nothing);
+                    return false;
+                };
+                Box::new(move |e| match kind {
+                    Tab::Dials => e.move_library_dial(from, to),
+                    Tab::Keys => e.move_library_key(from, to),
+                })
+            }
+        };
+        self.reorder(from, (x, y), edit);
+        true
+    }
+
+    /// Make a reorder `edit`, then slide the tiles on this page from where they are seen now (moved
+    /// aside or not) to their new places. The carried tile `moved` comes from where it was let go,
+    /// `landed`. Its new places are known before the edit (the same slots, in a new order), so
+    /// the slide starts in the same frame: the new tiles never show before it.
+    fn reorder(
+        &self,
+        moved: Uuid,
+        landed: (f64, f64),
+        edit: Box<dyn FnOnce(&mut ulanzi_core::edit::Editor)>,
+    ) {
+        if let Some(a) = self.reorder_anim.take() {
+            a.skip();
+        }
+        let page = self.state.tray_page.get();
+        let on_page = |k: usize| k / PER_PAGE == page;
+        // Where each slot of this page is laid out, and where what a tile shows sits in it when not
+        // moved aside (the same in every tile).
+        let mut cells = Vec::new();
+        let mut seen: Vec<(Uuid, gtk::graphene::Rect, gdk::Paintable)> = Vec::new();
+        let inset = {
+            let items = self.items.borrow();
+            items
+                .iter()
+                .enumerate()
+                .filter(|(k, i)| {
+                    on_page(*k)
+                        && !i.button.has_css_class("scooch-left")
+                        && !i.button.has_css_class("scooch-right")
+                })
+                .find_map(|(_, i)| {
+                    let (b, c) = (
+                        i.button.compute_bounds(&self.ghosts)?,
+                        i.column.compute_bounds(&self.ghosts)?,
+                    );
+                    Some((c.x() - b.x(), c.y() - b.y()))
+                })
+                .unwrap_or((0.0, 0.0))
+        };
+        {
+            let items = self.items.borrow();
+            for (k, i) in items.iter().enumerate() {
+                if i.id == moved {
+                    // Held by its picture's middle where it was let go.
+                    let (cw, ch) = (i.column.width() as f32, i.column.height() as f32);
+                    let (px, py) = i
+                        .disc
+                        .compute_bounds(&i.column)
+                        .map_or((cw / 2.0, ch / 2.0), |d| {
+                            (d.x() + d.width() / 2.0, d.y() + d.height() / 2.0)
+                        });
+                    let r = gtk::graphene::Rect::new(landed.0 as f32 - px, landed.1 as f32 - py, cw, ch);
+                    seen.push((
+                        i.id,
+                        r,
+                        gtk::WidgetPaintable::new(Some(&i.column)).current_image(),
+                    ));
+                    if on_page(k)
+                        && let Some(b) = i.button.compute_bounds(&self.ghosts)
+                    {
+                        cells.push(b);
+                    }
+                    continue;
                 }
-                to.is_some()
+                if !on_page(k) {
+                    continue;
+                }
+                let (Some(b), Some(c)) = (
+                    i.button.compute_bounds(&self.ghosts),
+                    i.column.compute_bounds(&self.ghosts),
+                ) else {
+                    continue;
+                };
+                cells.push(b);
+                seen.push((
+                    i.id,
+                    c,
+                    gtk::WidgetPaintable::new(Some(&i.column)).current_image(),
+                ));
+            }
+        }
+        self.aim.set(Aim::Nothing);
+        self.gap_mark.remove_css_class("shown");
+        self.swap_mark.remove_css_class("shown");
+        self.state.edit(edit);
+        // The tray laid itself out again (new tiles, same slots); slide into them.
+        let mut moves = Vec::new();
+        let mut appear = Vec::new();
+        let mut kept = Vec::new();
+        {
+            let items = self.items.borrow();
+            for (k, item) in items.iter().enumerate().filter(|(k, _)| on_page(*k)) {
+                kept.push(item.id);
+                let Some(cell) = cells.get(k - page * PER_PAGE) else {
+                    continue;
+                };
+                match seen.iter().find(|(id, _, _)| *id == item.id) {
+                    Some((_, from, picture)) => {
+                        let to = gtk::graphene::Rect::new(
+                            cell.x() + inset.0,
+                            cell.y() + inset.1,
+                            from.width(),
+                            from.height(),
+                        );
+                        if (to.x() - from.x()).abs() < 0.5 && (to.y() - from.y()).abs() < 0.5 {
+                            continue;
+                        }
+                        tracing::debug!(target: "dnd", "tile {k} slides from {:?} to {:?}", (from.x(), from.y(), from.width(), from.height()), (to.x(), to.y(), to.width(), to.height()));
+                        let ghost = self.ghost(picture, from);
+                        item.column.set_opacity(0.0);
+                        moves.push((ghost, item.column.clone(), *from, to));
+                    }
+                    // Pushed in from another page: fades in where it is.
+                    None => {
+                        item.column.set_opacity(0.0);
+                        appear.push(item.column.clone());
+                    }
+                }
+            }
+        }
+        // Pushed off this page: fades out where it was.
+        let leave: Vec<gtk::Picture> = seen
+            .iter()
+            .filter(|(id, _, _)| !kept.contains(id))
+            .map(|(_, from, picture)| self.ghost(picture, from))
+            .collect();
+        tracing::debug!(target: "dnd", "slide {} tiles, {} in, {} out", moves.len(), appear.len(), leave.len());
+        if moves.is_empty() && appear.is_empty() && leave.is_empty() {
+            return;
+        }
+        let parts = Rc::new((moves, appear, leave));
+        let target = {
+            let (parts, ghosts) = (parts.clone(), self.ghosts.clone());
+            adw::CallbackAnimationTarget::new(move |v| {
+                let (moves, appear, leave) = &*parts;
+                for (ghost, _, from, to) in moves {
+                    let x = from.x() as f64 + (to.x() - from.x()) as f64 * v;
+                    let y = from.y() as f64 + (to.y() - from.y()) as f64 * v;
+                    ghosts.move_(ghost, x, y);
+                }
+                for column in appear {
+                    column.set_opacity(v);
+                }
+                for ghost in leave {
+                    ghost.set_opacity(1.0 - v);
+                }
+            })
+        };
+        let anim = adw::TimedAnimation::builder()
+            .widget(&self.ghosts)
+            .value_from(0.0)
+            .value_to(1.0)
+            .duration(REORDER_MS)
+            .easing(adw::Easing::EaseOutCubic)
+            .target(&target)
+            .build();
+        {
+            let ghosts = self.ghosts.clone();
+            anim.connect_done(move |_| {
+                let (moves, appear, leave) = &*parts;
+                for (ghost, column, _, _) in moves {
+                    ghosts.remove(ghost);
+                    column.set_opacity(1.0);
+                }
+                for column in appear {
+                    column.set_opacity(1.0);
+                }
+                for ghost in leave {
+                    ghosts.remove(ghost);
+                }
             });
         }
-        button.add_controller(target);
+        anim.play();
+        *self.reorder_anim.borrow_mut() = Some(anim);
+    }
+
+    /// A still picture of a tile at `at` in the page area, over the tiles.
+    fn ghost(&self, picture: &gdk::Paintable, at: &gtk::graphene::Rect) -> gtk::Picture {
+        let ghost = gtk::Picture::builder()
+            .paintable(picture)
+            .can_shrink(false)
+            .can_target(false)
+            .width_request(at.width().round() as i32)
+            .height_request(at.height().round() as i32)
+            .build();
+        self.ghosts.put(&ghost, at.x() as f64, at.y() as f64);
+        ghost
     }
 
     /// Right-click a library item: Copy, Paste (greyed out with nothing copied) and Delete, for
@@ -1153,6 +1901,11 @@ impl Tray {
         let pop = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         pop.set_has_arrow(true);
         pop.set_parent(button);
+        // Let go of the menu with the tile (tiles are made again on every reorder).
+        {
+            let pop = pop.clone();
+            button.connect_destroy(move |_| pop.unparent());
+        }
         let right = gtk::GestureClick::builder().button(3).build();
         let state = self.state.clone();
         right.connect_pressed(move |g, _, x, y| {
@@ -1439,6 +2192,35 @@ fn fill(item: &Item, lib: &Entry, usage: Usage, dir: &std::path::Path) {
     item.pin.set_visible(usage.pinned);
 }
 
+/// How tall the tray stays while a tile is carried out, with `room` left under the deck: all of
+/// it (`full`) if it fits, else as many whole rows of tiles as fit (rows end at `rows`, plus `pad`
+/// under them), and never less than the top row (`strip`).
+/// Where in the library (`order`) the carried item `from` goes for the gap before shown tile
+/// `gap` (`shown` are the tiles on screen, fewer than `order` while searching); `None` when that
+/// is where it already is.
+fn insert_to(order: &[Uuid], shown: &[Uuid], from: Uuid, gap: usize) -> Option<usize> {
+    let pos = |id: &Uuid| order.iter().position(|o| o == id);
+    let f = pos(&from)?;
+    // The library place of the gap: before the tile after it, or after the tile before it.
+    let at = match shown.get(gap) {
+        Some(next) => pos(next)?,
+        None => pos(shown.get(gap.checked_sub(1)?)?)? + 1,
+    };
+    let to = if at > f { at - 1 } else { at };
+    (to != f).then_some(to)
+}
+
+fn fit_tray(room: f64, strip: f64, full: f64, rows: &[f64], pad: f64) -> f64 {
+    if room >= full {
+        return full;
+    }
+    rows.iter()
+        .map(|r| r + pad)
+        .filter(|h| *h <= room && *h < full)
+        .fold(strip, f64::max)
+        .min(full)
+}
+
 /// A 0 to 1 animation on `w`'s frame clock, eased out.
 fn eased(w: &impl IsA<gtk::Widget>, target: &impl IsA<adw::AnimationTarget>) -> adw::TimedAnimation {
     adw::TimedAnimation::builder()
@@ -1479,6 +2261,36 @@ mod tests {
             assert!(t.items.borrow().is_empty(), "no dial tiles left on the Keys tab");
             t.tabs[1].set_active(true);
             assert_eq!(t.items.borrow().len(), 1, "the dial is back");
+        });
+    }
+
+    #[test]
+    fn a_carried_tile_leaves_the_tray_whole_rows_that_fit() {
+        let rows = [150.0, 260.0, 370.0];
+        // Room for all of it: it stays as it is.
+        assert_eq!(fit_tray(500.0, 58.0, 420.0, &rows, 12.0), 420.0);
+        // Room for two rows.
+        assert_eq!(fit_tray(300.0, 58.0, 420.0, &rows, 12.0), 272.0);
+        // Not even one row: just the strip.
+        assert_eq!(fit_tray(100.0, 58.0, 420.0, &rows, 12.0), 58.0);
+        // No room at all still keeps the strip.
+        assert_eq!(fit_tray(-20.0, 58.0, 420.0, &rows, 12.0), 58.0);
+    }
+
+    #[test]
+    fn carrying_a_tile_out_drops_to_the_peek_strip_and_back() {
+        crate::ui::with_gtk(|| {
+            let (state, t) = tray_with(ulanzi_core::model::Model::D200X);
+            t.open(Tab::Keys);
+            t.set_peek(true);
+            assert!(t.peeked.get());
+            assert!(t.peek_hint.is_visible(), "the strip says how to cancel");
+            // Still open throughout, so the header button does not flicker.
+            assert!(state.tray_open.get());
+            t.set_peek(false);
+            assert!(!t.peeked.get());
+            assert!(!t.peek_hint.is_visible());
+            assert!(state.tray_open.get());
         });
     }
 
@@ -1638,6 +2450,22 @@ mod tests {
             state.select(|s| s.click(ulanzi_core::edit::Slot::Key(0)));
             assert!(!copy_picked(&state));
         });
+    }
+
+    #[test]
+    fn a_tile_dropped_between_two_goes_into_that_gap() {
+        let ids: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
+        // Carried right: the tiles between shift back one.
+        assert_eq!(insert_to(&ids, &ids, ids[0], 3), Some(2));
+        // Carried left, and to the very end.
+        assert_eq!(insert_to(&ids, &ids, ids[4], 1), Some(1));
+        assert_eq!(insert_to(&ids, &ids, ids[1], 5), Some(4));
+        // Either side of itself is where it is.
+        assert_eq!(insert_to(&ids, &ids, ids[2], 2), None);
+        assert_eq!(insert_to(&ids, &ids, ids[2], 3), None);
+        // While searching, the gap is found in the whole library.
+        let shown = [ids[0], ids[3]];
+        assert_eq!(insert_to(&ids, &shown, ids[0], 2), Some(3));
     }
 
     #[test]
