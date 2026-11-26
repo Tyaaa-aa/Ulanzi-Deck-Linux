@@ -1045,6 +1045,11 @@ impl Deck {
     async fn on_input(&mut self, ev: InputEvent) {
         let now = Instant::now();
         self.emit(DeckEvent::Input(ev));
+        // The firmware puts its own clock on the wide screen while it is pressed; set our mode
+        // again at once instead of waiting up to a second for the next tick (issue #5).
+        if ev.control == Control::Screen && matches!(ev.kind, InputKind::Press | InputKind::Release) {
+            self.send_window().await;
+        }
         // First of all: every path below that returns early still lets go of the key.
         if ev.kind == InputKind::Release
             && let Control::Key(i) = ev.control
