@@ -844,7 +844,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     group.add(&look);
     let label_group = adw::PreferencesGroup::new();
     let keys: Rc<Vec<u8>> = Rc::new(keys);
-    let (source, bg, fg, label, visible, scale, dynamic, pos) = {
+    let (source, bg, fg, label, visible, scale, image_scale, dynamic, pos) = {
         let e = state.editor.borrow();
         (
             e.shared_look(&keys, |l| l.source.clone()),
@@ -853,10 +853,13 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
             e.shared_look(&keys, |l| l.label.text.clone()),
             e.shared_look(&keys, |l| l.label.visible),
             e.shared_look(&keys, |l| (l.icon_scale * 100.0).round() as i32),
+            e.shared_look(&keys, |l| (l.image_scale * 100.0).round() as i32),
             e.shared_look(&keys, |l| l.dynamic),
             e.shared_look(&keys, |l| l.label.position),
         )
     };
+    // The user's own picture has its own size (full key by default), so the size row follows it.
+    let picture = matches!(source, Mixed::One(ImageSource::Image { .. }));
     let set = {
         let (ctx, keys) = (ctx.clone(), keys.clone());
         move |how: How, f: Field| ctx.commit(how, |e| e.set_field(&keys, f))
@@ -1068,20 +1071,32 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     }
     label_group.add(&position);
 
+    let (shown_scale, default_scale) = if picture {
+        (image_scale, 100.0)
+    } else {
+        (scale, 70.0)
+    };
     let size = adw::SpinRow::with_range(30.0, 100.0, 5.0);
-    size.set_title("Icon Size");
-    size.set_subtitle(&match scale {
+    size.set_title(if picture { "Image Size" } else { "Icon Size" });
+    size.set_subtitle(&match shown_scale {
         Mixed::Mixed => "Mixed".into(),
+        _ if picture => "Percent of the key; 100 fills it".to_string(),
         _ => "Percent of the key".to_string(),
     });
-    size.set_value(match scale {
+    size.set_value(match shown_scale {
         Mixed::One(v) => v as f64,
-        _ => 70.0,
+        _ => default_scale,
     });
     {
         let set = set.clone();
         size.connect_value_notify(move |r| {
-            set(How::Typing("scale"), Field::IconScale((r.value() / 100.0) as f32))
+            let share = (r.value() / 100.0) as f32;
+            let field = if picture {
+                Field::ImageScale(share)
+            } else {
+                Field::IconScale(share)
+            };
+            set(How::Typing("scale"), field)
         });
     }
     look.add_row(&size);

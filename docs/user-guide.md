@@ -62,7 +62,8 @@ Select a key to open its editor. The editor has four sections:
   is set in Preferences.
 - **Look**: image, background colour, icon colour and icon size. **Choose…** opens the image picker
   with line icons, brand logos, installed application icons, emoji, Steam games and image files.
-  You can also drop an image file onto a key.
+  You can also drop an image file onto a key. For your own image (a GIF too) the size row reads
+  **Image Size**: at 100 the picture fills the whole key, below that it shrinks into the middle.
 
 When Held and Look are collapsed until opened, and stay open as you move between keys. **Clear Key**
 removes everything from the key.

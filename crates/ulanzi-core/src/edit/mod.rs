@@ -123,6 +123,8 @@ pub enum Field {
     Background(Color),
     Foreground(Color),
     IconScale(f32),
+    /// Size of the user's own picture, as a share of the key (1.0 fills it).
+    ImageScale(f32),
     LabelVisible(bool),
     LabelText(String),
     Source(ImageSource),
@@ -152,6 +154,7 @@ pub fn apply_field(look: &mut KeyLook, field: &Field) {
         Field::Background(c) => look.background = *c,
         Field::Foreground(c) => look.foreground = *c,
         Field::IconScale(s) => look.icon_scale = s.clamp(0.1, 1.0),
+        Field::ImageScale(s) => look.image_scale = s.clamp(0.1, 1.0),
         Field::LabelVisible(v) => look.label.visible = *v,
         Field::LabelText(t) => look.label.text = t.clone(),
         Field::Source(s) => look.source = s.clone(),

@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+### Fixed
+
+- Your own images (PNG, JPG, WebP, SVG and GIF) ignored the size setting in Look and always filled the
+  whole key. They now have their own **Image Size** (100% by default, so existing keys look the same).
+
 ## [2.6.1] - 2026-11-28
 
 ### Changed

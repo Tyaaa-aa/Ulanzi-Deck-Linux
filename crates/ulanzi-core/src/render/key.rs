@@ -121,7 +121,11 @@ fn draw_pixels(
     let mut warnings = Vec::new();
     match &look.source {
         _ if picture.is_some() => {
-            if let Some(Err(e)) = picture.map(|p| draw_layer(&mut pix, p)) {
+            let drawn = picture.map(|p| match Fit::for_picture(look.image_scale) {
+                Fit::Contain(share) => draw_layer(&mut pix, &contained(p, share)),
+                Fit::Cover => draw_layer(&mut pix, p),
+            });
+            if let Some(Err(e)) = drawn {
                 warnings.push(format!("picture: {e}"));
             }
         }
@@ -136,7 +140,7 @@ fn draw_pixels(
         },
         ImageSource::Image { path } => {
             let full = ctx.profile_dir.join(path);
-            if let Err(e) = draw_file(&mut pix, &full, Fit::Cover) {
+            if let Err(e) = draw_file(&mut pix, &full, Fit::for_picture(look.image_scale)) {
                 warnings.push(format!("image {}: {e}", full.display()));
             }
         }
@@ -274,6 +278,27 @@ enum Fit {
     Cover,
     /// Fit inside a centred box of this share of the key.
     Contain(f32),
+}
+
+impl Fit {
+    /// The fit for the user's own picture at `scale`: the whole key at full size, else a box.
+    fn for_picture(scale: f32) -> Self {
+        if scale >= 1.0 {
+            Fit::Cover
+        } else {
+            Fit::Contain(scale)
+        }
+    }
+}
+
+/// A key-sized picture shrunk into a centred box of `share` of the key, clear around it.
+fn contained(picture: &RgbaImage, share: f32) -> RgbaImage {
+    let side = ((KEY_PX as f32) * share.clamp(0.05, 1.0)) as u32;
+    let small = image::imageops::resize(picture, side, side, image::imageops::FilterType::Lanczos3);
+    let mut canvas = RgbaImage::new(KEY_PX, KEY_PX);
+    let off = ((KEY_PX - side) / 2) as i64;
+    image::imageops::overlay(&mut canvas, &small, off, off);
+    canvas
 }
 
 /// Draw an SVG or raster file.
