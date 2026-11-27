@@ -5,6 +5,23 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-11-28
+
+### Changed
+
+- A profile set to D200 (no dial base) draws only the 13 keys and the wide screen, and the hints under
+  the deck and above the action list no longer mention dials or the ‹ › page buttons.
+
+### Fixed
+
+- Pressing the wide screen on a D200 no longer shows the deck's own clock for a moment: the mode is sent
+  ahead of any upload in progress, and again shortly after the press (#5).
+- Turning the Library tray to a shorter page while carrying a tile no longer shrinks the tray out from
+  under the pointer (which dropped it to its strip). It settles on the page's height once the tile is
+  let go.
+- The Library tray's Keys and Dials tabs and its search field were dark on the dark tray in the light
+  theme.
+
 ## [2.6.0] - 2026-11-26
 
 ### Added
@@ -380,6 +397,7 @@ A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python)
   diagnostics.
 - Packages: Arch, .deb, .rpm, AppImage and a tarball with an installer.
 
+[2.6.1]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.3.1...v2.4.0
