@@ -1,7 +1,8 @@
-Hotfix update to 2.6.0: D200 fixes and two Library tray fixes. No new features.
+Hotfix update to 2.6.0: D200 fixes, Library tray fixes and a clearer mute action. No new features.
 
 ### Changed
 
+- The Audio actions list **Mute Sound** and **Mute Mic** (set to the default microphone) instead of a single **Mute**, which muted the microphone only when you changed its target.
 - A profile set to D200 (no dial base) draws only the 13 keys and the wide screen, and the hints under the deck and above the action list no longer mention dials or the ‹ › page buttons.
 
 ### Fixed

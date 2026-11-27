@@ -107,7 +107,8 @@ pub fn help(id: &str) -> Option<&'static str> {
         "play_sound" => "Plays a sound file",
         "volume_up" => "Turns the volume up",
         "volume_down" => "Turns the volume down",
-        "mute" => "Mutes or unmutes the sound",
+        "mute" => "Mutes or unmutes the sound, of an output or a single app",
+        "mute_mic" => "Mutes or unmutes the microphone",
         "volume_set" => "Sets the volume to a level you choose",
         "brightness_up" => "Makes the deck's screen brighter",
         "brightness_down" => "Makes the deck's screen dimmer",
@@ -394,9 +395,27 @@ static CATALOG: &[ActionSpec] = &[
             ..
         }
     ),
+    // Before "mute", so a mute aimed at the microphone is listed and labelled as this one.
+    spec!(
+        "mute_mic",
+        "Mute Mic",
+        Audio,
+        "mic-off",
+        Action::Volume {
+            target: AudioTarget::Input,
+            op: VolumeOp::Mute,
+            step: 5,
+            limit_100: true,
+        },
+        Action::Volume {
+            target: AudioTarget::Input,
+            op: VolumeOp::Mute,
+            ..
+        }
+    ),
     spec!(
         "mute",
-        "Mute",
+        "Mute Sound",
         Audio,
         "volume-x",
         vol(VolumeOp::Mute),

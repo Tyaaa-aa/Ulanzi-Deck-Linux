@@ -299,3 +299,24 @@ fn every_action_says_what_it_does() {
         assert!(ulanzi_core::catalog::help(spec.id).is_some(), "{}", spec.id);
     }
 }
+
+#[test]
+fn mute_is_listed_for_sound_and_for_the_mic() {
+    let mute = |target| Action::Volume {
+        target,
+        op: VolumeOp::Mute,
+        step: 5,
+        limit_100: true,
+    };
+    let id = |a: &Action| spec_for(a).map(|s| s.id);
+    assert_eq!(id(&mute(AudioTarget::Default)), Some("mute"));
+    assert_eq!(
+        id(&mute(AudioTarget::App {
+            name: "firefox".into()
+        })),
+        Some("mute")
+    );
+    assert_eq!(id(&mute(AudioTarget::Input)), Some("mute_mic"));
+    let mic = catalog().iter().find(|s| s.id == "mute_mic").expect("listed");
+    assert_eq!(id(&(mic.make)()), Some("mute_mic"));
+}

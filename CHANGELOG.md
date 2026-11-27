@@ -9,6 +9,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ### Changed
 
+- The Audio actions list **Mute Sound** and **Mute Mic** (set to the default microphone) instead of a
+  single **Mute**, which muted the microphone only when you changed its target.
 - A profile set to D200 (no dial base) draws only the 13 keys and the wide screen, and the hints under
   the deck and above the action list no longer mention dials or the ‹ › page buttons.
 

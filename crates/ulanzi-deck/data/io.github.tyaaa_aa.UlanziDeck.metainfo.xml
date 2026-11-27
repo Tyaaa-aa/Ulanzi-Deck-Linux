@@ -53,7 +53,7 @@
       <description>
         <p>D200 fixes: a D200 profile shows only the keys and wide screen, and pressing the wide screen no
         longer flashes the deck's own clock. The Library tray keeps its height while carrying a tile and
-        its tabs are readable in the light theme.</p>
+        its tabs are readable in the light theme. Mute is listed as Mute Sound and Mute Mic.</p>
       </description>
     </release>
     <release version="2.6.0" date="2026-11-26">
