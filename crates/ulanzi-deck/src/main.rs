@@ -33,6 +33,9 @@ struct Shot {
     /// `--drag-test DIR`: run the scripted Library drag ([`ui::library_tray::drag_test`]) into DIR
     /// before the shot.
     drag_test: Option<PathBuf>,
+    /// `--demo-reel OUT.mp4 --scene NAME`: record a scene of the demo video
+    /// ([`ui::demo_reel`]) instead of taking the shot.
+    reel: Option<(PathBuf, String)>,
 }
 
 /// The app's own icons when they are not in the system theme: next to the binary (tarball,
@@ -79,6 +82,7 @@ fn parse_args() -> Option<Shot> {
         page: get("--page").and_then(|p| p.parse().ok()),
         wait: get("--wait").and_then(|w| w.parse().ok()).unwrap_or(1200),
         drag_test: get("--drag-test").map(PathBuf::from),
+        reel: get("--demo-reel").map(|p| (PathBuf::from(p), get("--scene").unwrap_or_else(|| "keys".into()))),
     })
 }
 
@@ -489,6 +493,19 @@ fn main() -> glib::ExitCode {
                     ui::icon_picker::open_at(&state2, &window, o.split_once(':').map(|(_, t)| t))
                 }
                 _ => {}
+            }
+            if let Some((out, scene)) = shot.reel.clone() {
+                let state3 = state2.clone();
+                glib::timeout_add_local_once(Duration::from_millis(shot.wait), move || {
+                    ui::demo_reel::run(
+                        window.upcast_ref(),
+                        &state3,
+                        scene,
+                        out,
+                        Box::new(move || app.quit()),
+                    );
+                });
+                return;
             }
             if let Some(dir) = shot.drag_test.clone() {
                 glib::timeout_add_local_once(Duration::from_millis(shot.wait), move || {

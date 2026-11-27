@@ -20,9 +20,18 @@ fn main() {
     let store = Store::at(&root, &state, sandbox.join("cache/ulanzi-deck"));
     let mut order = Vec::new();
     let mut default = None;
+    let mut profiles = Vec::new();
     for t in template::list_in(None) {
         let mut b = template::instantiate(&t).expect("built-in template");
-        let mut p = b.profiles.remove(0).profile;
+        profiles.push(b.profiles.remove(0).profile);
+    }
+    // Keys from the other templates, for Media Desk's key library.
+    let borrowed: Vec<Key> = profiles
+        .iter()
+        .filter(|p| p.name != "Media Desk")
+        .flat_map(|p| p.pages[0].keys.values().take(4).cloned())
+        .collect();
+    for mut p in profiles {
         let (widgets, rotate, background, accent) = match p.name.as_str() {
             "Streaming" => (
                 vec![
@@ -131,7 +140,14 @@ fn main() {
                     ..Effect::of(kind)
                 };
             }
+            p = with_library(p, &borrowed);
         }
+        // Auto-switch rules, so the profiles follow an app in front.
+        p.r#match.apps = match p.name.as_str() {
+            "Streaming" => vec!["com.obsproject.Studio.desktop".into()],
+            "Video Editing" => vec!["org.kde.kdenlive.desktop".into()],
+            _ => Vec::new(),
+        };
         order.push(p.id);
         store.save_profile(&p).expect("save profile");
         let icon = match p.name.as_str() {
@@ -158,4 +174,35 @@ fn main() {
     std::fs::create_dir_all(&state).expect("state dir");
     std::fs::write(state.join("onboarded"), b"1\n").expect("onboarding marker");
     println!("showcase profiles written to {}", root.display());
+}
+
+/// A key library worth looking at: the playback keys linked from the first page, the rest of
+/// that page's keys and some from the other templates as library keys, and a second page with
+/// room to drag them onto.
+fn with_library(p: Profile, borrowed: &[Key]) -> Profile {
+    let mut e = ulanzi_core::edit::Editor::new(p);
+    let keys: Vec<u8> = e.profile().pages[0].keys.keys().copied().collect();
+    e.add_keys_to_library(&keys[..keys.len().min(4)]);
+    for k in keys.iter().skip(4) {
+        // Into the library and back off the page: a library key that is not placed yet.
+        if e.add_key_to_library(*k).is_some() {
+            e.own_copy_key(*k);
+        }
+    }
+    for key in borrowed {
+        let id = e.new_library_key();
+        let name = key.look.label.text.clone();
+        e.set_library_key(id, |k| *k = key.clone());
+        if !name.is_empty() {
+            e.rename_library_key(id, &name);
+        }
+    }
+    let extras = e.add_page("Extras");
+    e.set_page(extras);
+    let lib: Vec<_> = e.profile().key_library.iter().map(|l| l.id).collect();
+    for (n, id) in [0u8, 1, 5].into_iter().zip(lib.iter().skip(4)) {
+        e.place_key(n, *id);
+    }
+    e.set_page(0);
+    e.profile().clone()
 }

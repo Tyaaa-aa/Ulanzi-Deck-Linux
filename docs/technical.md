@@ -279,7 +279,17 @@ scripts/sandbox.sh --demo  # the app with a simulated deck and temporary profile
 scripts/sandbox.sh --showcase   # the real deck with temporary profiles (pauses your service)
 # A scripted drag through the Library tray: frames and a PASS/FAIL log in DIR
 scripts/sandbox.sh --demo --showcase -- --screenshot DIR/final.png --open library-tray --drag-test DIR
+# The demo video's scenes (keys, widgets, library, autoswitch, plugins) as MP4s in DIR (needs ffmpeg)
+scripts/demo-reel.sh DIR [SCENE...]
+# README screenshots; SHOTS="library key" retakes only those
+scripts/screenshots.sh
 ```
+
+The demo reel (`ui::demo_reel`) records the app's own window into 1920x1080 frames, with a scripted
+pointer, click rings and the carried item drawn on top, so nothing else on the screen is recorded.
+`ULANZI_REEL_TEMPO=0.8` shortens the script's pauses and pointer moves; the app's animations keep their
+speed. In the Auto-Switch scene it tells the service which window is in front through `WindowActivated`,
+as a desktop's focus script does.
 
 A dev install marks its build: the app shows a **DEV** chip by its title, and hovering it shows the
 note, branch, commit, uncommitted files, build time and whether the service runs the same build.

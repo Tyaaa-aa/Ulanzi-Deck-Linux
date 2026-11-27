@@ -747,6 +747,16 @@ impl Client {
             .await?)
     }
 
+    /// Tell the service which window is in front, as the desktop's focus script does (used by
+    /// the demo reel to show auto-switching without a real app).
+    pub async fn window_activated(&self, class: &str, desktop_id: &str, title: &str) -> Result<()> {
+        Ok(self
+            .inner
+            .proxy
+            .call::<_, _, ()>("WindowActivated", &(class, desktop_id, title))
+            .await?)
+    }
+
     /// Where the keys on the deck stand.
     pub async fn live_keys(&self) -> Result<LiveKeys> {
         let wire: LiveWire = self.inner.proxy.call("LiveKeys", &()).await?;
