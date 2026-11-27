@@ -26,6 +26,8 @@ widgets on the wide screen, and switch profiles with the app in focus.
   <img src="docs/screenshots/main-light.png" alt="Ulanzi Deck: the deck with its keys, dials and wide screen, and the action list" width="920">
 </picture>
 
+https://github.com/user-attachments/assets/a2b8ce08-2631-42ef-abe4-22b40ab61152
+
 </div>
 
 ## Features
@@ -35,6 +37,9 @@ widgets on the wide screen, and switch profiles with the app in focus.
 - Actions for media playback and seeking, volume per output, app or microphone, output switching,
   keyboard shortcuts, typing text, running commands, opening apps and websites, playing sounds,
   PC monitor brightness, multi-step sequences, and keys that cycle through several actions.
+- A key and dial library: use one key on as many pages as you like and edit it in one place, or pin
+  it to every page. Drag keys from the library onto the deck, from the deck into the library, and
+  from one page to another.
 - Keys that move: GIFs that play on the deck, and Glow, Pulse, Chase and Fire effects in any colour,
   with a different effect for each live state and another while a key is held.
 - Macros: record keys, mouse buttons and scrolling, arrange the steps, and play them four ways.
@@ -70,6 +75,14 @@ library, an instruments plugin and firmware updates on Linux. See the [roadmap](
   <tr>
     <td align="center"><sub>Plugin store</sub></td>
     <td align="center"><sub>Templates</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/library-dark.png" alt="The key library under the deck"></td>
+    <td><img src="docs/screenshots/dial-light.png" alt="Editing a dial"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Key library</sub></td>
+    <td align="center"><sub>Dial editor</sub></td>
   </tr>
 </table>
 
