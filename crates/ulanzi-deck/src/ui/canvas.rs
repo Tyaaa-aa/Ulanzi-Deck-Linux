@@ -533,9 +533,25 @@ fn moving_note(keys: usize) -> Option<String> {
 }
 
 const HINT: &str = "Right-click a key to copy or paste it. The ‹ › buttons flip pages on the deck.";
+/// The same on a D200 (no dial base, so no ‹ › buttons).
+const HINT_NO_DIALS: &str = "Right-click a key to copy or paste it.";
 /// Under the deck while an action is dragged from the list.
 const ACTION_DRAG_HINT: &str =
     "Drop on a key, or on a dial: left side = turn left, middle = press, right side = turn right";
+/// The same on a D200 (no dials).
+const ACTION_DRAG_HINT_NO_DIALS: &str = "Drop on a key or the wide screen";
+
+/// The line under the deck: what dragging an action does, or how keys and pages work, for this
+/// profile's model.
+fn deck_hint(state: &State) -> &'static str {
+    let with_dials = state.model() == ulanzi_core::model::Model::D200X;
+    match (state.dragging_action.get(), with_dials) {
+        (true, true) => ACTION_DRAG_HINT,
+        (true, false) => ACTION_DRAG_HINT_NO_DIALS,
+        (false, true) => HINT,
+        (false, false) => HINT_NO_DIALS,
+    }
+}
 
 /// The three drop zones of a dial: left third, middle, right third (as [`hit_zone`]).
 fn draw_dial_zones(cr: &gtk::cairo::Context, w: f64, h: f64, hover: Option<DialZone>) {
@@ -1092,7 +1108,7 @@ pub fn build(state: &State) -> Canvas {
         .margin_top(28)
         .build();
     let hint = gtk::Label::builder()
-        .label(HINT)
+        .label(deck_hint(state))
         .css_classes(["hint"])
         .margin_top(14)
         .wrap(true)
@@ -1289,11 +1305,7 @@ pub fn build(state: &State) -> Canvas {
                 zone.set(None);
                 area.queue_draw();
                 // Off the dial, the hint says what it said before.
-                hint.set_label(if state.dragging_action.get() {
-                    ACTION_DRAG_HINT
-                } else {
-                    HINT
-                });
+                hint.set_label(deck_hint(&state));
             });
         }
         d.add_controller(motion);
@@ -1572,6 +1584,7 @@ pub fn build(state: &State) -> Canvas {
                     s.column.set_visible(with_dials);
                 }
                 dial_row.set_visible(with_dials);
+                hint.set_label(deck_hint(&state));
                 let moving = e.profile().shown_page(e.page()).map_or(0, |p| p.moving_keys());
                 let moving = moving_note(moving);
                 note.set_visible(moving.is_some());
@@ -1742,11 +1755,7 @@ pub fn build(state: &State) -> Canvas {
                 for f in faces.iter() {
                     f.set_icons_visible(!state.dragging_action.get());
                 }
-                hint.set_label(if state.dragging_action.get() {
-                    ACTION_DRAG_HINT
-                } else {
-                    HINT
-                });
+                hint.set_label(deck_hint(&state));
             }
             Change::Selection => {
                 let sel = state.selection.borrow();
