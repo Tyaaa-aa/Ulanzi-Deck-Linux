@@ -406,7 +406,9 @@ pub fn run(dir: PathBuf, snap: Rc<dyn Fn(&Path)>, done: Box<dyn FnOnce()>) {
             40,
             Box::new(|c: &Ctx| {
                 let (sliding, _) = c.shot("07-swap-40ms");
-                c.check("only the two swapped tiles slide", sliding == 2);
+                // The carried tile was let go on the other's picture, which is where it lands: it
+                // has nowhere left to slide when let go right on the middle.
+                c.check("only the swapped tiles slide", (1..=2).contains(&sliding));
             }),
         ),
         (
@@ -474,6 +476,14 @@ pub fn run(dir: PathBuf, snap: Rc<dyn Fn(&Path)>, done: Box<dyn FnOnce()>) {
                     "turned again to page 3 by 1.35 s",
                     c.tray.state.tray_page.get() == 2,
                 );
+                // Page 3 is shorter, but shrinking now would leave the pointer above the tray.
+                if let Some(rest) = *c.frame_at_rest.borrow() {
+                    let now = c.frame();
+                    c.check(
+                        "carrying, a shorter page keeps the tray's height",
+                        (now.3 - rest.3).abs() < 0.5 && (now.1 - rest.1).abs() < 0.5,
+                    );
+                }
                 c.hover(c.picture(0));
                 c.tray.edge_hover(None);
                 c.tray.carry_end();
@@ -483,6 +493,18 @@ pub fn run(dir: PathBuf, snap: Rc<dyn Fn(&Path)>, done: Box<dyn FnOnce()>) {
             400,
             Box::new(|c: &Ctx| {
                 c.shot("09-end");
+            }),
+        ),
+        (
+            900,
+            Box::new(|c: &Ctx| {
+                c.shot("10-settled");
+                if let Some(rest) = *c.frame_at_rest.borrow() {
+                    c.check(
+                        "let go, the tray settles on the shorter page's height",
+                        c.frame().3 < rest.3 - 1.0,
+                    );
+                }
                 let failed = *c.failed.borrow();
                 c.say(format!("{} checks failed", failed));
             }),

@@ -543,7 +543,7 @@ impl Tray {
     }
 
     /// [`Tray::edge_zone`] while a tile is carried, where there is a page to turn to.
-    fn edge_step(&self, from: &impl IsA<gtk::Widget>, x: f64, y: f64) -> Option<isize> {
+    pub(crate) fn edge_step(&self, from: &impl IsA<gtk::Widget>, x: f64, y: f64) -> Option<isize> {
         self.moving.get()?;
         let step = self.edge_zone(from, x, y)?;
         self.edges[if step < 0 { 0 } else { 1 }]
@@ -552,7 +552,7 @@ impl Tray {
     }
 
     /// The carried tile is now held at side `step`, or at none.
-    fn edge_hover(&self, step: Option<isize>) {
+    pub(crate) fn edge_hover(&self, step: Option<isize>) {
         if self.edge_at.replace(step) == step {
             return;
         }
@@ -661,19 +661,9 @@ impl Tray {
             let follow = {
                 let (me, root) = (me.clone(), root.downgrade());
                 move |x: f64, y: f64| {
-                    let (Some(t), Some(root)) = (me.upgrade(), root.upgrade()) else {
-                        return;
-                    };
-                    if t.state.library_drag.get().is_none() {
-                        return;
+                    if let (Some(t), Some(root)) = (me.upgrade(), root.upgrade()) {
+                        t.follow_carried(&root, x, y);
                     }
-                    let over_tray = root
-                        .compute_point(&t.frame, &gtk::graphene::Point::new(x as f32, y as f32))
-                        .is_some_and(|p| t.frame.contains(p.x() as f64, p.y() as f64));
-                    // Pushed just past the tray's side is still the tray: that edge turns pages.
-                    let beside = t.moving.get().is_some() && t.edge_zone(&root, x, y).is_some();
-                    t.set_peek(!(over_tray || beside));
-                    t.edge_hover(t.edge_step(&root, x, y));
                 }
             };
             {
@@ -694,6 +684,45 @@ impl Tray {
             }
             root.add_controller(motion);
         });
+    }
+
+    /// The pointer is at `(x, y)` in `root` (the window) while something is carried: off the tray
+    /// it drops to its strip, and at its sides the page turns.
+    pub(crate) fn follow_carried(&self, root: &gtk::Widget, x: f64, y: f64) {
+        if self.state.library_drag.get().is_none() {
+            return;
+        }
+        let over_tray = root
+            .compute_point(&self.frame, &gtk::graphene::Point::new(x as f32, y as f32))
+            .is_some_and(|p| self.frame.contains(p.x() as f64, p.y() as f64));
+        // Pushed just past the tray's side is still the tray: that edge turns pages.
+        let beside = self.moving.get().is_some() && self.edge_zone(root, x, y).is_some();
+        self.set_peek(!(over_tray || beside));
+        self.edge_hover(self.edge_step(root, x, y));
+    }
+
+    /// The tray last built (the demo reel drives it).
+    pub(crate) fn last() -> Option<Rc<Tray>> {
+        LAST.with(|l| l.borrow().upgrade())
+    }
+
+    /// The area the tiles are laid out in; [`Tray::hover_at`] and [`Tray::drop_at`] take points in it.
+    pub(crate) fn pages(&self) -> &gtk::Overlay {
+        &self.pages
+    }
+
+    /// The tray's visible frame; its sides are where a carried tile turns the page.
+    pub(crate) fn frame(&self) -> &gtk::ScrolledWindow {
+        &self.frame
+    }
+
+    /// Library item `id`'s tile and the picture a drag of it carries.
+    pub(crate) fn tile(&self, id: Uuid) -> Option<(gtk::Button, gtk::Widget)> {
+        self.items
+            .borrow()
+            .iter()
+            .find(|i| i.id == id)
+            .map(|i| (i.button.clone(), i.disc.clone().upcast()))
     }
 
     /// Drop to the peek strip (`true`) or rise back to the tray's height.
@@ -1155,7 +1184,13 @@ impl Tray {
         let page = page.min(l.pages - 1);
         self.state.tray_page.set(page);
         self.show_pager(l.pages, page);
-        let to = (page as f64, self.page_height(page));
+        let mut to = (page as f64, self.page_height(page));
+        // While a tile is carried the tray keeps its height: shrinking to a shorter page would
+        // pull it out from under the pointer, which drops it to its strip. It settles on the
+        // page's own height once the tile is let go.
+        if self.moving.get().is_some() {
+            to.1 = to.1.max(self.height.get());
+        }
         let slide = self.slide.borrow();
         match slide.as_ref() {
             Some(a) if self.shown.get() > 0.0 && self.height.get() > 0.0 => {
@@ -1459,7 +1494,7 @@ impl Tray {
     }
 
     /// A library tile was picked up (a drag started on it).
-    fn carry_begin(&self, id: Uuid, kind: Tab) {
+    pub(crate) fn carry_begin(&self, id: Uuid, kind: Tab) {
         tracing::debug!(target: "dnd", "carry begin {id}");
         self.moving.set(Some(id));
         self.aim.set(Aim::Nothing);
@@ -1478,7 +1513,7 @@ impl Tray {
     }
 
     /// The carried tile was let go (dropped or not).
-    fn carry_end(&self) {
+    pub(crate) fn carry_end(&self) {
         tracing::debug!(target: "dnd", "carry end");
         if let Some(id) = self.moving.take()
             && let Some(i) = self.items.borrow().iter().find(|i| i.id == id)
@@ -1491,6 +1526,22 @@ impl Tray {
         self.show_edges();
         self.state.library_drag.set(None);
         self.set_peek(false);
+        // Back to the page's own height after a turn to a shorter page, once a drop's slide is done.
+        let me = self.me.borrow().clone();
+        glib::timeout_add_local_once(
+            std::time::Duration::from_millis(REORDER_MS as u64 + 40),
+            move || {
+                if let Some(t) = me.upgrade()
+                    && t.moving.get().is_none()
+                    && t.shown.get() > 0.0
+                {
+                    let page = t.state.tray_page.get();
+                    if (t.height.get() - t.page_height(page)).abs() > 0.5 {
+                        t.go(page);
+                    }
+                }
+            },
+        );
     }
 
     /// One drop target over the whole page area takes the carried tile: on a tile's picture the
@@ -1536,7 +1587,7 @@ impl Tray {
     }
 
     /// The shown tiles on this page, where they are laid out in the page area.
-    fn slots(&self) -> Vec<Slot> {
+    pub(crate) fn slots(&self) -> Vec<Slot> {
         let page = self.state.tray_page.get();
         self.items
             .borrow()
@@ -1566,7 +1617,7 @@ impl Tray {
     }
 
     /// The carried tile is over `(x, y)` in the page area: show what letting go there would do.
-    fn hover_at(&self, x: f64, y: f64) -> Aim {
+    pub(crate) fn hover_at(&self, x: f64, y: f64) -> Aim {
         let aim = match self.moving.get() {
             Some(id) if self.edge_step(&self.pages, x, y).is_none() => {
                 let carried = self.items.borrow().iter().position(|i| i.id == id);
@@ -1580,7 +1631,7 @@ impl Tray {
 
     /// Show `aim`: the swapped tile's picture outlined, or the gap's two tiles moved apart with a
     /// mark between them.
-    fn show_aim(&self, aim: Aim) {
+    pub(crate) fn show_aim(&self, aim: Aim) {
         if self.aim.replace(aim) == aim {
             return;
         }
@@ -1636,7 +1687,7 @@ impl Tray {
     }
 
     /// The carried tile was let go at `(x, y)` in the page area.
-    fn drop_at(&self, x: f64, y: f64) -> bool {
+    pub(crate) fn drop_at(&self, x: f64, y: f64) -> bool {
         let aim = self.hover_at(x, y);
         tracing::debug!(target: "dnd", "drop {aim:?}");
         let (Some(from), kind) = (self.moving.get(), self.tab.get()) else {

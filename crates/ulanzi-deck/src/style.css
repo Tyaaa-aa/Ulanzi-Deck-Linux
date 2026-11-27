@@ -572,14 +572,33 @@ row.hover-switch {
   background-color: transparent;
 }
 
+/* The tabs and search sit on the dark tray, so they are light in either theme. */
 .tray-tabs > button {
   padding: 2px 14px;
   min-height: 26px;
+  color: alpha(white, 0.85);
+  background-color: alpha(white, 0.08);
+}
+
+.tray-tabs > button:hover {
+  background-color: alpha(white, 0.14);
+}
+
+.tray-tabs > button:checked {
+  color: white;
+  background-color: alpha(white, 0.24);
 }
 
 .tray-search {
   min-height: 26px;
   min-width: 180px;
+  color: white;
+  background-color: alpha(white, 0.1);
+}
+
+.tray-search > image,
+.tray-search > text > placeholder {
+  color: alpha(white, 0.55);
 }
 
 .tray-dial.drop-target {
