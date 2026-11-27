@@ -58,6 +58,13 @@ const KEEP_AWAKE: Duration = Duration::from_millis(200);
 const TRY_CONTROL: u8 = 255;
 /// How long a finished macro's key stays on its last look.
 const FINISH_FLASH: Duration = Duration::from_millis(300);
+/// After a wide-screen press or release the mode is sent again at these delays: the firmware can
+/// switch to its clock a moment after it reports the press, which would undo the first send.
+const WINDOW_RESEND: [Duration; 3] = [
+    Duration::from_millis(40),
+    Duration::from_millis(120),
+    Duration::from_millis(300),
+];
 /// How long to wait for the device-info reply (the deck's "ready") before uploading anyway.
 const INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -306,8 +313,15 @@ struct Deck {
     shown: Option<Shown>,
     /// No upload before this (the deck is unpacking the previous one).
     next_upload_at: Option<Instant>,
-    /// Packets on their way, one per turn of the main loop, so input is read between them.
-    outgoing: VecDeque<ulanzi_proto::Packet>,
+    /// Packets on their way, one per turn of the main loop, so input is read between them. The
+    /// flag marks the last packet of its message (an upload is many packets that must not be split).
+    outgoing: VecDeque<(ulanzi_proto::Packet, bool)>,
+    /// A wide-screen mode packet that goes ahead of queued uploads, at the next message boundary.
+    urgent: Option<ulanzi_proto::Packet>,
+    /// The last packet sent from `outgoing` was not the last of its message.
+    mid_message: bool,
+    /// When to send the wide-screen mode again after a press on the wide screen.
+    window_resend: Vec<Instant>,
     /// While an upload goes out: how long the deck gets after its last packet.
     upload_gap: Option<Duration>,
     /// Set from connect until the deck answers the info request.
@@ -413,6 +427,9 @@ impl Deck {
             shown: None,
             next_upload_at: None,
             outgoing: VecDeque::new(),
+            urgent: None,
+            mid_message: false,
+            window_resend: Vec::new(),
             upload_gap: None,
             awaiting_info: None,
             upload_pending: false,
@@ -471,7 +488,14 @@ impl Deck {
                 None
             };
             let press_due = self.pressing.values().min().copied();
-            let next = self.outgoing.front().copied();
+            // A wide-screen mode fix jumps the queue, but never into the middle of an upload.
+            let urgent_now = self.urgent.is_some() && !self.mid_message;
+            let next = if urgent_now {
+                self.urgent
+            } else {
+                self.outgoing.front().map(|(p, _)| *p)
+            };
+            let resend_at = self.window_resend.iter().min().copied();
             let transport = self.transport.as_mut();
             tokio::select! {
                 msg = rx.recv() => match msg {
@@ -486,7 +510,11 @@ impl Deck {
                     }
                 } => self.presses_settled().await,
                 _ = awake.tick() => {
-                    if self.transport.is_some() && !self.sleep.is_asleep() && self.outgoing.is_empty() {
+                    if self.transport.is_some()
+                        && !self.sleep.is_asleep()
+                        && self.outgoing.is_empty()
+                        && self.urgent.is_none()
+                    {
                         self.send(&[unlock()]).await;
                     }
                 },
@@ -501,7 +529,7 @@ impl Deck {
                     }
                 } => match io {
                     Ok(Exchange::Got(buf)) => self.on_report(parse_report(&buf)).await,
-                    Ok(Exchange::Sent) => self.packet_sent(),
+                    Ok(Exchange::Sent) => self.packet_sent(urgent_now),
                     Err(e) => self.lost(&e).await,
                 },
                 _ = async {
@@ -520,6 +548,16 @@ impl Deck {
                         None => std::future::pending().await,
                     }
                 } => self.push_page(false).await,
+                _ = async {
+                    match resend_at {
+                        Some(d) => tokio::time::sleep_until(d).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let now = Instant::now();
+                    self.window_resend.retain(|t| *t > now);
+                    self.send_window_now();
+                },
                 _ = tick.tick() => self.on_tick().await,
                 _ = wake.notified() => self.refresh_screen().await,
                 Some((pct, muted, label)) = levels.recv() => {
@@ -577,7 +615,7 @@ impl Deck {
                 self.held.clear();
                 self.pressing.clear();
                 self.transport = None;
-                self.outgoing.clear();
+                self.clear_outgoing();
                 self.upload_gap = None;
                 self.upload_pending = false;
                 self.set_device(state);
@@ -776,6 +814,20 @@ impl Deck {
     }
 
     async fn send_window(&mut self) {
+        let w = self.window_packet();
+        self.send(&[w]).await;
+    }
+
+    /// Send the wide-screen mode ahead of anything queued (it waits only for an upload already
+    /// half-way out). Replaces a mode packet that has not gone out yet.
+    fn send_window_now(&mut self) {
+        if self.transport.is_some() {
+            self.urgent = Some(self.window_packet());
+        }
+    }
+
+    /// The wide-screen ("small window") packet for the current profile and overlay.
+    fn window_packet(&self) -> ulanzi_proto::Packet {
         let now = chrono::Local::now();
         let (mode, date) = match self.profile().screen {
             ScreenConfig::FirmwareClock { style } => match style {
@@ -813,7 +865,7 @@ impl Deck {
             clock_24h: true,
             date,
         };
-        self.send(&[small_window(&w)]).await;
+        small_window(&w)
     }
 
     /// Upload the current page if anything changed: the whole page when the page or profile changed
@@ -957,8 +1009,14 @@ impl Deck {
     }
 
     /// One packet went out. After an upload's last one, its gap starts.
-    fn packet_sent(&mut self) {
-        self.outgoing.pop_front();
+    fn packet_sent(&mut self, urgent: bool) {
+        if urgent {
+            self.urgent = None;
+            return;
+        }
+        if let Some((_, last)) = self.outgoing.pop_front() {
+            self.mid_message = !last;
+        }
         if self.outgoing.is_empty()
             && let Some(gap) = self.upload_gap.take()
         {
@@ -971,8 +1029,18 @@ impl Deck {
         if self.transport.is_none() {
             return false;
         }
-        self.outgoing.extend(packets);
+        let n = packets.len();
+        self.outgoing
+            .extend(packets.iter().enumerate().map(|(i, p)| (*p, i + 1 == n)));
         true
+    }
+
+    /// Drop everything not yet sent (the deck went away).
+    fn clear_outgoing(&mut self) {
+        self.outgoing.clear();
+        self.urgent = None;
+        self.mid_message = false;
+        self.window_resend.clear();
     }
 
     async fn lost(&mut self, e: &std::io::Error) {
@@ -983,7 +1051,7 @@ impl Deck {
         self.press_upload = false;
         self.pressing.clear();
         self.transport = None;
-        self.outgoing.clear();
+        self.clear_outgoing();
         self.upload_gap = None;
         self.shown = None;
         self.firmware = None;
@@ -1046,9 +1114,12 @@ impl Deck {
         let now = Instant::now();
         self.emit(DeckEvent::Input(ev));
         // The firmware puts its own clock on the wide screen while it is pressed; set our mode
-        // again at once instead of waiting up to a second for the next tick (issue #5).
+        // again at once instead of waiting up to a second for the next tick (issue #5). It goes
+        // ahead of queued uploads (a widget redraw can be on its way), and again a few times
+        // shortly after, in case the firmware switches to its clock only after reporting the press.
         if ev.control == Control::Screen && matches!(ev.kind, InputKind::Press | InputKind::Release) {
-            self.send_window().await;
+            self.send_window_now();
+            self.window_resend = WINDOW_RESEND.iter().map(|d| now + *d).collect();
         }
         // First of all: every path below that returns early still lets go of the key.
         if ev.kind == InputKind::Release
