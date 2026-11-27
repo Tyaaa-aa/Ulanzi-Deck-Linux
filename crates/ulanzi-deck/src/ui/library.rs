@@ -206,9 +206,17 @@ impl Inner {
         let category = self.category();
         let view = self.catalog.borrow().view(&category, &query);
         if matches!(self.purpose, Use::Library) {
+            // A D200 has no dials to drop on.
+            let onto = if self.state.model() == ulanzi_core::model::Model::D200X {
+                "a key, dial or the screen"
+            } else {
+                "a key or the screen"
+            };
             self.list.append(
                 &gtk::Label::builder()
-                    .label("Drag an action onto a key, dial or the screen. Click one to give it to the selection.")
+                    .label(format!(
+                        "Drag an action onto {onto}. Click one to give it to the selection."
+                    ))
                     .wrap(true)
                     .xalign(0.0)
                     .css_classes(["dim-label", "caption"])
@@ -681,12 +689,20 @@ pub fn build(state: &State, on_assign: impl Fn() + 'static) -> Library {
         let root = list.root.downgrade();
         let reload = list.reload.clone();
         let inner = list.inner.clone();
+        // The hint at the top names dials only for a D200X: redraw when the model changes.
+        let model = std::cell::Cell::new(state.model());
         state.on_while(move |c| {
             if root.upgrade().is_none() {
                 return false;
             }
             if c == Change::Macros || (c == Change::Plugins && plugins_changed(&inner) == Some(true)) {
                 reload();
+            } else if matches!(c, Change::Profile | Change::Profiles)
+                && let Some(inner) = inner.upgrade()
+                && model.get() != inner.state.model()
+            {
+                model.set(inner.state.model());
+                inner.render_list();
             }
             true
         });
