@@ -844,7 +844,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     group.add(&look);
     let label_group = adw::PreferencesGroup::new();
     let keys: Rc<Vec<u8>> = Rc::new(keys);
-    let (source, bg, fg, label, visible, scale, image_scale, dynamic, pos) = {
+    let (source, bg, fg, label, visible, scale, image_scale, own_picture, dynamic, pos) = {
         let e = state.editor.borrow();
         (
             e.shared_look(&keys, |l| l.source.clone()),
@@ -854,12 +854,14 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
             e.shared_look(&keys, |l| l.label.visible),
             e.shared_look(&keys, |l| (l.icon_scale * 100.0).round() as i32),
             e.shared_look(&keys, |l| (l.image_scale * 100.0).round() as i32),
+            e.shared_look(&keys, |l| matches!(l.source, ImageSource::Image { .. })),
             e.shared_look(&keys, |l| l.dynamic),
             e.shared_look(&keys, |l| l.label.position),
         )
     };
-    // The user's own picture has its own size (full key by default), so the size row follows it.
-    let picture = matches!(source, Mixed::One(ImageSource::Image { .. }));
+    // The user's own picture has its own size (full key by default), so the size row follows it
+    // when every selected key shows one, even different pictures.
+    let picture = own_picture == Mixed::One(true);
     let set = {
         let (ctx, keys) = (ctx.clone(), keys.clone());
         move |how: How, f: Field| ctx.commit(how, |e| e.set_field(&keys, f))

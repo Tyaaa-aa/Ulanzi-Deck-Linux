@@ -397,6 +397,45 @@ mod animation {
     }
 
     #[test]
+    fn a_smaller_wide_gif_keeps_its_whole_picture() {
+        let d = tempfile::tempdir().expect("dir");
+        // 2:1, blue on the left quarter, red elsewhere.
+        let img = RgbaImage::from_fn(64, 32, |x, _| {
+            if x < 16 {
+                Rgba([0, 0, 255, 255])
+            } else {
+                Rgba([255, 0, 0, 255])
+            }
+        });
+        let a = Animation {
+            frames: vec![img.clone(), img],
+            delays_ms: vec![100, 100],
+        };
+        std::fs::write(d.path().join("a.gif"), encode_fit(&a, GIF_TARGET).gif).expect("write");
+        let look = KeyLook {
+            image_scale: 0.5,
+            ..gif_look()
+        };
+        let a = render_animation(&look, &Effect::default(), None, &ctx(d.path())).expect("drawn");
+        for frame in &a.frames {
+            // Like a still picture: the whole width in a half-size box, letterboxed, not cropped.
+            assert!(
+                near(frame.get_pixel(58, 98).0, [0, 0, 255, 255]),
+                "the blue end stays"
+            );
+            assert!(near(frame.get_pixel(120, 98).0, [255, 0, 0, 255]));
+            assert!(
+                near(frame.get_pixel(98, 60).0, [0, 0, 0, 255]),
+                "clear above the picture"
+            );
+            assert!(
+                near(frame.get_pixel(20, 98).0, [0, 0, 0, 255]),
+                "clear beside the box"
+            );
+        }
+    }
+
+    #[test]
     fn a_gif_with_no_frame_time_plays_at_100_ms() {
         let d = tempfile::tempdir().expect("dir");
         small_gif(&d.path().join("a.gif"), 3, 0);
