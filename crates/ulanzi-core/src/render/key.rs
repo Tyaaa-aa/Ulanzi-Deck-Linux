@@ -121,6 +121,7 @@ fn draw_pixels(
     let mut warnings = Vec::new();
     match &look.source {
         _ if picture.is_some() => {
+            // A GIF frame comes already fitted to the key (see `fit_image`).
             if let Some(Err(e)) = picture.map(|p| draw_layer(&mut pix, p)) {
                 warnings.push(format!("picture: {e}"));
             }
@@ -136,7 +137,7 @@ fn draw_pixels(
         },
         ImageSource::Image { path } => {
             let full = ctx.profile_dir.join(path);
-            if let Err(e) = draw_file(&mut pix, &full, Fit::Cover) {
+            if let Err(e) = draw_file(&mut pix, &full, Fit::for_picture(look.image_scale)) {
                 warnings.push(format!("image {}: {e}", full.display()));
             }
         }
@@ -269,11 +270,22 @@ fn draw_svg(pix: &mut Pixmap, svg: &str, fg: Color, scale: f32) -> Result<(), St
 
 /// How a picture fills the key.
 #[derive(Debug, Clone, Copy)]
-enum Fit {
+pub(crate) enum Fit {
     /// Fill the whole key, cropping the overflow.
     Cover,
     /// Fit inside a centred box of this share of the key.
     Contain(f32),
+}
+
+impl Fit {
+    /// The fit for the user's own picture at `scale`: the whole key at full size, else a box.
+    pub(crate) fn for_picture(scale: f32) -> Self {
+        if scale >= 1.0 {
+            Fit::Cover
+        } else {
+            Fit::Contain(scale)
+        }
+    }
 }
 
 /// Draw an SVG or raster file.
@@ -317,22 +329,28 @@ fn draw_image(pix: &mut Pixmap, path: &Path, fit: Fit) -> Result<(), String> {
     limits.max_alloc = Some(MAX_DECODE_BYTES);
     reader.limits(limits);
     let img = reader.decode().map_err(|e| e.to_string())?;
-    let fitted = match fit {
-        Fit::Cover => img
-            .resize_to_fill(KEY_PX, KEY_PX, image::imageops::FilterType::Lanczos3)
-            .to_rgba8(),
+    let fitted = fit_image(&img, fit, image::imageops::FilterType::Lanczos3);
+    draw_layer(pix, &fitted)
+}
+
+/// `img` as a key-sized picture: filling the key (cropped) or inside a centred box, clear around it.
+/// Still images and every GIF frame go through here, so both keep their shape the same way.
+pub(crate) fn fit_image(
+    img: &image::DynamicImage,
+    fit: Fit,
+    filter: image::imageops::FilterType,
+) -> RgbaImage {
+    match fit {
+        Fit::Cover => img.resize_to_fill(KEY_PX, KEY_PX, filter).to_rgba8(),
         Fit::Contain(share) => {
             let side = ((KEY_PX as f32) * share.clamp(0.05, 1.0)) as u32;
-            let small = img
-                .resize(side, side, image::imageops::FilterType::Lanczos3)
-                .to_rgba8();
-            let mut canvas = image::RgbaImage::new(KEY_PX, KEY_PX);
+            let small = img.resize(side, side, filter).to_rgba8();
+            let mut canvas = RgbaImage::new(KEY_PX, KEY_PX);
             let (x, y) = ((KEY_PX - small.width()) / 2, (KEY_PX - small.height()) / 2);
             image::imageops::overlay(&mut canvas, &small, x as i64, y as i64);
             canvas
         }
-    };
-    draw_layer(pix, &fitted)
+    }
 }
 
 /// Draw a key-sized image over `pix`.

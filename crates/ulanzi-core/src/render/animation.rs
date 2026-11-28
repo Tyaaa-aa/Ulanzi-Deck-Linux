@@ -9,7 +9,7 @@ use image::imageops::FilterType;
 use image::{AnimationDecoder, Delay, DynamicImage, Frame, ImageDecoder, RgbaImage};
 
 use super::effects::{LOOP_FRAMES, draw_effect, frame_ms};
-use super::key::{KEY_PX, RenderCtx, key_image, look_hash};
+use super::key::{Fit, RenderCtx, fit_image, key_image, look_hash};
 use crate::Color;
 use crate::model::{Effect, ImageSource, KeyLook};
 
@@ -58,7 +58,8 @@ fn decoder(path: &Path) -> Result<GifDecoder<Cursor<Vec<u8>>>, String> {
     Ok(decoder)
 }
 
-fn read_gif(path: &Path) -> Result<Vec<(RgbaImage, u32)>, String> {
+/// The frames of the GIF at `path`, each fitted to the key like a still picture.
+fn read_gif(path: &Path, fit: Fit) -> Result<Vec<(RgbaImage, u32)>, String> {
     let mut out = Vec::new();
     for frame in decoder(path)?.into_frames() {
         if out.len() == MAX_SOURCE_FRAMES {
@@ -67,9 +68,11 @@ fn read_gif(path: &Path) -> Result<Vec<(RgbaImage, u32)>, String> {
         let frame = frame.map_err(|e| e.to_string())?;
         let (n, d) = frame.delay().numer_denom_ms();
         let ms = n.checked_div(d).unwrap_or(0);
-        let picture = DynamicImage::ImageRgba8(frame.into_buffer())
-            .resize_to_fill(KEY_PX, KEY_PX, FilterType::Triangle)
-            .to_rgba8();
+        let picture = fit_image(
+            &DynamicImage::ImageRgba8(frame.into_buffer()),
+            fit,
+            FilterType::Triangle,
+        );
         out.push((picture, if ms < MIN_DELAY_MS { NO_DELAY_MS } else { ms }));
     }
     if out.is_empty() {
@@ -95,7 +98,7 @@ pub fn render_animation(
     ctx: &RenderCtx,
 ) -> Result<Animation, String> {
     let gif = match gif_source(look, ctx.profile_dir) {
-        Some(path) => read_gif(&path)?,
+        Some(path) => read_gif(&path, Fit::for_picture(look.image_scale))?,
         None => Vec::new(),
     };
     if gif.len() < 2 {

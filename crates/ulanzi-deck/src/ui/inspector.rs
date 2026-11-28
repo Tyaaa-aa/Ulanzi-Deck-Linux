@@ -844,7 +844,7 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     group.add(&look);
     let label_group = adw::PreferencesGroup::new();
     let keys: Rc<Vec<u8>> = Rc::new(keys);
-    let (source, bg, fg, label, visible, scale, dynamic, pos) = {
+    let (source, bg, fg, label, visible, scale, image_scale, own_picture, dynamic, pos) = {
         let e = state.editor.borrow();
         (
             e.shared_look(&keys, |l| l.source.clone()),
@@ -853,10 +853,15 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
             e.shared_look(&keys, |l| l.label.text.clone()),
             e.shared_look(&keys, |l| l.label.visible),
             e.shared_look(&keys, |l| (l.icon_scale * 100.0).round() as i32),
+            e.shared_look(&keys, |l| (l.image_scale * 100.0).round() as i32),
+            e.shared_look(&keys, |l| matches!(l.source, ImageSource::Image { .. })),
             e.shared_look(&keys, |l| l.dynamic),
             e.shared_look(&keys, |l| l.label.position),
         )
     };
+    // The user's own picture has its own size (full key by default), so the size row follows it
+    // when every selected key shows one, even different pictures.
+    let picture = own_picture == Mixed::One(true);
     let set = {
         let (ctx, keys) = (ctx.clone(), keys.clone());
         move |how: How, f: Field| ctx.commit(how, |e| e.set_field(&keys, f))
@@ -1068,20 +1073,48 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     }
     label_group.add(&position);
 
+    let (shown_scale, default_scale) = if picture {
+        (image_scale, 100.0)
+    } else {
+        (scale, 70.0)
+    };
     let size = adw::SpinRow::with_range(30.0, 100.0, 5.0);
-    size.set_title("Icon Size");
-    size.set_subtitle(&match scale {
-        Mixed::Mixed => "Mixed".into(),
-        _ => "Percent of the key".to_string(),
+    size.set_title(if picture { "Image Size" } else { "Icon Size" });
+    if shown_scale == Mixed::Mixed {
+        size.set_subtitle("Mixed");
+    }
+    // Shown as a percent of the key ("70%"); typing the number with or without the sign works.
+    // Not numeric, or the spin button refuses the "%" in its own text.
+    size.set_numeric(false);
+    size.set_width_chars(4);
+    size.connect_output(|r| {
+        r.set_text(&format!("{}%", r.value().round() as i32));
+        true
     });
-    size.set_value(match scale {
+    size.connect_input(|r| {
+        Some(
+            r.text()
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| ()),
+        )
+    });
+    size.set_value(match shown_scale {
         Mixed::One(v) => v as f64,
-        _ => 70.0,
+        _ => default_scale,
     });
     {
         let set = set.clone();
         size.connect_value_notify(move |r| {
-            set(How::Typing("scale"), Field::IconScale((r.value() / 100.0) as f32))
+            let share = (r.value() / 100.0) as f32;
+            let field = if picture {
+                Field::ImageScale(share)
+            } else {
+                Field::IconScale(share)
+            };
+            set(How::Typing("scale"), field)
         });
     }
     look.add_row(&size);

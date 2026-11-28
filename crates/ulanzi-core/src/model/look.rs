@@ -11,6 +11,10 @@ pub struct KeyLook {
     pub foreground: Color,
     /// Share of the key the icon occupies (0.70 leaves 15% padding on each side).
     pub icon_scale: f32,
+    /// Share of the key the user's own picture (`ImageSource::Image`, GIFs too) occupies. 1.0
+    /// fills the whole key, cropping the overflow; less fits the picture inside a centred box.
+    #[serde(skip_serializing_if = "fills_key")]
+    pub image_scale: f32,
     pub label: Label,
     /// Show live state from the action (e.g. play/pause swap).
     pub dynamic: bool,
@@ -24,6 +28,11 @@ pub struct KeyLook {
     /// The border effect while the key is held.
     #[serde(skip_serializing_if = "PressedEffect::is_default")]
     pub pressed: PressedEffect,
+}
+
+/// A picture scale that fills the whole key (the default, left out of saved files).
+fn fills_key(scale: &f32) -> bool {
+    *scale >= 1.0
 }
 
 /// A built-in border effect.
@@ -247,6 +256,7 @@ impl Default for KeyLook {
             background: Color::BLACK,
             foreground: Color::WHITE,
             icon_scale: 0.70,
+            image_scale: 1.0,
             label: Label::default(),
             dynamic: true,
             states: Vec::new(),

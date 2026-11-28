@@ -105,6 +105,41 @@ fn image_cover_fit() {
 }
 
 #[test]
+fn image_scale_shrinks_an_own_picture() {
+    let d = tempfile::tempdir().expect("tmp");
+    image::RgbaImage::from_pixel(KEY_PX, KEY_PX, image::Rgba([255, 0, 0, 255]))
+        .save(d.path().join("red.png"))
+        .expect("save");
+    let picture = |scale: f32| KeyLook {
+        source: ImageSource::Image {
+            path: "red.png".into(),
+        },
+        image_scale: scale,
+        // The icon size must not touch an own picture.
+        icon_scale: 0.3,
+        ..KeyLook::default()
+    };
+    // Full size (the default) fills the key, whatever the icon size says.
+    let full = decode(&render_key(&picture(1.0), &ctx(d.path())).expect("drawn").png);
+    assert!(near(full.get_pixel(2, 2).0, [255, 0, 0, 255]));
+    assert!(near(full.get_pixel(98, 98).0, [255, 0, 0, 255]));
+    // Half size leaves a black margin around a centred picture.
+    let half = decode(&render_key(&picture(0.5), &ctx(d.path())).expect("drawn").png);
+    assert!(near(half.get_pixel(98, 98).0, [255, 0, 0, 255]));
+    for (x, y) in [(2, 2), (40, 98), (98, 40), (160, 160)] {
+        assert!(
+            near(half.get_pixel(x, y).0, [0, 0, 0, 255]),
+            "pixel {x},{y} outside the picture"
+        );
+    }
+    assert_ne!(
+        look_hash(&picture(1.0), d.path()),
+        look_hash(&picture(0.5), d.path()),
+        "a new size draws the key again"
+    );
+}
+
+#[test]
 fn missing_image_falls_back() {
     let d = tempfile::tempdir().expect("tmp");
     let look = KeyLook {
@@ -359,6 +394,45 @@ mod animation {
         let a = render_animation(&gif_look(), &e, BLUE, &ctx(d.path())).expect("drawn");
         assert_eq!(a.delays_ms, vec![120; 5]);
         assert_eq!(a.frames[0].dimensions(), (KEY_PX, KEY_PX));
+    }
+
+    #[test]
+    fn a_smaller_wide_gif_keeps_its_whole_picture() {
+        let d = tempfile::tempdir().expect("dir");
+        // 2:1, blue on the left quarter, red elsewhere.
+        let img = RgbaImage::from_fn(64, 32, |x, _| {
+            if x < 16 {
+                Rgba([0, 0, 255, 255])
+            } else {
+                Rgba([255, 0, 0, 255])
+            }
+        });
+        let a = Animation {
+            frames: vec![img.clone(), img],
+            delays_ms: vec![100, 100],
+        };
+        std::fs::write(d.path().join("a.gif"), encode_fit(&a, GIF_TARGET).gif).expect("write");
+        let look = KeyLook {
+            image_scale: 0.5,
+            ..gif_look()
+        };
+        let a = render_animation(&look, &Effect::default(), None, &ctx(d.path())).expect("drawn");
+        for frame in &a.frames {
+            // Like a still picture: the whole width in a half-size box, letterboxed, not cropped.
+            assert!(
+                near(frame.get_pixel(58, 98).0, [0, 0, 255, 255]),
+                "the blue end stays"
+            );
+            assert!(near(frame.get_pixel(120, 98).0, [255, 0, 0, 255]));
+            assert!(
+                near(frame.get_pixel(98, 60).0, [0, 0, 0, 255]),
+                "clear above the picture"
+            );
+            assert!(
+                near(frame.get_pixel(20, 98).0, [0, 0, 0, 255]),
+                "clear beside the box"
+            );
+        }
     }
 
     #[test]
