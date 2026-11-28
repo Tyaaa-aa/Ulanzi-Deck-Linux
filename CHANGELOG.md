@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [2.6.2] - 2026-11-28
+
+### Changed
+
+- The size row in Look shows its value as a percent (**70%**) without a description line.
+
 ### Fixed
 
 - Your own images (PNG, JPG, WebP, SVG and GIF) ignored the size setting in Look and always filled the
@@ -404,6 +410,7 @@ A complete rewrite in Rust with a new GTK 4 / libadwaita app. Version 1 (Python)
   diagnostics.
 - Packages: Arch, .deb, .rpm, AppImage and a tarball with an installer.
 
+[2.6.2]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.6.1...v2.6.2
 [2.6.1]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/Tyaaa-aa/Ulanzi-Deck-Linux/compare/v2.4.0...v2.5.0

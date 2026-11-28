@@ -49,6 +49,12 @@
     <binary>ulanzictl</binary>
   </provides>
   <releases>
+    <release version="2.6.2" date="2026-11-28">
+      <description>
+        <p>Your own images, GIFs included, can be made smaller with Image Size instead of always filling
+        the key. The size row shows its value as a percent.</p>
+      </description>
+    </release>
     <release version="2.6.1" date="2026-11-28">
       <description>
         <p>D200 fixes: a D200 profile shows only the keys and wide screen, and pressing the wide screen no
