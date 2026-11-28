@@ -1080,10 +1080,26 @@ fn appearance_groups(ctx: &C, keys: Vec<u8>) -> (adw::PreferencesGroup, adw::Pre
     };
     let size = adw::SpinRow::with_range(30.0, 100.0, 5.0);
     size.set_title(if picture { "Image Size" } else { "Icon Size" });
-    size.set_subtitle(&match shown_scale {
-        Mixed::Mixed => "Mixed".into(),
-        _ if picture => "Percent of the key; 100 fills it".to_string(),
-        _ => "Percent of the key".to_string(),
+    if shown_scale == Mixed::Mixed {
+        size.set_subtitle("Mixed");
+    }
+    // Shown as a percent of the key ("70%"); typing the number with or without the sign works.
+    // Not numeric, or the spin button refuses the "%" in its own text.
+    size.set_numeric(false);
+    size.set_width_chars(4);
+    size.connect_output(|r| {
+        r.set_text(&format!("{}%", r.value().round() as i32));
+        true
+    });
+    size.connect_input(|r| {
+        Some(
+            r.text()
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse::<f64>()
+                .map_err(|_| ()),
+        )
     });
     size.set_value(match shown_scale {
         Mixed::One(v) => v as f64,
